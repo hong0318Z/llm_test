@@ -1,36 +1,31 @@
 """
-LLM Client - GitHub Models API (OpenAI 호환) 또는 Anthropic API 지원
-GitHub Models: https://models.inference.ai.azure.com
-  - GITHUB_TOKEN 환경변수 필요
-  - 모델: claude-3-5-sonnet (GitHub Models에서 제공하는 모델명 사용)
-Anthropic API:
-  - ANTHROPIC_API_KEY 환경변수 필요
+LLM Client - GitHub Copilot API (OpenAI 호환)
+엔드포인트: https://api.githubcopilot.com
+  - GITHUB_TOKEN 환경변수에 GitHub Personal Access Token (또는 Copilot 토큰) 설정
+  - 모델: claude-sonnet-4.5
 """
 import os
 import json
 from openai import OpenAI
 
+COPILOT_BASE_URL = "https://api.githubcopilot.com"
+DEFAULT_MODEL = "claude-sonnet-4.5"
+
 
 def get_llm_client():
-    """환경변수에 따라 클라이언트 반환"""
+    """GitHub Copilot API 클라이언트 반환"""
     github_token = os.environ.get("GITHUB_TOKEN")
-    anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
-
-    if github_token:
-        return OpenAI(
-            base_url="https://models.inference.ai.azure.com",
-            api_key=github_token,
-        ), os.environ.get("LLM_MODEL", "claude-3-5-sonnet")
-    elif anthropic_key:
-        # Anthropic도 OpenAI 호환 엔드포인트 제공
-        return OpenAI(
-            base_url="https://api.anthropic.com/v1/",
-            api_key=anthropic_key,
-        ), os.environ.get("LLM_MODEL", "claude-3-5-sonnet-20241022")
-    else:
+    if not github_token:
         raise EnvironmentError(
-            "GITHUB_TOKEN 또는 ANTHROPIC_API_KEY 환경변수가 필요합니다."
+            "GITHUB_TOKEN 환경변수가 필요합니다.\n"
+            ".env 파일에 GITHUB_TOKEN=your_token 을 추가하세요."
         )
+    model = os.environ.get("LLM_MODEL", DEFAULT_MODEL)
+    client = OpenAI(
+        base_url=COPILOT_BASE_URL,
+        api_key=github_token,
+    )
+    return client, model
 
 
 SYSTEM_PROMPT_TEMPLATE = """\

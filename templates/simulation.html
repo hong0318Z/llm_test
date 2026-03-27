@@ -44,10 +44,29 @@
         <div id="progressPanel" style="display:none;">
           <div class="d-flex justify-content-between small mb-1">
             <span id="progressLabel">진행 중...</span>
-            <span id="progressFrac"></span>
+            <span id="progressFrac" style="color:var(--text-secondary);"></span>
           </div>
           <div class="tick-progress mb-3">
             <div class="tick-progress-bar" id="progressBar" style="width:0%"></div>
+          </div>
+          <!-- 토큰 현황 -->
+          <div class="d-flex gap-2 mb-3 flex-wrap" id="tokenStats" style="display:none!important;">
+            <div class="token-stat">
+              <div class="lbl">입력 토큰</div>
+              <div class="val" id="tokIn">0</div>
+            </div>
+            <div class="token-stat">
+              <div class="lbl">출력 토큰</div>
+              <div class="val" id="tokOut">0</div>
+            </div>
+            <div class="token-stat">
+              <div class="lbl">총 사용 토큰</div>
+              <div class="val" id="tokTotal">0</div>
+            </div>
+            <div class="token-stat">
+              <div class="lbl">컨텍스트 사용률</div>
+              <div class="val" id="tokPct">0%</div>
+            </div>
           </div>
           <div id="liveLog" style="max-height: 260px; overflow-y: auto;"></div>
         </div>
@@ -257,10 +276,12 @@ async function startSimulation() {
 
 function pollProgress(runId, total) {
   clearInterval(pollTimer);
+  document.getElementById('tokenStats').style.display = 'flex';
   pollTimer = setInterval(async () => {
     const runRes = await fetch(`/api/runs/${runId}`);
     const run = await runRes.json();
     updateProgress(run.current_tick, run.total_ticks, run.status);
+    updateTokenStats(run);
 
     // 최근 로그 가져오기
     const logRes = await fetch(`/api/logs?run_id=${runId}&limit=8`);
@@ -275,6 +296,8 @@ function pollProgress(runId, total) {
   }, 2000);
 }
 
+const CONTEXT_MAX = 200000; // claude-sonnet-4.5 context window
+
 function updateProgress(cur, total, status) {
   const pct = total > 0 ? Math.round((cur / total) * 100) : 0;
   document.getElementById('progressBar').style.width = pct + '%';
@@ -283,12 +306,26 @@ function updateProgress(cur, total, status) {
   document.getElementById('progressLabel').textContent = labels[status] || status;
 }
 
+function updateTokenStats(run) {
+  const tokIn = run.total_tokens_in || 0;
+  const tokOut = run.total_tokens_out || 0;
+  const tokTotal = run.total_tokens || 0;
+  const pct = Math.min(100, Math.round((tokTotal / CONTEXT_MAX) * 100));
+  document.getElementById('tokIn').textContent = tokIn.toLocaleString();
+  document.getElementById('tokOut').textContent = tokOut.toLocaleString();
+  document.getElementById('tokTotal').textContent = tokTotal.toLocaleString();
+  document.getElementById('tokPct').textContent = pct + '%';
+  // 80% 이상이면 경고색
+  document.getElementById('tokPct').style.color = pct >= 80 ? '#ff7070' : pct >= 50 ? '#ffb86c' : 'var(--accent)';
+}
+
 function renderLiveLog(logs) {
   const container = document.getElementById('liveLog');
   container.innerHTML = logs.map(l => `
     <div class="log-item log-${l.event_type}">
       <span class="log-tick-badge me-2">틱 ${l.tick_number}</span>
-      <span class="small">${escHtml(l.description)}</span>
+      <span>${escHtml(l.description)}</span>
+      ${l.tokens_total ? `<span class="ms-2" style="font-size:0.72rem;color:var(--accent);">+${l.tokens_total.toLocaleString()} tok</span>` : ''}
     </div>
   `).join('');
   container.scrollTop = container.scrollHeight;
@@ -310,10 +347,14 @@ async function loadRuns() {
         <span class="badge bg-${statusColors[r.status] || 'secondary'}">${statusLabels[r.status] || r.status}</span>
       </div>
       <div class="flex-grow-1">
-        <div class="small fw-semibold">Run #${r.id}</div>
-        <div class="small text-muted">${r.current_tick} / ${r.total_ticks} 틱 · ${new Date(r.started_at).toLocaleString('ko-KR')}</div>
+        <div class="fw-semibold" style="font-size:0.9rem;">Run #${r.id}</div>
+        <div style="font-size:0.8rem; color:var(--text-secondary);">
+          ${r.current_tick} / ${r.total_ticks} 틱
+          ${r.total_tokens ? ` · <span style="color:var(--accent);">${r.total_tokens.toLocaleString()} 토큰</span>` : ''}
+          · ${new Date(r.started_at).toLocaleString('ko-KR')}
+        </div>
       </div>
-      <a href="/logs?run_id=${r.id}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-journal-text"></i></a>
+      <a href="/logs?run_id=${r.id}" class="btn btn-sm btn-outline-secondary ms-2"><i class="bi bi-journal-text"></i></a>
     </div>
   `).join('');
 }

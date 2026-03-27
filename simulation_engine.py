@@ -1,5 +1,6 @@
 """
 시뮬레이션 엔진 - 틱 루프 실행 및 DB 반영
+토큰 사용량 추적 및 컨텍스트 한계 시 자동 요약 포함
 """
 from datetime import datetime
 from models import db, WorldEntry, SimulationRun, SimulationLog, CREATOR_LLM
@@ -22,13 +23,23 @@ def run_simulation(run_id: int, app):
                 run.current_tick = tick
                 db.session.commit()
 
-                # 현재 활성 엔트리 조회
+                # 활성 엔트리 조회 (요약된 항목 제외)
                 entries = [
                     e.to_dict()
-                    for e in WorldEntry.query.filter_by(is_active=True).all()
+                    for e in WorldEntry.query.filter_by(is_active=True, is_summarized=False).all()
                 ]
 
-                # LLM 호출
+                # 컨텍스트 한계 근접 시 자동 요약 먼저 실행
+                if llm_client.needs_summary(entries):
+                    _run_auto_summary(run, tick, entries, config.to_dict())
+                    db.session.commit()
+                    # 요약 후 갱신된 엔트리 목록으로 재조회
+                    entries = [
+                        e.to_dict()
+                        for e in WorldEntry.query.filter_by(is_active=True, is_summarized=False).all()
+                    ]
+
+                # 일반 틱 실행
                 result = llm_client.run_tick(config.to_dict(), tick, entries)
                 _apply_tick_result(run, tick, result)
                 db.session.commit()
@@ -44,10 +55,70 @@ def run_simulation(run_id: int, app):
             _log_error(run, str(e))
 
 
+def _run_auto_summary(run: SimulationRun, tick: int, entries: list, config: dict):
+    """컨텍스트 한계 근접 시 전체 세계관 자동 요약"""
+    result = llm_client.run_summary(config, tick, entries)
+    reasoning = result.get("reasoning", "")
+    raw = result.get("_raw", "")
+    tokens_in = result.get("_tokens_in", 0)
+    tokens_out = result.get("_tokens_out", 0)
+    tokens_total = result.get("_total_tokens", 0)
+
+    covered_ids = []
+    for summary in result.get("summaries", []):
+        # 요약 엔트리 생성
+        entry = WorldEntry(
+            title=summary.get("title", f"세계관 요약 - 틱 {tick}"),
+            category=summary.get("category", "관념"),
+            content=summary.get("content", ""),
+            created_by=CREATOR_LLM,
+            tick_created=tick,
+            is_active=True,
+            is_summarized=False,
+        )
+        db.session.add(entry)
+        covered = summary.get("covered_entry_ids", [])
+        covered_ids.extend(covered)
+
+        # 요약 대상 엔트리들을 summarized 처리 (DB에는 남김)
+        for eid in covered:
+            original = WorldEntry.query.get(eid)
+            if original:
+                original.is_summarized = True
+                original.updated_at = datetime.utcnow()
+
+    # 토큰 집계
+    run.total_tokens_in = (run.total_tokens_in or 0) + tokens_in
+    run.total_tokens_out = (run.total_tokens_out or 0) + tokens_out
+    run.total_tokens = (run.total_tokens or 0) + tokens_total
+
+    log = SimulationLog(
+        run_id=run.id,
+        tick_number=tick,
+        event_type="context_summary",
+        description=f"컨텍스트 한계 근접 - {len(covered_ids)}개 엔트리를 요약 압축 (틱 {tick})",
+        affected_entries_json=str(covered_ids),
+        llm_reasoning=reasoning,
+        raw_llm_output=raw,
+        tokens_in=tokens_in,
+        tokens_out=tokens_out,
+        tokens_total=tokens_total,
+    )
+    db.session.add(log)
+
+
 def _apply_tick_result(run: SimulationRun, tick: int, result: dict):
     """LLM 결과를 DB에 반영하고 로그 기록"""
     reasoning = result.get("reasoning", "")
     raw = result.get("_raw", "")
+    tokens_in = result.get("_tokens_in", 0)
+    tokens_out = result.get("_tokens_out", 0)
+    tokens_total = result.get("_total_tokens", 0)
+
+    # 런 전체 토큰 집계
+    run.total_tokens_in = (run.total_tokens_in or 0) + tokens_in
+    run.total_tokens_out = (run.total_tokens_out or 0) + tokens_out
+    run.total_tokens = (run.total_tokens or 0) + tokens_total
 
     # 1. 세계 사건 로그
     for event in result.get("events", []):
@@ -59,6 +130,9 @@ def _apply_tick_result(run: SimulationRun, tick: int, result: dict):
             affected_entries_json=str(event.get("affected_entry_ids", [])),
             llm_reasoning=reasoning,
             raw_llm_output=raw,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            tokens_total=tokens_total,
         )
         db.session.add(log)
 
@@ -78,6 +152,7 @@ def _apply_tick_result(run: SimulationRun, tick: int, result: dict):
             affected_entries_json=f"[{entry.id}]",
             llm_reasoning=reasoning,
             raw_llm_output=f"이전: {old_content[:200]}",
+            tokens_in=0, tokens_out=0, tokens_total=0,
         )
         db.session.add(log)
 
@@ -93,7 +168,7 @@ def _apply_tick_result(run: SimulationRun, tick: int, result: dict):
         )
         entry.references = new.get("references", [])
         db.session.add(entry)
-        db.session.flush()  # ID 확보
+        db.session.flush()
         log = SimulationLog(
             run_id=run.id,
             tick_number=tick,
@@ -102,6 +177,7 @@ def _apply_tick_result(run: SimulationRun, tick: int, result: dict):
             affected_entries_json=f"[{entry.id}]",
             llm_reasoning=reasoning,
             raw_llm_output=raw,
+            tokens_in=0, tokens_out=0, tokens_total=0,
         )
         db.session.add(log)
 
@@ -120,12 +196,13 @@ def _apply_tick_result(run: SimulationRun, tick: int, result: dict):
             affected_entries_json=f"[{entry.id}]",
             llm_reasoning=reasoning,
             raw_llm_output=raw,
+            tokens_in=0, tokens_out=0, tokens_total=0,
         )
         db.session.add(log)
 
 
 def _log_error(run: SimulationRun, error_msg: str):
-    with db.session.begin_nested():
+    try:
         log = SimulationLog(
             run_id=run.id,
             tick_number=run.current_tick,
@@ -133,4 +210,6 @@ def _log_error(run: SimulationRun, error_msg: str):
             description=error_msg,
         )
         db.session.add(log)
-    db.session.commit()
+        db.session.commit()
+    except Exception:
+        pass

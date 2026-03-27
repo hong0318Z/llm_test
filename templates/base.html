@@ -11,117 +11,177 @@
       --bg-dark: #0f1117;
       --bg-card: #1a1d27;
       --bg-input: #12151e;
-      --accent: #7c6af7;
-      --accent-hover: #6a58e8;
+      --accent: #8b7ff7;
+      --accent-hover: #7a6ee6;
+      --border: #2e3244;
+      --text-primary: #f0f4ff;
+      --text-secondary: #c8d0e0;
       --text-muted: #8892a4;
-      --border: #2a2d3a;
-      --cat-faction: #e05c5c;
-      --cat-character: #5c9be0;
-      --cat-concept: #9b5ce0;
-      --cat-item: #e0a05c;
-      --cat-race: #5ce09b;
-      --cat-event: #e0d85c;
+      --cat-faction: #ff7070;
+      --cat-character: #6aadff;
+      --cat-concept: #b07aff;
+      --cat-item: #ffb86c;
+      --cat-race: #6eeab0;
+      --cat-event: #ffe96a;
     }
+
     body {
       background-color: var(--bg-dark);
-      color: #e2e8f0;
+      color: var(--text-primary);
       font-family: 'Segoe UI', system-ui, sans-serif;
       min-height: 100vh;
     }
+
+    /* Bootstrap text-muted 재정의 */
+    .text-muted { color: var(--text-secondary) !important; }
+    .small { color: inherit; }
+
     .navbar {
       background: var(--bg-card) !important;
       border-bottom: 1px solid var(--border);
     }
     .navbar-brand { color: var(--accent) !important; font-weight: 700; letter-spacing: 0.5px; }
-    .nav-link { color: #b0bac8 !important; }
+    .nav-link { color: var(--text-secondary) !important; }
     .nav-link:hover, .nav-link.active { color: var(--accent) !important; }
+
     .card {
       background: var(--bg-card);
       border: 1px solid var(--border);
       border-radius: 12px;
+      color: var(--text-primary);
     }
     .card-header {
       background: transparent;
       border-bottom: 1px solid var(--border);
       font-weight: 600;
+      color: var(--text-primary);
     }
-    .form-control, .form-select, .form-check-input {
+
+    .form-control, .form-select {
       background: var(--bg-input);
       border: 1px solid var(--border);
-      color: #e2e8f0;
+      color: var(--text-primary);
     }
+    .form-control::placeholder { color: var(--text-muted); }
     .form-control:focus, .form-select:focus {
       background: var(--bg-input);
       border-color: var(--accent);
-      color: #e2e8f0;
-      box-shadow: 0 0 0 3px rgba(124,106,247,0.15);
+      color: var(--text-primary);
+      box-shadow: 0 0 0 3px rgba(139,127,247,0.18);
     }
-    .form-select option { background: var(--bg-input); }
-    .btn-primary {
-      background: var(--accent);
-      border-color: var(--accent);
-    }
+    .form-select option { background: #1a1d27; color: var(--text-primary); }
+    .form-check-input { background-color: var(--bg-input); border-color: var(--border); }
+    .form-check-label { color: var(--text-secondary); }
+    .form-text { color: var(--text-secondary) !important; }
+    .form-label { color: var(--text-secondary); }
+
+    .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
     .btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
-    .btn-outline-secondary { border-color: var(--border); color: #b0bac8; }
-    .btn-outline-secondary:hover { background: var(--border); color: #e2e8f0; }
+    .btn-outline-secondary { border-color: var(--border); color: var(--text-secondary); }
+    .btn-outline-secondary:hover { background: var(--border); color: var(--text-primary); border-color: var(--border); }
+    .btn-outline-danger { border-color: #ff6b6b; color: #ff6b6b; }
+    .btn-outline-danger:hover { background: rgba(255,107,107,0.15); color: #ff8080; border-color: #ff8080; }
 
+    /* 카테고리 뱃지 */
     .category-badge {
-      font-size: 0.72rem;
-      font-weight: 600;
-      padding: 3px 9px;
-      border-radius: 20px;
-      letter-spacing: 0.3px;
+      font-size: 0.72rem; font-weight: 700;
+      padding: 3px 10px; border-radius: 20px; letter-spacing: 0.3px;
     }
-    .cat-세력 { background: rgba(224,92,92,0.15); color: var(--cat-faction); }
-    .cat-인물 { background: rgba(92,155,224,0.15); color: var(--cat-character); }
-    .cat-관념 { background: rgba(155,92,224,0.15); color: var(--cat-concept); }
-    .cat-물건 { background: rgba(224,160,92,0.15); color: var(--cat-item); }
-    .cat-종족 { background: rgba(92,224,155,0.15); color: var(--cat-race); }
-    .cat-사건 { background: rgba(224,216,92,0.15); color: var(--cat-event); }
+    .cat-세력  { background: rgba(255,112,112,0.18); color: var(--cat-faction); }
+    .cat-인물  { background: rgba(106,173,255,0.18); color: var(--cat-character); }
+    .cat-관념  { background: rgba(176,122,255,0.18); color: var(--cat-concept); }
+    .cat-물건  { background: rgba(255,184,108,0.18); color: var(--cat-item); }
+    .cat-종족  { background: rgba(110,234,176,0.18); color: var(--cat-race); }
+    .cat-사건  { background: rgba(255,233,106,0.18); color: var(--cat-event); }
 
+    /* 작성자 뱃지 */
     .creator-badge-user {
-      font-size: 0.68rem; background: rgba(92,224,155,0.12);
-      color: #5ce09b; border-radius: 12px; padding: 2px 8px;
+      font-size: 0.68rem; background: rgba(110,234,176,0.15);
+      color: #6eeab0; border-radius: 12px; padding: 2px 9px; font-weight: 600;
     }
     .creator-badge-llm {
-      font-size: 0.68rem; background: rgba(124,106,247,0.12);
-      color: var(--accent); border-radius: 12px; padding: 2px 8px;
+      font-size: 0.68rem; background: rgba(139,127,247,0.15);
+      color: var(--accent); border-radius: 12px; padding: 2px 9px; font-weight: 600;
     }
 
+    /* 엔트리 카드 */
     .entry-card {
       border: 1px solid var(--border);
       border-radius: 10px;
       background: var(--bg-card);
-      padding: 14px 16px;
+      padding: 12px 14px;
       cursor: pointer;
       transition: border-color 0.15s, box-shadow 0.15s;
     }
-    .entry-card:hover { border-color: var(--accent); box-shadow: 0 2px 12px rgba(124,106,247,0.1); }
-    .entry-card.inactive { opacity: 0.45; }
-    .entry-title { font-weight: 600; font-size: 0.95rem; }
-    .entry-content { font-size: 0.82rem; color: var(--text-muted); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .entry-card:hover { border-color: var(--accent); box-shadow: 0 2px 14px rgba(139,127,247,0.12); }
+    .entry-card.inactive { opacity: 0.4; }
+    .entry-title { font-weight: 600; font-size: 0.93rem; color: var(--text-primary); }
+    .entry-content {
+      font-size: 0.82rem; color: var(--text-secondary);
+      margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
 
+    /* 프롬프트 텍스트에어리어 */
     textarea.prompt-textarea { min-height: 110px; font-size: 0.88rem; }
-    .prompt-level-label { font-size: 0.8rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; }
-    .prompt-l1 { color: #e05c5c; }
-    .prompt-l2 { color: #e0a05c; }
-    .prompt-l3 { color: #5ce09b; }
+    .prompt-level-label { font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; }
+    .prompt-l1 { color: #ff8080; }
+    .prompt-l2 { color: #ffb86c; }
+    .prompt-l3 { color: #6eeab0; }
 
-    .log-item { border-left: 3px solid var(--border); padding: 8px 12px; margin-bottom: 6px; font-size: 0.84rem; }
-    .log-world_event { border-color: #e0d85c; }
-    .log-entry_created { border-color: #5ce09b; }
-    .log-entry_updated { border-color: #5c9be0; }
-    .log-entry_deactivated { border-color: #e05c5c; }
-    .log-error { border-color: #ff4444; }
-    .log-tick-badge { font-size: 0.7rem; background: rgba(255,255,255,0.07); border-radius: 6px; padding: 1px 7px; }
+    /* 로그 아이템 */
+    .log-item {
+      border-left: 3px solid var(--border);
+      padding: 8px 12px; margin-bottom: 6px;
+      font-size: 0.84rem; color: var(--text-primary);
+      background: rgba(255,255,255,0.02); border-radius: 0 6px 6px 0;
+    }
+    .log-world_event      { border-color: var(--cat-event); }
+    .log-entry_created    { border-color: var(--cat-race); }
+    .log-entry_updated    { border-color: var(--cat-character); }
+    .log-entry_deactivated{ border-color: var(--cat-faction); }
+    .log-context_summary  { border-color: var(--accent); }
+    .log-error            { border-color: #ff4444; }
+    .log-tick-badge {
+      font-size: 0.7rem; background: rgba(255,255,255,0.08);
+      color: var(--text-secondary); border-radius: 6px; padding: 1px 7px;
+    }
 
+    /* 토큰 표시 */
+    .token-stat {
+      background: rgba(139,127,247,0.1);
+      border: 1px solid rgba(139,127,247,0.25);
+      border-radius: 8px; padding: 8px 14px;
+      font-size: 0.82rem;
+    }
+    .token-stat .val { font-size: 1.05rem; font-weight: 700; color: var(--accent); }
+    .token-stat .lbl { color: var(--text-secondary); font-size: 0.75rem; }
+
+    /* 진행 바 */
     .tick-progress { height: 6px; border-radius: 3px; background: var(--border); }
-    .tick-progress-bar { height: 6px; border-radius: 3px; background: linear-gradient(90deg, var(--accent), #a855f7); transition: width 0.4s; }
+    .tick-progress-bar { height: 6px; border-radius: 3px; background: linear-gradient(90deg, var(--accent), #c084fc); transition: width 0.4s; }
 
-    .modal-content { background: var(--bg-card); border: 1px solid var(--border); }
+    /* 모달 */
+    .modal-content { background: var(--bg-card); border: 1px solid var(--border); color: var(--text-primary); }
     .modal-header { border-bottom: 1px solid var(--border); }
     .modal-footer { border-top: 1px solid var(--border); }
-    .btn-close { filter: invert(1); }
+    .modal-title { color: var(--text-primary); }
+    .btn-close { filter: invert(1) brightness(0.8); }
+
+    /* pre 블록 */
+    pre {
+      background: var(--bg-input) !important;
+      color: var(--text-secondary) !important;
+      border: 1px solid var(--border);
+    }
+
+    /* 배지 */
+    .badge.bg-secondary { background: rgba(255,255,255,0.1) !important; color: var(--text-secondary); }
+    .badge.bg-success   { background: rgba(110,234,176,0.2) !important; color: #6eeab0; }
+    .badge.bg-warning   { background: rgba(255,184,108,0.2) !important; color: #ffb86c; }
+    .badge.bg-danger    { background: rgba(255,107,107,0.2) !important; color: #ff7070; }
+
+    /* hr */
+    hr { border-color: var(--border); }
 
     ::-webkit-scrollbar { width: 6px; }
     ::-webkit-scrollbar-track { background: var(--bg-dark); }

@@ -1,0 +1,325 @@
+{% extends "base.html" %}
+{% block title %}시뮬레이션{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+
+  <!-- 왼쪽: 설정 관리 -->
+  <div class="col-lg-5">
+    <div class="card">
+      <div class="card-header d-flex align-items-center justify-content-between py-3">
+        <span><i class="bi bi-sliders me-2"></i>시뮬레이션 설정</span>
+        <button class="btn btn-primary btn-sm" onclick="openConfigModal(null)">
+          <i class="bi bi-plus-lg me-1"></i>새 설정
+        </button>
+      </div>
+      <div class="card-body p-3">
+        <div id="configList"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 오른쪽: 실행 및 현황 -->
+  <div class="col-lg-7">
+    <div class="card mb-4" id="runPanel">
+      <div class="card-header py-3">
+        <i class="bi bi-play-circle me-2"></i>시뮬레이션 실행
+      </div>
+      <div class="card-body p-4" id="runEmpty">
+        <p class="text-muted small">왼쪽에서 설정을 선택한 뒤 실행하세요.</p>
+      </div>
+      <div class="card-body p-4" id="runContent" style="display:none;">
+        <div class="mb-3 d-flex align-items-center gap-3">
+          <div>
+            <div class="small text-muted">설정</div>
+            <div class="fw-bold" id="runConfigName"></div>
+          </div>
+          <div class="ms-auto">
+            <button class="btn btn-primary" id="startBtn" onclick="startSimulation()">
+              <i class="bi bi-play-fill me-1"></i>시뮬레이션 시작
+            </button>
+          </div>
+        </div>
+        <!-- 진행 상황 -->
+        <div id="progressPanel" style="display:none;">
+          <div class="d-flex justify-content-between small mb-1">
+            <span id="progressLabel">진행 중...</span>
+            <span id="progressFrac"></span>
+          </div>
+          <div class="tick-progress mb-3">
+            <div class="tick-progress-bar" id="progressBar" style="width:0%"></div>
+          </div>
+          <div id="liveLog" style="max-height: 260px; overflow-y: auto;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 이전 실행 내역 -->
+    <div class="card">
+      <div class="card-header py-3 d-flex align-items-center justify-content-between">
+        <span><i class="bi bi-clock-history me-2"></i>실행 내역</span>
+        <button class="btn btn-sm btn-outline-secondary" onclick="loadRuns()"><i class="bi bi-arrow-clockwise"></i></button>
+      </div>
+      <div class="card-body p-3">
+        <div id="runList"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 설정 모달 -->
+<div class="modal fade" id="configModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="configModalTitle"><i class="bi bi-sliders me-2"></i>설정</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label small">설정 이름 <span class="text-danger">*</span></label>
+          <input type="text" class="form-control" id="cfgName" placeholder="예: 중세 판타지 기본">
+        </div>
+        <div class="mb-3">
+          <label class="form-label small">총 틱 수</label>
+          <input type="number" class="form-control" id="cfgTickCount" value="10" min="1" max="100">
+          <div class="form-text">LLM이 자율적으로 시간을 진행할 횟수</div>
+        </div>
+
+        <hr style="border-color: var(--border);">
+
+        <div class="mb-3">
+          <div class="prompt-level-label prompt-l1 mb-2">
+            <i class="bi bi-layers me-1"></i>Level 1 — 세계관 기반 법칙
+          </div>
+          <textarea class="form-control prompt-textarea" id="cfgL1"
+            placeholder="이 세계의 물리 법칙, 마법 시스템, 근본 규칙 등을 기술하세요.&#10;예: 이 세계에는 4원소 마법이 존재하며, 마법사는 한 원소만 다룰 수 있다..."></textarea>
+          <div class="form-text">LLM이 항상 참조하는 세계의 불변 규칙입니다.</div>
+        </div>
+
+        <div class="mb-3">
+          <div class="prompt-level-label prompt-l2 mb-2">
+            <i class="bi bi-calendar-event me-1"></i>Level 2 — 시대/맥락/현재 상황
+          </div>
+          <textarea class="form-control prompt-textarea" id="cfgL2"
+            placeholder="시뮬레이션 시작 시점의 시대적 배경, 현재 진행 중인 갈등, 정치 구조 등을 기술하세요.&#10;예: 현재 대륙에는 세 왕국이 냉전 중이며, 100년 만에 마물의 대이동이 예고되고 있다..."></textarea>
+          <div class="form-text">시뮬레이션의 출발점이 되는 현재 상황입니다.</div>
+        </div>
+
+        <div class="mb-3">
+          <div class="prompt-level-label prompt-l3 mb-2">
+            <i class="bi bi-gear me-1"></i>Level 3 — 틱 진행 규칙
+          </div>
+          <textarea class="form-control prompt-textarea" id="cfgL3"
+            placeholder="각 틱마다 LLM이 따라야 할 행동 규칙, 제약사항을 기술하세요.&#10;예: 각 틱은 10년을 나타낸다. 매 틱마다 반드시 하나 이상의 새 인물이 등장해야 한다. 기존 세력 간 관계는 점진적으로 변화해야 한다..."></textarea>
+          <div class="form-text">틱마다 반복 적용되는 생성 규칙입니다.</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">취소</button>
+        <button class="btn btn-primary" onclick="saveConfig()"><i class="bi bi-check-lg me-1"></i>저장</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let configs = [];
+let selectedConfig = null;
+let selectedRunId = null;
+let pollTimer = null;
+let configModal;
+
+document.addEventListener('DOMContentLoaded', () => {
+  configModal = new bootstrap.Modal(document.getElementById('configModal'));
+  loadConfigs();
+  loadRuns();
+});
+
+// ── 설정 ─────────────────────────────────
+
+async function loadConfigs() {
+  const res = await fetch('/api/configs');
+  configs = await res.json();
+  renderConfigs();
+}
+
+function renderConfigs() {
+  const container = document.getElementById('configList');
+  if (configs.length === 0) {
+    container.innerHTML = '<p class="text-muted small text-center py-3">설정이 없습니다. 새 설정을 추가하세요.</p>';
+    return;
+  }
+  container.innerHTML = configs.map(c => `
+    <div class="entry-card mb-2 ${selectedConfig?.id === c.id ? 'border-accent' : ''}"
+         style="${selectedConfig?.id === c.id ? 'border-color:var(--accent)' : ''}"
+         onclick="selectConfig(${c.id})">
+      <div class="d-flex align-items-center justify-content-between mb-1">
+        <span class="fw-semibold">${escHtml(c.name)}</span>
+        <div class="d-flex gap-2">
+          <span class="badge bg-secondary">${c.tick_count} 틱</span>
+          <button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="event.stopPropagation(); openConfigModal(${c.id})"><i class="bi bi-pencil"></i></button>
+          <button class="btn btn-sm btn-outline-danger py-0 px-2" onclick="event.stopPropagation(); deleteConfig(${c.id})"><i class="bi bi-trash"></i></button>
+        </div>
+      </div>
+      <div class="small text-muted">${escHtml(c.prompt_level_1.substring(0, 80))}${c.prompt_level_1.length > 80 ? '...' : ''}</div>
+    </div>
+  `).join('');
+}
+
+function selectConfig(id) {
+  selectedConfig = configs.find(c => c.id === id);
+  renderConfigs();
+  document.getElementById('runEmpty').style.display = 'none';
+  document.getElementById('runContent').style.display = 'block';
+  document.getElementById('runConfigName').textContent = selectedConfig.name;
+  document.getElementById('progressPanel').style.display = 'none';
+  document.getElementById('startBtn').disabled = false;
+}
+
+function openConfigModal(id) {
+  if (id) {
+    const c = configs.find(x => x.id === id);
+    document.getElementById('configModalTitle').textContent = '설정 편집';
+    document.getElementById('cfgName').value = c.name;
+    document.getElementById('cfgTickCount').value = c.tick_count;
+    document.getElementById('cfgL1').value = c.prompt_level_1;
+    document.getElementById('cfgL2').value = c.prompt_level_2;
+    document.getElementById('cfgL3').value = c.prompt_level_3;
+    configModal._editId = id;
+  } else {
+    document.getElementById('configModalTitle').textContent = '새 설정';
+    document.getElementById('cfgName').value = '';
+    document.getElementById('cfgTickCount').value = 10;
+    document.getElementById('cfgL1').value = '';
+    document.getElementById('cfgL2').value = '';
+    document.getElementById('cfgL3').value = '';
+    configModal._editId = null;
+  }
+  configModal.show();
+}
+
+async function saveConfig() {
+  const body = {
+    name: document.getElementById('cfgName').value.trim(),
+    tick_count: parseInt(document.getElementById('cfgTickCount').value),
+    prompt_level_1: document.getElementById('cfgL1').value.trim(),
+    prompt_level_2: document.getElementById('cfgL2').value.trim(),
+    prompt_level_3: document.getElementById('cfgL3').value.trim(),
+  };
+  if (!body.name) { alert('이름을 입력하세요.'); return; }
+
+  const editId = configModal._editId;
+  const url = editId ? `/api/configs/${editId}` : '/api/configs';
+  const method = editId ? 'PUT' : 'POST';
+  const res = await fetch(url, { method, headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
+  if (res.ok) {
+    configModal.hide();
+    await loadConfigs();
+  } else {
+    alert('저장 실패');
+  }
+}
+
+async function deleteConfig(id) {
+  if (!confirm('설정을 삭제하시겠습니까?')) return;
+  await fetch(`/api/configs/${id}`, { method: 'DELETE' });
+  if (selectedConfig?.id === id) {
+    selectedConfig = null;
+    document.getElementById('runEmpty').style.display = 'block';
+    document.getElementById('runContent').style.display = 'none';
+  }
+  loadConfigs();
+}
+
+// ── 실행 ─────────────────────────────────
+
+async function startSimulation() {
+  if (!selectedConfig) return;
+  document.getElementById('startBtn').disabled = true;
+  document.getElementById('progressPanel').style.display = 'block';
+  document.getElementById('liveLog').innerHTML = '';
+  updateProgress(0, selectedConfig.tick_count, '시작 중...');
+
+  const res = await fetch('/api/runs', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ config_id: selectedConfig.id })
+  });
+  if (!res.ok) { alert('실행 시작 실패'); document.getElementById('startBtn').disabled = false; return; }
+  const run = await res.json();
+  selectedRunId = run.id;
+  pollProgress(run.id, selectedConfig.tick_count);
+  loadRuns();
+}
+
+function pollProgress(runId, total) {
+  clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    const runRes = await fetch(`/api/runs/${runId}`);
+    const run = await runRes.json();
+    updateProgress(run.current_tick, run.total_ticks, run.status);
+
+    // 최근 로그 가져오기
+    const logRes = await fetch(`/api/logs?run_id=${runId}&limit=8`);
+    const data = await logRes.json();
+    renderLiveLog(data.logs.reverse());
+
+    if (run.status === 'done' || run.status === 'error') {
+      clearInterval(pollTimer);
+      document.getElementById('startBtn').disabled = false;
+      loadRuns();
+    }
+  }, 2000);
+}
+
+function updateProgress(cur, total, status) {
+  const pct = total > 0 ? Math.round((cur / total) * 100) : 0;
+  document.getElementById('progressBar').style.width = pct + '%';
+  document.getElementById('progressFrac').textContent = `${cur} / ${total}`;
+  const labels = { pending: '대기 중', running: `틱 ${cur} 진행 중...`, done: '완료!', error: '오류 발생' };
+  document.getElementById('progressLabel').textContent = labels[status] || status;
+}
+
+function renderLiveLog(logs) {
+  const container = document.getElementById('liveLog');
+  container.innerHTML = logs.map(l => `
+    <div class="log-item log-${l.event_type}">
+      <span class="log-tick-badge me-2">틱 ${l.tick_number}</span>
+      <span class="small">${escHtml(l.description)}</span>
+    </div>
+  `).join('');
+  container.scrollTop = container.scrollHeight;
+}
+
+async function loadRuns() {
+  const res = await fetch('/api/runs');
+  const runs = await res.json();
+  const container = document.getElementById('runList');
+  if (runs.length === 0) {
+    container.innerHTML = '<p class="text-muted small text-center py-2">실행 내역 없음</p>';
+    return;
+  }
+  const statusColors = { pending: 'secondary', running: 'warning', done: 'success', error: 'danger' };
+  const statusLabels = { pending: '대기', running: '진행 중', done: '완료', error: '오류' };
+  container.innerHTML = runs.map(r => `
+    <div class="d-flex align-items-center py-2" style="border-bottom: 1px solid var(--border);">
+      <div class="me-3">
+        <span class="badge bg-${statusColors[r.status] || 'secondary'}">${statusLabels[r.status] || r.status}</span>
+      </div>
+      <div class="flex-grow-1">
+        <div class="small fw-semibold">Run #${r.id}</div>
+        <div class="small text-muted">${r.current_tick} / ${r.total_ticks} 틱 · ${new Date(r.started_at).toLocaleString('ko-KR')}</div>
+      </div>
+      <a href="/logs?run_id=${r.id}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-journal-text"></i></a>
+    </div>
+  `).join('');
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+</script>
+{% endblock %}

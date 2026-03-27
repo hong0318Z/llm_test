@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}세계관 LLM 시스템{% endblock %}</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css" rel="stylesheet">
+  <style>
+    :root {
+      --bg-dark: #0f1117;
+      --bg-card: #1a1d27;
+      --bg-input: #12151e;
+      --accent: #7c6af7;
+      --accent-hover: #6a58e8;
+      --text-muted: #8892a4;
+      --border: #2a2d3a;
+      --cat-faction: #e05c5c;
+      --cat-character: #5c9be0;
+      --cat-concept: #9b5ce0;
+      --cat-item: #e0a05c;
+      --cat-race: #5ce09b;
+      --cat-event: #e0d85c;
+    }
+    body {
+      background-color: var(--bg-dark);
+      color: #e2e8f0;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      min-height: 100vh;
+    }
+    .navbar {
+      background: var(--bg-card) !important;
+      border-bottom: 1px solid var(--border);
+    }
+    .navbar-brand { color: var(--accent) !important; font-weight: 700; letter-spacing: 0.5px; }
+    .nav-link { color: #b0bac8 !important; }
+    .nav-link:hover, .nav-link.active { color: var(--accent) !important; }
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+    }
+    .card-header {
+      background: transparent;
+      border-bottom: 1px solid var(--border);
+      font-weight: 600;
+    }
+    .form-control, .form-select, .form-check-input {
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      color: #e2e8f0;
+    }
+    .form-control:focus, .form-select:focus {
+      background: var(--bg-input);
+      border-color: var(--accent);
+      color: #e2e8f0;
+      box-shadow: 0 0 0 3px rgba(124,106,247,0.15);
+    }
+    .form-select option { background: var(--bg-input); }
+    .btn-primary {
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+    .btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+    .btn-outline-secondary { border-color: var(--border); color: #b0bac8; }
+    .btn-outline-secondary:hover { background: var(--border); color: #e2e8f0; }
+
+    .category-badge {
+      font-size: 0.72rem;
+      font-weight: 600;
+      padding: 3px 9px;
+      border-radius: 20px;
+      letter-spacing: 0.3px;
+    }
+    .cat-세력 { background: rgba(224,92,92,0.15); color: var(--cat-faction); }
+    .cat-인물 { background: rgba(92,155,224,0.15); color: var(--cat-character); }
+    .cat-관념 { background: rgba(155,92,224,0.15); color: var(--cat-concept); }
+    .cat-물건 { background: rgba(224,160,92,0.15); color: var(--cat-item); }
+    .cat-종족 { background: rgba(92,224,155,0.15); color: var(--cat-race); }
+    .cat-사건 { background: rgba(224,216,92,0.15); color: var(--cat-event); }
+
+    .creator-badge-user {
+      font-size: 0.68rem; background: rgba(92,224,155,0.12);
+      color: #5ce09b; border-radius: 12px; padding: 2px 8px;
+    }
+    .creator-badge-llm {
+      font-size: 0.68rem; background: rgba(124,106,247,0.12);
+      color: var(--accent); border-radius: 12px; padding: 2px 8px;
+    }
+
+    .entry-card {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--bg-card);
+      padding: 14px 16px;
+      cursor: pointer;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .entry-card:hover { border-color: var(--accent); box-shadow: 0 2px 12px rgba(124,106,247,0.1); }
+    .entry-card.inactive { opacity: 0.45; }
+    .entry-title { font-weight: 600; font-size: 0.95rem; }
+    .entry-content { font-size: 0.82rem; color: var(--text-muted); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    textarea.prompt-textarea { min-height: 110px; font-size: 0.88rem; }
+    .prompt-level-label { font-size: 0.8rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; }
+    .prompt-l1 { color: #e05c5c; }
+    .prompt-l2 { color: #e0a05c; }
+    .prompt-l3 { color: #5ce09b; }
+
+    .log-item { border-left: 3px solid var(--border); padding: 8px 12px; margin-bottom: 6px; font-size: 0.84rem; }
+    .log-world_event { border-color: #e0d85c; }
+    .log-entry_created { border-color: #5ce09b; }
+    .log-entry_updated { border-color: #5c9be0; }
+    .log-entry_deactivated { border-color: #e05c5c; }
+    .log-error { border-color: #ff4444; }
+    .log-tick-badge { font-size: 0.7rem; background: rgba(255,255,255,0.07); border-radius: 6px; padding: 1px 7px; }
+
+    .tick-progress { height: 6px; border-radius: 3px; background: var(--border); }
+    .tick-progress-bar { height: 6px; border-radius: 3px; background: linear-gradient(90deg, var(--accent), #a855f7); transition: width 0.4s; }
+
+    .modal-content { background: var(--bg-card); border: 1px solid var(--border); }
+    .modal-header { border-bottom: 1px solid var(--border); }
+    .modal-footer { border-top: 1px solid var(--border); }
+    .btn-close { filter: invert(1); }
+
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: var(--bg-dark); }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  </style>
+  {% block extra_head %}{% endblock %}
+</head>
+<body>
+  <nav class="navbar navbar-expand-lg sticky-top">
+    <div class="container-fluid px-4">
+      <a class="navbar-brand" href="/"><i class="bi bi-globe2 me-2"></i>WorldLLM</a>
+      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navMenu">
+        <span class="navbar-toggler-icon"></span>
+      </button>
+      <div class="collapse navbar-collapse" id="navMenu">
+        <ul class="navbar-nav ms-auto">
+          <li class="nav-item">
+            <a class="nav-link {% if request.path == '/' %}active{% endif %}" href="/"><i class="bi bi-database me-1"></i>세계관 DB</a>
+          </li>
+          <li class="nav-item">
+            <a class="nav-link {% if request.path == '/simulation' %}active{% endif %}" href="/simulation"><i class="bi bi-play-circle me-1"></i>시뮬레이션</a>
+          </li>
+          <li class="nav-item">
+            <a class="nav-link {% if request.path == '/logs' %}active{% endif %}" href="/logs"><i class="bi bi-journal-text me-1"></i>로그</a>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </nav>
+
+  <main class="container-fluid px-4 py-4">
+    {% block content %}{% endblock %}
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+  {% block extra_scripts %}{% endblock %}
+</body>
+</html>

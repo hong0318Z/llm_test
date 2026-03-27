@@ -1,0 +1,343 @@
+{% extends "base.html" %}
+{% block title %}세계관 DB{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+  <!-- 왼쪽: 엔트리 목록 -->
+  <div class="col-lg-5 col-xl-4">
+    <div class="card h-100">
+      <div class="card-header d-flex align-items-center justify-content-between py-3">
+        <span><i class="bi bi-database me-2"></i>세계관 엔트리</span>
+        <button class="btn btn-primary btn-sm" onclick="openCreateModal()">
+          <i class="bi bi-plus-lg me-1"></i>추가
+        </button>
+      </div>
+      <div class="card-body p-3">
+        <!-- 필터 -->
+        <div class="d-flex gap-2 flex-wrap mb-3">
+          <button class="btn btn-sm btn-outline-secondary active" onclick="filterCategory(null, this)">전체</button>
+          {% for cat in categories %}
+          <button class="btn btn-sm btn-outline-secondary" onclick="filterCategory('{{ cat }}', this)">{{ cat }}</button>
+          {% endfor %}
+        </div>
+        <div class="d-flex gap-2 mb-3">
+          <input type="text" class="form-control form-control-sm" id="searchInput" placeholder="검색..." oninput="filterSearch()">
+          <div class="form-check form-switch d-flex align-items-center ms-2" style="white-space:nowrap">
+            <input class="form-check-input me-1" type="checkbox" id="showInactive" onchange="loadEntries()">
+            <label class="form-check-label small" for="showInactive">비활성 포함</label>
+          </div>
+        </div>
+        <!-- 통계 -->
+        <div id="statsBar" class="small text-muted mb-2"></div>
+        <!-- 목록 -->
+        <div id="entryList" style="max-height: calc(100vh - 300px); overflow-y: auto;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 오른쪽: 상세/편집 -->
+  <div class="col-lg-7 col-xl-8">
+    <div class="card h-100" id="detailPanel">
+      <div class="card-body d-flex align-items-center justify-content-center text-muted" id="detailEmpty">
+        <div class="text-center">
+          <i class="bi bi-cursor-text display-4 mb-3 d-block opacity-25"></i>
+          <p>왼쪽에서 엔트리를 선택하거나 새로 추가하세요.</p>
+        </div>
+      </div>
+      <div id="detailContent" style="display:none;" class="p-0 h-100">
+        <div class="card-header d-flex align-items-center justify-content-between py-3">
+          <div class="d-flex align-items-center gap-2">
+            <span id="detailCategoryBadge"></span>
+            <span id="detailTitle" class="fw-bold"></span>
+            <span id="detailCreatorBadge"></span>
+          </div>
+          <div class="d-flex gap-2">
+            <button class="btn btn-sm btn-outline-secondary" onclick="startEdit()"><i class="bi bi-pencil me-1"></i>편집</button>
+            <button class="btn btn-sm btn-outline-danger" onclick="deleteEntry()"><i class="bi bi-trash me-1"></i>삭제</button>
+          </div>
+        </div>
+        <div class="p-4">
+          <!-- 뷰 모드 -->
+          <div id="viewMode">
+            <div class="mb-3">
+              <label class="form-label small text-muted">내용</label>
+              <div id="detailContentText" style="white-space: pre-wrap; font-size: 0.9rem; line-height: 1.7;"></div>
+            </div>
+            <div class="mb-3">
+              <label class="form-label small text-muted">참조 엔트리</label>
+              <div id="detailReferences"></div>
+            </div>
+            <div class="row g-3">
+              <div class="col-6">
+                <label class="form-label small text-muted">생성 틱</label>
+                <div id="detailTick" class="small"></div>
+              </div>
+              <div class="col-6">
+                <label class="form-label small text-muted">상태</label>
+                <div id="detailStatus" class="small"></div>
+              </div>
+              <div class="col-12">
+                <label class="form-label small text-muted">등록일시</label>
+                <div id="detailCreatedAt" class="small text-muted"></div>
+              </div>
+            </div>
+          </div>
+          <!-- 편집 모드 -->
+          <div id="editMode" style="display:none;">
+            <div class="mb-3">
+              <label class="form-label small">제목</label>
+              <input type="text" class="form-control" id="editTitle">
+            </div>
+            <div class="mb-3">
+              <label class="form-label small">분류</label>
+              <select class="form-select" id="editCategory">
+                {% for cat in categories %}
+                <option value="{{ cat }}">{{ cat }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="mb-3">
+              <label class="form-label small">내용</label>
+              <textarea class="form-control" id="editContent" rows="8"></textarea>
+            </div>
+            <div class="mb-3">
+              <label class="form-label small">참조 엔트리 ID (콤마로 구분)</label>
+              <input type="text" class="form-control" id="editReferences" placeholder="예: 1, 3, 7">
+            </div>
+            <div class="mb-3 form-check">
+              <input type="checkbox" class="form-check-input" id="editIsActive">
+              <label class="form-check-label small" for="editIsActive">활성 상태</label>
+            </div>
+            <div class="d-flex gap-2">
+              <button class="btn btn-primary" onclick="saveEdit()"><i class="bi bi-check-lg me-1"></i>저장</button>
+              <button class="btn btn-outline-secondary" onclick="cancelEdit()">취소</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 생성 모달 -->
+<div class="modal fade" id="createModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-plus-circle me-2"></i>엔트리 추가</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label small">제목 <span class="text-danger">*</span></label>
+          <input type="text" class="form-control" id="newTitle" placeholder="예: 아르곤 왕국">
+        </div>
+        <div class="mb-3">
+          <label class="form-label small">분류 <span class="text-danger">*</span></label>
+          <select class="form-select" id="newCategory">
+            {% for cat in categories %}
+            <option value="{{ cat }}">{{ cat }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="mb-3">
+          <label class="form-label small">내용 <span class="text-danger">*</span></label>
+          <textarea class="form-control" id="newContent" rows="6" placeholder="상세한 설명을 입력하세요..."></textarea>
+        </div>
+        <div class="mb-3">
+          <label class="form-label small">참조 엔트리 ID (콤마로 구분)</label>
+          <input type="text" class="form-control" id="newReferences" placeholder="예: 1, 3, 7">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">취소</button>
+        <button class="btn btn-primary" onclick="createEntry()"><i class="bi bi-plus-lg me-1"></i>추가</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let allEntries = [];
+let currentEntry = null;
+let currentCategory = null;
+let createModal;
+
+document.addEventListener('DOMContentLoaded', () => {
+  createModal = new bootstrap.Modal(document.getElementById('createModal'));
+  loadEntries();
+});
+
+async function loadEntries() {
+  const activeOnly = !document.getElementById('showInactive').checked;
+  const url = `/api/entries?active=${activeOnly}`;
+  const res = await fetch(url);
+  allEntries = await res.json();
+  renderList();
+  updateStats();
+}
+
+function updateStats() {
+  const counts = {};
+  allEntries.forEach(e => counts[e.category] = (counts[e.category] || 0) + 1);
+  const parts = Object.entries(counts).map(([k, v]) => `${k} ${v}`);
+  document.getElementById('statsBar').textContent = `총 ${allEntries.length}개 · ` + parts.join(' · ');
+}
+
+function filterCategory(cat, btn) {
+  currentCategory = cat;
+  document.querySelectorAll('.btn-outline-secondary.active').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderList();
+}
+
+function filterSearch() { renderList(); }
+
+function renderList() {
+  const search = document.getElementById('searchInput').value.toLowerCase();
+  let items = allEntries;
+  if (currentCategory) items = items.filter(e => e.category === currentCategory);
+  if (search) items = items.filter(e =>
+    e.title.toLowerCase().includes(search) || e.content.toLowerCase().includes(search)
+  );
+
+  const container = document.getElementById('entryList');
+  if (items.length === 0) {
+    container.innerHTML = '<p class="text-muted text-center small py-4">엔트리가 없습니다.</p>';
+    return;
+  }
+  container.innerHTML = items.map(e => `
+    <div class="entry-card mb-2 ${e.is_active ? '' : 'inactive'}" onclick="selectEntry(${e.id})">
+      <div class="d-flex align-items-center gap-2 mb-1">
+        <span class="category-badge cat-${e.category}">${e.category}</span>
+        <span class="entry-title">${escHtml(e.title)}</span>
+        <span class="${e.created_by === 'llm' ? 'creator-badge-llm' : 'creator-badge-user'} ms-auto">
+          ${e.created_by === 'llm' ? 'LLM' : '유저'}
+        </span>
+      </div>
+      <div class="entry-content">${escHtml(e.content)}</div>
+    </div>
+  `).join('');
+}
+
+async function selectEntry(id) {
+  const res = await fetch(`/api/entries/${id}`);
+  currentEntry = await res.json();
+  showDetail();
+}
+
+function showDetail() {
+  const e = currentEntry;
+  document.getElementById('detailEmpty').style.display = 'none';
+  document.getElementById('detailContent').style.display = 'block';
+  document.getElementById('detailTitle').textContent = e.title;
+  document.getElementById('detailCategoryBadge').innerHTML = `<span class="category-badge cat-${e.category}">${e.category}</span>`;
+  document.getElementById('detailCreatorBadge').innerHTML =
+    `<span class="${e.created_by === 'llm' ? 'creator-badge-llm' : 'creator-badge-user'}">${e.created_by === 'llm' ? 'LLM 생성' : '유저 작성'}</span>`;
+  document.getElementById('detailContentText').textContent = e.content;
+  document.getElementById('detailTick').textContent = e.tick_created === 0 ? '초기 설정' : `틱 ${e.tick_created}`;
+  document.getElementById('detailStatus').innerHTML = e.is_active
+    ? '<span class="text-success">활성</span>'
+    : '<span class="text-danger">비활성</span>';
+  document.getElementById('detailCreatedAt').textContent = new Date(e.created_at).toLocaleString('ko-KR');
+
+  const refs = e.references || [];
+  if (refs.length > 0) {
+    const refEntries = refs.map(id => {
+      const ref = allEntries.find(x => x.id === id);
+      return ref ? `<span class="badge bg-secondary me-1" style="cursor:pointer" onclick="selectEntry(${id})">${ref.title}</span>` : `#${id}`;
+    });
+    document.getElementById('detailReferences').innerHTML = refEntries.join('');
+  } else {
+    document.getElementById('detailReferences').innerHTML = '<span class="text-muted small">없음</span>';
+  }
+
+  document.getElementById('viewMode').style.display = 'block';
+  document.getElementById('editMode').style.display = 'none';
+}
+
+function startEdit() {
+  const e = currentEntry;
+  document.getElementById('editTitle').value = e.title;
+  document.getElementById('editCategory').value = e.category;
+  document.getElementById('editContent').value = e.content;
+  document.getElementById('editReferences').value = (e.references || []).join(', ');
+  document.getElementById('editIsActive').checked = e.is_active;
+  document.getElementById('viewMode').style.display = 'none';
+  document.getElementById('editMode').style.display = 'block';
+}
+
+function cancelEdit() {
+  document.getElementById('viewMode').style.display = 'block';
+  document.getElementById('editMode').style.display = 'none';
+}
+
+async function saveEdit() {
+  const refs = document.getElementById('editReferences').value
+    .split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+  const body = {
+    title: document.getElementById('editTitle').value.trim(),
+    category: document.getElementById('editCategory').value,
+    content: document.getElementById('editContent').value.trim(),
+    references: refs,
+    is_active: document.getElementById('editIsActive').checked,
+  };
+  const res = await fetch(`/api/entries/${currentEntry.id}`, {
+    method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
+  });
+  if (res.ok) {
+    currentEntry = await res.json();
+    await loadEntries();
+    showDetail();
+  } else {
+    alert('저장 실패');
+  }
+}
+
+async function deleteEntry() {
+  if (!confirm(`'${currentEntry.title}'을 삭제하시겠습니까?`)) return;
+  await fetch(`/api/entries/${currentEntry.id}`, { method: 'DELETE' });
+  currentEntry = null;
+  document.getElementById('detailEmpty').style.display = 'flex';
+  document.getElementById('detailContent').style.display = 'none';
+  loadEntries();
+}
+
+function openCreateModal() {
+  document.getElementById('newTitle').value = '';
+  document.getElementById('newContent').value = '';
+  document.getElementById('newReferences').value = '';
+  createModal.show();
+}
+
+async function createEntry() {
+  const refs = document.getElementById('newReferences').value
+    .split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+  const body = {
+    title: document.getElementById('newTitle').value.trim(),
+    category: document.getElementById('newCategory').value,
+    content: document.getElementById('newContent').value.trim(),
+    references: refs,
+  };
+  if (!body.title || !body.content) { alert('제목과 내용을 입력하세요.'); return; }
+  const res = await fetch('/api/entries', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
+  });
+  if (res.ok) {
+    const entry = await res.json();
+    createModal.hide();
+    await loadEntries();
+    selectEntry(entry.id);
+  } else {
+    const err = await res.json();
+    alert(err.error || '생성 실패');
+  }
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+</script>
+{% endblock %}

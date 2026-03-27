@@ -13,6 +13,23 @@ db.init_app(app)
 
 with app.app_context():
     db.create_all()
+    # 기존 DB에 누락된 컬럼 자동 추가 (마이그레이션)
+    _migrate_columns = [
+        ("world_entries",    "is_summarized",    "BOOLEAN DEFAULT 0"),
+        ("simulation_runs",  "total_tokens_in",  "INTEGER DEFAULT 0"),
+        ("simulation_runs",  "total_tokens_out", "INTEGER DEFAULT 0"),
+        ("simulation_runs",  "total_tokens",     "INTEGER DEFAULT 0"),
+        ("simulation_logs",  "tokens_in",        "INTEGER DEFAULT 0"),
+        ("simulation_logs",  "tokens_out",       "INTEGER DEFAULT 0"),
+        ("simulation_logs",  "tokens_total",     "INTEGER DEFAULT 0"),
+    ]
+    with db.engine.connect() as conn:
+        for table, col, col_def in _migrate_columns:
+            try:
+                conn.execute(db.text(f"ALTER TABLE {table} ADD COLUMN {col} {col_def}"))
+                conn.commit()
+            except Exception:
+                pass  # 이미 존재하면 무시
 
 
 # ─────────────────────────────────────────

@@ -149,3 +149,30 @@ class SimulationLog(db.Model):
             "tokens_total": self.tokens_total,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
+
+
+class WorldSnapshot(db.Model):
+    """세계관 전체 상태를 레이블 붙여 저장하는 스냅샷"""
+    __tablename__ = "world_snapshots"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(200), nullable=False)   # "세계관 1", "초기 설정" 등
+    description = db.Column(db.Text, default="")
+    entries_json = db.Column(db.Text, nullable=False)  # WorldEntry 목록 전체 JSON
+    entry_count = db.Column(db.Integer, default=0)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self, include_entries=False):
+        d = {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "entry_count": self.entry_count,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+        if include_entries:
+            try:
+                d["entries"] = json.loads(self.entries_json)
+            except Exception:
+                d["entries"] = []
+        return d

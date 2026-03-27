@@ -1,7 +1,7 @@
 import os
 import threading
 from flask import Flask, jsonify, request, render_template, abort
-from models import db, WorldEntry, SimulationConfig, SimulationRun, SimulationLog, CATEGORIES
+from models import db, WorldEntry, SimulationConfig, SimulationRun, SimulationLog, WorldSnapshot, CATEGORIES
 from datetime import datetime
 
 app = Flask(__name__)
@@ -218,6 +218,116 @@ def list_logs():
     total = q.count()
     logs = q.order_by(SimulationLog.created_at.desc()).offset(offset).limit(limit).all()
     return jsonify({"total": total, "logs": [l.to_dict() for l in logs]})
+
+
+# ─────────────────────────────────────────
+#  세계관 스냅샷 API
+# ─────────────────────────────────────────
+
+@app.route("/api/snapshots", methods=["GET"])
+def list_snapshots():
+    snaps = WorldSnapshot.query.order_by(WorldSnapshot.created_at.desc()).all()
+    return jsonify([s.to_dict() for s in snaps])
+
+
+@app.route("/api/snapshots", methods=["POST"])
+def save_snapshot():
+    """현재 활성 엔트리 전체를 레이블 붙여 저장"""
+    data = request.json or {}
+    name = data.get("name", "").strip()
+    if not name:
+        return jsonify({"error": "name은 필수입니다."}), 400
+
+    entries = WorldEntry.query.filter_by(is_active=True, is_summarized=False).all()
+    import json as _json
+    entries_data = [e.to_dict() for e in entries]
+
+    snap = WorldSnapshot(
+        name=name,
+        description=data.get("description", ""),
+        entries_json=_json.dumps(entries_data, ensure_ascii=False),
+        entry_count=len(entries_data),
+    )
+    db.session.add(snap)
+    db.session.commit()
+    return jsonify(snap.to_dict()), 201
+
+
+@app.route("/api/snapshots/<int:snap_id>", methods=["GET"])
+def get_snapshot(snap_id):
+    snap = WorldSnapshot.query.get_or_404(snap_id)
+    return jsonify(snap.to_dict(include_entries=True))
+
+
+@app.route("/api/snapshots/<int:snap_id>/restore", methods=["POST"])
+def restore_snapshot(snap_id):
+    """스냅샷을 DB에 복원 (기존 엔트리는 모두 비활성화 후 스냅샷 데이터로 교체)"""
+    snap = WorldSnapshot.query.get_or_404(snap_id)
+    import json as _json
+
+    # 기존 엔트리 전체 비활성화
+    WorldEntry.query.update({"is_active": False})
+    db.session.flush()
+
+    # 스냅샷 엔트리 복원
+    entries_data = _json.loads(snap.entries_json)
+    id_map = {}  # 구 id → 새 id
+    for e in entries_data:
+        new_entry = WorldEntry(
+            title=e["title"],
+            category=e["category"],
+            content=e["content"],
+            created_by=e.get("created_by", "user"),
+            tick_created=e.get("tick_created", 0),
+            is_active=True,
+            is_summarized=False,
+        )
+        new_entry.references = []  # 참조는 id가 바뀌므로 일단 비워둠
+        db.session.add(new_entry)
+        db.session.flush()
+        id_map[e["id"]] = new_entry.id
+
+    db.session.commit()
+    return jsonify({"ok": True, "restored": len(entries_data), "snapshot": snap.to_dict()})
+
+
+@app.route("/api/snapshots/<int:snap_id>", methods=["DELETE"])
+def delete_snapshot(snap_id):
+    snap = WorldSnapshot.query.get_or_404(snap_id)
+    db.session.delete(snap)
+    db.session.commit()
+    return jsonify({"ok": True})
+
+
+# ─────────────────────────────────────────
+#  LLM 연결 테스트 API
+# ─────────────────────────────────────────
+
+@app.route("/api/test-llm", methods=["POST"])
+def test_llm():
+    """GitHub Copilot API 연결 및 모델 응답 확인"""
+    try:
+        import llm_client
+        client, model = llm_client.get_llm_client()
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": "한 문장으로 대답하세요: 연결 테스트입니다. 현재 몇 가지 세계관 분류를 사용하나요?"}],
+            max_tokens=100,
+            temperature=0,
+        )
+        reply = response.choices[0].message.content
+        usage = response.usage
+        return jsonify({
+            "ok": True,
+            "model": model,
+            "reply": reply,
+            "tokens_in": usage.prompt_tokens if usage else None,
+            "tokens_out": usage.completion_tokens if usage else None,
+        })
+    except EnvironmentError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 # ─────────────────────────────────────────

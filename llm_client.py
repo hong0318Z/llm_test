@@ -339,3 +339,45 @@ def needs_summary(entries: list, max_chars: int = 500) -> bool:
     """현재 세계관이 컨텍스트 한계에 근접했는지 확인"""
     world_state = serialize_world_state(entries, max_chars=max_chars)
     return estimate_tokens(world_state) >= CONTEXT_SUMMARY_THRESHOLD
+
+
+def generate_entry(title: str, category: str, hint: str, ref_entries: list) -> dict:
+    """유저 입력(제목·분류·힌트·참조)을 기반으로 엔트리 내용을 LLM이 생성"""
+    client, model = get_llm_client()
+
+    ref_block = ""
+    if ref_entries:
+        lines = []
+        for e in ref_entries:
+            lines.append(f"  [{e['category']}] {e['title']}: {e['content'][:300]}")
+        ref_block = "\n참조 엔트리:\n" + "\n".join(lines)
+
+    hint_block = f"\n사용자 힌트/초안:\n{hint}" if hint else ""
+
+    prompt = f"""다음 정보를 바탕으로 세계관 엔트리의 상세 내용을 작성해주세요.
+
+제목: {title}
+분류: {category}{hint_block}{ref_block}
+
+요구 사항:
+- 세계관 설정에 어울리는 구체적이고 풍부한 묘사
+- 참조 엔트리와 자연스럽게 연결되는 내용
+- 마크다운 기호(**볼드**, # 헤더 등) 사용 금지, 일반 텍스트만
+- 한국어로 작성
+- 반드시 JSON으로만 응답: {{"content": "생성된 내용"}}"""
+
+    response = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=2000,
+    )
+    raw = response.choices[0].message.content.strip()
+    parsed = _parse_json_safe(raw, "generate_entry")
+    content = parsed.get("content", raw)
+    tokens_in = getattr(response.usage, "prompt_tokens", 0)
+    tokens_out = getattr(response.usage, "completion_tokens", 0)
+    return {
+        "content": content,
+        "_tokens_in": tokens_in,
+        "_tokens_out": tokens_out,
+    }

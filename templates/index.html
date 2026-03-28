@@ -69,8 +69,25 @@
         </div>
         <!-- 통계 -->
         <div id="statsBar" class="small text-muted mb-2"></div>
+        <!-- 멀티선택 툴바 -->
+        <div id="bulkToolbar" style="display:none;" class="d-flex align-items-center gap-2 mb-2 p-2 rounded"
+          style="background:rgba(139,127,247,0.08); border:1px solid rgba(139,127,247,0.2);">
+          <span class="small" style="color:var(--text-secondary);"><span id="selectedCountBulk">0</span>개 선택됨</span>
+          <button class="btn btn-sm btn-outline-secondary" onclick="bulkToggleActive(true)" title="선택 항목 활성화">
+            <i class="bi bi-check-circle me-1"></i>활성화
+          </button>
+          <button class="btn btn-sm btn-outline-secondary" onclick="bulkToggleActive(false)" title="선택 항목 비활성화">
+            <i class="bi bi-slash-circle me-1"></i>비활성화
+          </button>
+          <button class="btn btn-sm btn-outline-danger ms-auto" onclick="bulkDelete()">
+            <i class="bi bi-trash me-1"></i>선택 삭제
+          </button>
+          <button class="btn btn-sm btn-outline-secondary" onclick="clearSelection()">
+            <i class="bi bi-x"></i>
+          </button>
+        </div>
         <!-- 목록 -->
-        <div id="entryList" style="max-height: calc(100vh - 300px); overflow-y: auto;"></div>
+        <div id="entryList" style="max-height: calc(100vh - 320px); overflow-y: auto;"></div>
       </div>
     </div>
   </div>
@@ -207,6 +224,10 @@
       </div>
       <div class="modal-footer">
         <button class="btn btn-outline-secondary" data-bs-dismiss="modal">취소</button>
+        <button class="btn btn-outline-secondary" id="llmGenBtn" onclick="llmGenerateContent()"
+          style="border-color:rgba(139,127,247,0.5); color:var(--accent);">
+          <i class="bi bi-stars me-1"></i>LLM 생성
+        </button>
         <button class="btn btn-primary" onclick="createEntry()"><i class="bi bi-plus-lg me-1"></i>추가</button>
       </div>
     </div>
@@ -230,6 +251,17 @@
 {% endblock %}
 
 {% block extra_scripts %}
+<style>
+.entry-card.selected {
+  border-color: var(--accent) !important;
+  background: rgba(139,127,247,0.08) !important;
+}
+#bulkToolbar {
+  background: rgba(139,127,247,0.07);
+  border: 1px solid rgba(139,127,247,0.25);
+  border-radius: 8px;
+}
+</style>
 <script>
 let allEntries = [];
 let currentEntry = null;
@@ -420,6 +452,60 @@ function filterCategory(cat, btn) {
 
 function filterSearch() { renderList(); }
 
+// ── 멀티선택 ──────────────────────────────────
+let selectedIds = new Set();
+
+function toggleSelect(id, e) {
+  e.stopPropagation();
+  if (selectedIds.has(id)) selectedIds.delete(id);
+  else selectedIds.add(id);
+  updateBulkToolbar();
+  // 체크박스 시각 업데이트
+  const cb = document.querySelector(`.entry-checkbox[data-id="${id}"]`);
+  if (cb) cb.checked = selectedIds.has(id);
+}
+
+function updateBulkToolbar() {
+  const bar = document.getElementById('bulkToolbar');
+  const count = selectedIds.size;
+  bar.style.display = count > 0 ? 'flex' : 'none';
+  document.getElementById('selectedCountBulk').textContent = count;
+}
+
+function clearSelection() {
+  selectedIds.clear();
+  updateBulkToolbar();
+  renderList();
+}
+
+async function bulkDelete() {
+  if (!selectedIds.size) return;
+  if (!confirm(`선택한 ${selectedIds.size}개 엔트리를 삭제합니다. 계속하시겠습니까?`)) return;
+  await fetch('/api/entries/bulk-delete', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ids: [...selectedIds]}),
+  });
+  if (currentEntry && selectedIds.has(currentEntry.id)) {
+    currentEntry = null;
+    document.getElementById('detailContent').style.display = 'none';
+    document.getElementById('detailEmpty').style.display = 'flex';
+  }
+  selectedIds.clear();
+  await loadEntries();
+}
+
+async function bulkToggleActive(isActive) {
+  if (!selectedIds.size) return;
+  await fetch('/api/entries/bulk-toggle-active', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ids: [...selectedIds], is_active: isActive}),
+  });
+  selectedIds.clear();
+  await loadEntries();
+}
+
 function renderList() {
   const search = document.getElementById('searchInput').value.toLowerCase();
   let items = allEntries;
@@ -434,8 +520,13 @@ function renderList() {
     return;
   }
   container.innerHTML = items.map(e => `
-    <div class="entry-card mb-2 ${e.is_active ? '' : 'inactive'}" onclick="selectEntry(${e.id})">
-      <div class="d-flex align-items-center gap-2 mb-1">
+    <div class="entry-card mb-2 ${e.is_active ? '' : 'inactive'} ${selectedIds.has(e.id) ? 'selected' : ''}"
+      onclick="selectEntry(${e.id})" style="position:relative;">
+      <input type="checkbox" class="entry-checkbox"
+        data-id="${e.id}" ${selectedIds.has(e.id) ? 'checked' : ''}
+        onclick="toggleSelect(${e.id}, event)"
+        style="position:absolute; top:8px; right:8px; width:15px; height:15px; cursor:pointer; accent-color:var(--accent);">
+      <div class="d-flex align-items-center gap-2 mb-1" style="padding-right:24px;">
         <span class="category-badge cat-${e.category}">${e.category}</span>
         <span class="entry-title">${escHtml(e.title)}</span>
         <span class="${e.created_by === 'llm' ? 'creator-badge-llm' : 'creator-badge-user'} ms-auto">
@@ -606,6 +697,41 @@ function openCreateModal() {
   document.getElementById('newReferences').value = '';
   updateCharCount('newContent', 'newCharCount');
   createModal.show();
+}
+
+// ── LLM 내용 생성 ─────────────────────────────
+async function llmGenerateContent() {
+  const title = document.getElementById('newTitle').value.trim();
+  const category = document.getElementById('newCategory').value;
+  if (!title) {
+    alert('제목을 먼저 입력하세요.');
+    document.getElementById('newTitle').focus();
+    return;
+  }
+  const hint = document.getElementById('newContent').value.trim();
+  const refRaw = document.getElementById('newReferences').value;
+  const refs = refRaw.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+
+  const btn = document.getElementById('llmGenBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>생성 중...';
+
+  try {
+    const res = await fetch('/api/generate-entry', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({title, category, hint, references: refs}),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '생성 실패');
+    document.getElementById('newContent').value = data.content;
+    updateCharCount('newContent', 'newCharCount');
+  } catch (e) {
+    alert('LLM 생성 실패: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-stars me-1"></i>LLM 생성';
+  }
 }
 
 async function createEntry() {

@@ -690,6 +690,51 @@ def token_estimate():
     return jsonify(result)
 
 
+@app.route("/api/entries/bulk-delete", methods=["POST"])
+def bulk_delete_entries():
+    ids = request.json.get("ids", [])
+    if not ids:
+        return jsonify({"error": "ids가 필요합니다."}), 400
+    WorldEntry.query.filter(WorldEntry.id.in_(ids)).delete(synchronize_session=False)
+    db.session.commit()
+    return jsonify({"ok": True, "deleted": len(ids)})
+
+
+@app.route("/api/entries/bulk-toggle-active", methods=["POST"])
+def bulk_toggle_active():
+    ids = request.json.get("ids", [])
+    active = request.json.get("is_active")  # True/False 강제 지정, None이면 반전
+    if not ids:
+        return jsonify({"error": "ids가 필요합니다."}), 400
+    entries = WorldEntry.query.filter(WorldEntry.id.in_(ids)).all()
+    for e in entries:
+        e.is_active = active if active is not None else (not e.is_active)
+    db.session.commit()
+    return jsonify({"ok": True, "updated": len(entries)})
+
+
+@app.route("/api/generate-entry", methods=["POST"])
+def generate_entry_content():
+    """유저 입력 정보를 기반으로 LLM이 엔트리 내용을 생성"""
+    import llm_client as lc
+    data = request.json or {}
+    title = data.get("title", "").strip()
+    category = data.get("category", "")
+    hint = data.get("hint", "").strip()  # 사용자가 입력한 힌트/초안
+    ref_ids = data.get("references", [])
+
+    if not title or not category:
+        return jsonify({"error": "제목과 분류는 필수입니다."}), 400
+
+    ref_entries = [WorldEntry.query.get(rid).to_dict()
+                   for rid in ref_ids if WorldEntry.query.get(rid)]
+    try:
+        result = lc.generate_entry(title, category, hint, ref_entries)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/translate", methods=["POST"])
 def translate_entries_api():
     """선택된 엔트리들을 영문으로 번역"""

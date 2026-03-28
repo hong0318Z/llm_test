@@ -34,7 +34,11 @@
             <div style="font-size:0.78rem; color:var(--text-secondary);">설정</div>
             <div class="fw-bold" id="runConfigName"></div>
           </div>
-          <div class="ms-auto d-flex gap-2">
+          <div class="ms-auto d-flex gap-2 align-items-center flex-wrap">
+            <label class="d-flex align-items-center gap-2 mb-0" style="cursor:pointer; font-size:0.83rem; color:var(--text-secondary);">
+              <input type="checkbox" id="excludeLlmToggle" class="form-check-input" style="margin:0;" onchange="loadTokenEstimate()">
+              LLM 생성 제외
+            </label>
             <button class="btn btn-sm btn-outline-secondary" onclick="openEntrySelectModal()">
               <i class="bi bi-toggles me-1"></i>엔트리 선택 (<span id="selectedCount">전체</span>)
             </button>
@@ -257,6 +261,7 @@ async function loadTokenEstimate() {
   el.style.display = 'block';
   let url = `/api/token-estimate?config_id=${selectedConfig.id}`;
   if (selectedEntryIds !== null) url += `&ids=${selectedEntryIds.join(',')}`;
+  if (document.getElementById('excludeLlmToggle').checked) url += `&exclude_llm=true`;
   const res = await fetch(url);
   const d = await res.json();
   document.getElementById('estWorld').textContent = d.world_tokens.toLocaleString();
@@ -380,6 +385,7 @@ async function startSimulation() {
 
   const body = { config_id: selectedConfig.id };
   if (selectedEntryIds !== null) body.entry_ids = selectedEntryIds;
+  if (document.getElementById('excludeLlmToggle').checked) body.exclude_llm_entries = true;
 
   const res = await fetch('/api/runs', {
     method: 'POST',

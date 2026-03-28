@@ -25,26 +25,29 @@ def run_simulation(run_id: int, app):
                 selected_ids = _json.loads(run.selected_entry_ids_json)
             except Exception:
                 selected_ids = None
+        exclude_llm = bool(run.exclude_llm_entries)
+
+        def _query_entries(extra_ids=None):
+            q = WorldEntry.query.filter_by(is_active=True, is_summarized=False)
+            ids = extra_ids or selected_ids
+            if ids:
+                q = q.filter(WorldEntry.id.in_(ids))
+            if exclude_llm:
+                q = q.filter_by(created_by="user")
+            return [e.to_dict() for e in q.all()]
 
         try:
             for tick in range(1, run.total_ticks + 1):
                 run.current_tick = tick
                 db.session.commit()
 
-                # 활성 엔트리 조회 (요약된 항목 제외, 선택 ID 필터 적용)
-                q = WorldEntry.query.filter_by(is_active=True, is_summarized=False)
-                if selected_ids:
-                    q = q.filter(WorldEntry.id.in_(selected_ids))
-                entries = [e.to_dict() for e in q.all()]
+                entries = _query_entries()
 
                 # 컨텍스트 한계 근접 시 자동 요약 먼저 실행
                 if llm_client.needs_summary(entries):
                     _run_auto_summary(run, tick, entries, config.to_dict())
                     db.session.commit()
-                    # 요약 후 갱신된 엔트리 목록으로 재조회
-                    entries = [
-                        e.to_dict()
-                        for e in WorldEntry.query.filter_by(is_active=True, is_summarized=False).all()
+                    entries = _query_entries()
                     ]
 
                 # 일반 틱 실행

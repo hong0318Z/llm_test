@@ -1,0 +1,242 @@
+{% extends "base.html" %}
+{% block title %}데이터 Export{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header py-3 d-flex align-items-center gap-2">
+        <i class="bi bi-box-arrow-up me-1"></i>연구 데이터 Export
+        <span class="ms-2" style="font-size:0.8rem; color:var(--text-secondary);">
+          틱 실행 결과 전체 (토큰, 소요시간, 생성 정보) 다운로드
+        </span>
+      </div>
+      <div class="card-body p-4">
+
+        <!-- 런 선택 -->
+        <div class="mb-4">
+          <label class="form-label">실행 선택</label>
+          <select class="form-select" id="runSelect" onchange="onRunSelect()" style="max-width:420px;">
+            <option value="">-- 실행 목록 로딩 중 --</option>
+          </select>
+        </div>
+
+        <!-- 런 요약 카드 -->
+        <div id="runSummary" style="display:none;">
+          <div class="row g-3 mb-4">
+            <div class="col-6 col-md-3">
+              <div class="token-stat">
+                <div class="lbl">상태</div>
+                <div class="val" id="sumStatus" style="font-size:0.95rem;"></div>
+              </div>
+            </div>
+            <div class="col-6 col-md-3">
+              <div class="token-stat">
+                <div class="lbl">완료 틱</div>
+                <div class="val" id="sumTicks"></div>
+              </div>
+            </div>
+            <div class="col-6 col-md-3">
+              <div class="token-stat">
+                <div class="lbl">총 소요 시간</div>
+                <div class="val" id="sumDuration"></div>
+              </div>
+            </div>
+            <div class="col-6 col-md-3">
+              <div class="token-stat">
+                <div class="lbl">총 토큰</div>
+                <div class="val" id="sumTokens"></div>
+              </div>
+            </div>
+            <div class="col-6 col-md-3">
+              <div class="token-stat">
+                <div class="lbl">입력 토큰</div>
+                <div class="val" id="sumTokIn"></div>
+              </div>
+            </div>
+            <div class="col-6 col-md-3">
+              <div class="token-stat">
+                <div class="lbl">출력 토큰</div>
+                <div class="val" id="sumTokOut"></div>
+              </div>
+            </div>
+            <div class="col-6 col-md-3">
+              <div class="token-stat">
+                <div class="lbl">틱당 평균 토큰</div>
+                <div class="val" id="sumAvgTok"></div>
+              </div>
+            </div>
+            <div class="col-6 col-md-3">
+              <div class="token-stat">
+                <div class="lbl">최종 활성 엔트리</div>
+                <div class="val" id="sumEntries"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 틱별 요약 테이블 -->
+          <h6 class="mb-3" style="color:var(--text-secondary);">틱별 상세</h6>
+          <div style="overflow-x:auto; margin-bottom:2rem;">
+            <table class="table table-sm" style="font-size:0.82rem; color:var(--text-primary);">
+              <thead>
+                <tr style="border-color:var(--border); color:var(--text-secondary);">
+                  <th>틱</th>
+                  <th>입력 tok</th>
+                  <th>출력 tok</th>
+                  <th>합계 tok</th>
+                  <th>세계 사건</th>
+                  <th>엔트리 생성</th>
+                  <th>엔트리 수정</th>
+                  <th>엔트리 소멸</th>
+                  <th>요약</th>
+                  <th>오류</th>
+                  <th style="min-width:200px;">LLM 판단</th>
+                </tr>
+              </thead>
+              <tbody id="tickTable"></tbody>
+            </table>
+          </div>
+
+          <!-- 다운로드 버튼 -->
+          <div class="d-flex gap-3 flex-wrap">
+            <button class="btn btn-primary" onclick="downloadExport('json')">
+              <i class="bi bi-filetype-json me-2"></i>JSON 전체 다운로드
+              <span style="font-size:0.75rem; opacity:0.75;">(전체 데이터)</span>
+            </button>
+            <button class="btn btn-outline-secondary" onclick="downloadExport('csv')">
+              <i class="bi bi-filetype-csv me-2"></i>CSV 다운로드
+              <span style="font-size:0.75rem; opacity:0.75;">(틱별 요약)</span>
+            </button>
+            <a id="jsonLink" style="display:none;"></a>
+          </div>
+
+          <!-- 카테고리별 엔트리 현황 -->
+          <div class="mt-4">
+            <h6 class="mb-3" style="color:var(--text-secondary);">카테고리별 최종 엔트리 현황</h6>
+            <div class="d-flex gap-2 flex-wrap" id="categoryBreakdown"></div>
+          </div>
+        </div>
+
+        <div id="selectPrompt" class="text-center py-5" style="color:var(--text-secondary);">
+          <i class="bi bi-box-arrow-up display-4 d-block mb-3 opacity-25"></i>
+          위에서 실행(Run)을 선택하면 데이터가 표시됩니다.
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let currentRunId = null;
+let exportData = null;
+
+document.addEventListener('DOMContentLoaded', loadRunList);
+
+async function loadRunList() {
+  const res = await fetch('/api/runs');
+  const runs = await res.json();
+  const sel = document.getElementById('runSelect');
+  const statusLabels = { done:'완료', running:'진행중', error:'오류', pending:'대기' };
+  sel.innerHTML = '<option value="">-- 실행을 선택하세요 --</option>' +
+    runs.map(r => `<option value="${r.id}">
+      Run #${r.id} · ${statusLabels[r.status]||r.status} · ${r.current_tick}/${r.total_ticks}틱
+      · ${r.total_tokens ? r.total_tokens.toLocaleString()+'tok' : '토큰없음'}
+      · ${new Date(r.started_at).toLocaleString('ko-KR')}
+    </option>`).join('');
+}
+
+async function onRunSelect() {
+  const id = document.getElementById('runSelect').value;
+  if (!id) {
+    document.getElementById('runSummary').style.display = 'none';
+    document.getElementById('selectPrompt').style.display = 'block';
+    return;
+  }
+  currentRunId = id;
+  // 데이터 미리 로드
+  const res = await fetch(`/api/runs/${id}/export`);
+  exportData = await res.json();
+  renderSummary(exportData);
+}
+
+function renderSummary(d) {
+  document.getElementById('selectPrompt').style.display = 'none';
+  document.getElementById('runSummary').style.display = 'block';
+
+  const m = d.export_meta;
+  const t = d.token_summary;
+  const e = d.entry_summary;
+
+  const statusColor = { done:'#6eeab0', running:'#ffb86c', error:'#ff7070', pending:'#8892a4' };
+  document.getElementById('sumStatus').innerHTML =
+    `<span style="color:${statusColor[m.status]||'#fff'}">${m.status}</span>`;
+  document.getElementById('sumTicks').textContent = `${m.total_ticks_completed} / ${m.total_ticks_planned}`;
+  document.getElementById('sumDuration').textContent =
+    m.total_duration_seconds != null ? fmtDuration(m.total_duration_seconds) : '-';
+  document.getElementById('sumTokens').textContent = (t.total_tokens||0).toLocaleString();
+  document.getElementById('sumTokIn').textContent = (t.total_tokens_in||0).toLocaleString();
+  document.getElementById('sumTokOut').textContent = (t.total_tokens_out||0).toLocaleString();
+  document.getElementById('sumAvgTok').textContent = (t.avg_tokens_per_tick||0).toLocaleString();
+  document.getElementById('sumEntries').textContent =
+    `${e.total_active} (유저 ${e.user_authored} / LLM ${e.llm_generated})`;
+
+  // 틱 테이블
+  const tbody = document.getElementById('tickTable');
+  tbody.innerHTML = d.ticks.map(t => `
+    <tr style="border-color:var(--border);">
+      <td><strong>${t.tick_number}</strong></td>
+      <td>${(t.tokens_in||0).toLocaleString()}</td>
+      <td>${(t.tokens_out||0).toLocaleString()}</td>
+      <td style="color:var(--accent); font-weight:600;">${(t.tokens_total||0).toLocaleString()}</td>
+      <td>${t.events.length}</td>
+      <td style="color:var(--cat-race);">${t.entries_created.length}</td>
+      <td style="color:var(--cat-character);">${t.entries_updated.length}</td>
+      <td style="color:var(--cat-faction);">${t.entries_deactivated.length}</td>
+      <td>${t.context_summaries.length > 0 ? '<span style="color:var(--accent);">●</span>' : '-'}</td>
+      <td>${t.errors.length > 0 ? '<span style="color:#ff7070;">●</span>' : '-'}</td>
+      <td style="color:var(--text-secondary); font-size:0.78rem;">${escHtml((t.llm_reasoning||'').substring(0,120))}${(t.llm_reasoning||'').length > 120 ? '...' : ''}</td>
+    </tr>
+  `).join('');
+
+  // 카테고리 현황
+  const cats = document.getElementById('categoryBreakdown');
+  const catColors = { '세력':'var(--cat-faction)','인물':'var(--cat-character)','관념':'var(--cat-concept)',
+    '물건':'var(--cat-item)','종족':'var(--cat-race)','사건':'var(--cat-event)' };
+  cats.innerHTML = Object.entries(e.by_category)
+    .filter(([,v]) => v > 0)
+    .map(([cat, cnt]) => `
+      <div class="token-stat d-flex align-items-center gap-2">
+        <span style="color:${catColors[cat]||'#fff'}; font-weight:700;">${cat}</span>
+        <span class="val">${cnt}</span>
+      </div>
+    `).join('');
+}
+
+function fmtDuration(sec) {
+  if (sec < 60) return `${sec}초`;
+  const m = Math.floor(sec / 60), s = Math.round(sec % 60);
+  return `${m}분 ${s}초`;
+}
+
+function downloadExport(fmt) {
+  if (!currentRunId) return;
+  const a = document.createElement('a');
+  a.href = `/api/runs/${currentRunId}/export?format=${fmt}`;
+  a.download = `run_${currentRunId}_export.${fmt}`;
+  a.click();
+}
+
+function escHtml(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+</script>
+
+<style>
+.table { --bs-table-bg: transparent; --bs-table-border-color: var(--border); }
+.table > :not(caption) > * > * { background: transparent; color: var(--text-primary); border-color: var(--border); }
+.table thead th { color: var(--text-secondary); font-weight:600; font-size:0.78rem; text-transform:uppercase; }
+</style>
+{% endblock %}

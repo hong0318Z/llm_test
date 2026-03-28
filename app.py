@@ -1,6 +1,9 @@
 import os
 import threading
-from flask import Flask, jsonify, request, render_template, abort
+import csv
+import io
+import json as _json
+from flask import Flask, jsonify, request, render_template, abort, Response
 from models import db, WorldEntry, SimulationConfig, SimulationRun, SimulationLog, WorldSnapshot, CATEGORIES
 from datetime import datetime
 
@@ -19,7 +22,8 @@ with app.app_context():
         ("simulation_runs",  "total_tokens_in",         "INTEGER DEFAULT 0"),
         ("simulation_runs",  "total_tokens_out",        "INTEGER DEFAULT 0"),
         ("simulation_runs",  "total_tokens",            "INTEGER DEFAULT 0"),
-        ("simulation_runs",  "selected_entry_ids_json", "TEXT"),
+        ("simulation_runs",  "selected_entry_ids_json",  "TEXT"),
+        ("simulation_runs",  "exclude_llm_entries",      "BOOLEAN DEFAULT 0"),
         ("simulation_logs",  "tokens_in",               "INTEGER DEFAULT 0"),
         ("simulation_logs",  "tokens_out",              "INTEGER DEFAULT 0"),
         ("simulation_logs",  "tokens_total",            "INTEGER DEFAULT 0"),
@@ -192,12 +196,14 @@ def start_run():
     config = SimulationConfig.query.get_or_404(config_id)
     import json as _json
     entry_ids = data.get("entry_ids")  # None이면 전체
+    exclude_llm = bool(data.get("exclude_llm_entries", False))
     run = SimulationRun(
         config_id=config.id,
         status="pending",
         current_tick=0,
         total_ticks=config.tick_count,
         selected_entry_ids_json=_json.dumps(entry_ids) if entry_ids else None,
+        exclude_llm_entries=exclude_llm,
     )
     db.session.add(run)
     db.session.commit()
@@ -352,6 +358,164 @@ def test_llm():
 
 
 # ─────────────────────────────────────────
+#  Export API
+# ─────────────────────────────────────────
+
+def _build_export_data(run: SimulationRun) -> dict:
+    """연구용 종합 export 데이터 구조 생성"""
+    config = run.config
+    logs = SimulationLog.query.filter_by(run_id=run.id).order_by(SimulationLog.created_at).all()
+
+    # 총 소요 시간 계산
+    duration_sec = None
+    if run.started_at and run.ended_at:
+        duration_sec = round((run.ended_at - run.started_at).total_seconds(), 2)
+
+    # 틱별 그룹핑
+    ticks_dict = {}
+    for log in logs:
+        t = log.tick_number
+        if t not in ticks_dict:
+            ticks_dict[t] = {
+                "tick_number": t,
+                "events": [],
+                "entries_created": [],
+                "entries_updated": [],
+                "entries_deactivated": [],
+                "context_summaries": [],
+                "errors": [],
+                "tokens_in": 0,
+                "tokens_out": 0,
+                "tokens_total": 0,
+                "llm_reasoning": "",
+                "first_log_at": log.created_at.isoformat() if log.created_at else None,
+                "last_log_at": log.created_at.isoformat() if log.created_at else None,
+            }
+        td = ticks_dict[t]
+        td["last_log_at"] = log.created_at.isoformat() if log.created_at else None
+
+        # 이벤트 타입별 분류
+        entry = {
+            "description": log.description,
+            "affected_entries": log.affected_entries,
+            "llm_reasoning": log.llm_reasoning,
+        }
+        if log.event_type == "world_event":
+            td["events"].append(entry)
+        elif log.event_type == "entry_created":
+            td["entries_created"].append(entry)
+        elif log.event_type == "entry_updated":
+            td["entries_updated"].append(entry)
+        elif log.event_type == "entry_deactivated":
+            td["entries_deactivated"].append(entry)
+        elif log.event_type == "context_summary":
+            td["context_summaries"].append(entry)
+        elif log.event_type == "error":
+            td["errors"].append({"message": log.description})
+
+        # 토큰은 틱당 LLM 호출 기준 (world_event 또는 context_summary 로그에만 기록)
+        if log.tokens_total and log.event_type in ("world_event", "context_summary"):
+            td["tokens_in"] = log.tokens_in or 0
+            td["tokens_out"] = log.tokens_out or 0
+            td["tokens_total"] = log.tokens_total or 0
+        if log.llm_reasoning and not td["llm_reasoning"]:
+            td["llm_reasoning"] = log.llm_reasoning
+
+    ticks = sorted(ticks_dict.values(), key=lambda x: x["tick_number"])
+
+    # 최종 세계관 상태
+    final_entries = [e.to_dict() for e in
+        WorldEntry.query.filter_by(is_active=True, is_summarized=False)
+        .order_by(WorldEntry.category, WorldEntry.id).all()]
+
+    # LLM 생성 엔트리 vs 유저 작성
+    llm_entries = [e for e in WorldEntry.query.filter_by(created_by="llm").all()]
+    user_entries = [e for e in WorldEntry.query.filter_by(created_by="user").all()]
+
+    return {
+        "export_meta": {
+            "exported_at": datetime.utcnow().isoformat(),
+            "run_id": run.id,
+            "status": run.status,
+            "started_at": run.started_at.isoformat() if run.started_at else None,
+            "ended_at": run.ended_at.isoformat() if run.ended_at else None,
+            "total_duration_seconds": duration_sec,
+            "total_ticks_planned": run.total_ticks,
+            "total_ticks_completed": run.current_tick,
+        },
+        "token_summary": {
+            "total_tokens_in": run.total_tokens_in or 0,
+            "total_tokens_out": run.total_tokens_out or 0,
+            "total_tokens": run.total_tokens or 0,
+            "avg_tokens_per_tick": round((run.total_tokens or 0) / max(run.current_tick, 1), 1),
+        },
+        "config": {
+            "name": config.name if config else None,
+            "prompt_level_1": config.prompt_level_1 if config else None,
+            "prompt_level_2": config.prompt_level_2 if config else None,
+            "prompt_level_3": config.prompt_level_3 if config else None,
+        },
+        "entry_summary": {
+            "total_active": len(final_entries),
+            "user_authored": len(user_entries),
+            "llm_generated": len(llm_entries),
+            "by_category": {cat: sum(1 for e in final_entries if e["category"] == cat)
+                            for cat in CATEGORIES},
+        },
+        "ticks": ticks,
+        "world_state_final": final_entries,
+    }
+
+
+@app.route("/api/runs/<int:run_id>/export", methods=["GET"])
+def export_run(run_id):
+    fmt = request.args.get("format", "json")
+    run = SimulationRun.query.get_or_404(run_id)
+    data = _build_export_data(run)
+
+    if fmt == "csv":
+        # 틱별 요약 CSV
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow([
+            "tick", "tokens_in", "tokens_out", "tokens_total",
+            "events", "entries_created", "entries_updated", "entries_deactivated",
+            "has_summary", "has_error", "llm_reasoning"
+        ])
+        for t in data["ticks"]:
+            writer.writerow([
+                t["tick_number"],
+                t["tokens_in"], t["tokens_out"], t["tokens_total"],
+                len(t["events"]),
+                len(t["entries_created"]),
+                len(t["entries_updated"]),
+                len(t["entries_deactivated"]),
+                1 if t["context_summaries"] else 0,
+                1 if t["errors"] else 0,
+                t["llm_reasoning"][:200].replace("\n", " "),
+            ])
+        csv_data = output.getvalue()
+        return Response(
+            csv_data,
+            mimetype="text/csv",
+            headers={"Content-Disposition": f"attachment; filename=run_{run_id}_ticks.csv"}
+        )
+
+    # JSON export
+    json_str = _json.dumps(data, ensure_ascii=False, indent=2)
+    return Response(
+        json_str,
+        mimetype="application/json",
+        headers={"Content-Disposition": f"attachment; filename=run_{run_id}_export.json"}
+    )
+
+
+@app.route("/export")
+def export_page():
+    return render_template("export.html")
+
+
+# ─────────────────────────────────────────
 #  유틸리티
 # ─────────────────────────────────────────
 
@@ -367,10 +531,13 @@ def token_estimate():
     entry_ids = request.args.get("ids")  # 콤마 구분 id 목록 (없으면 전체)
     config_id = request.args.get("config_id")
 
+    exclude_llm = request.args.get("exclude_llm") == "true"
     q = WorldEntry.query.filter_by(is_active=True, is_summarized=False)
     if entry_ids:
         ids = [int(i) for i in entry_ids.split(",") if i.strip().isdigit()]
         q = q.filter(WorldEntry.id.in_(ids))
+    if exclude_llm:
+        q = q.filter_by(created_by="user")
     entries = [e.to_dict() for e in q.all()]
 
     config = None

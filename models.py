@@ -89,6 +89,7 @@ class SimulationRun(db.Model):
     total_tokens_out = db.Column(db.Integer, default=0)
     total_tokens = db.Column(db.Integer, default=0)
     selected_entry_ids_json = db.Column(db.Text, nullable=True)  # None=전체
+    exclude_llm_entries = db.Column(db.Boolean, default=False)   # LLM 생성 엔트리 제외 여부
     started_at = db.Column(db.DateTime, default=datetime.utcnow)
     ended_at = db.Column(db.DateTime, nullable=True)
 
@@ -104,6 +105,7 @@ class SimulationRun(db.Model):
             "total_tokens_in": self.total_tokens_in,
             "total_tokens_out": self.total_tokens_out,
             "total_tokens": self.total_tokens,
+            "exclude_llm_entries": self.exclude_llm_entries,
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "ended_at": self.ended_at.isoformat() if self.ended_at else None,
         }

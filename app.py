@@ -23,7 +23,8 @@ with app.app_context():
         ("simulation_runs",  "total_tokens_out",        "INTEGER DEFAULT 0"),
         ("simulation_runs",  "total_tokens",            "INTEGER DEFAULT 0"),
         ("simulation_runs",  "selected_entry_ids_json",  "TEXT"),
-        ("simulation_runs",  "exclude_llm_entries",      "BOOLEAN DEFAULT 0"),
+        ("simulation_runs",  "exclude_llm_entries",       "BOOLEAN DEFAULT 0"),
+        ("simulation_configs","max_content_chars",        "INTEGER DEFAULT 500"),
         ("simulation_logs",  "tokens_in",               "INTEGER DEFAULT 0"),
         ("simulation_logs",  "tokens_out",              "INTEGER DEFAULT 0"),
         ("simulation_logs",  "tokens_total",            "INTEGER DEFAULT 0"),
@@ -151,6 +152,7 @@ def create_config():
         prompt_level_2=data.get("prompt_level_2", ""),
         prompt_level_3=data.get("prompt_level_3", ""),
         tick_count=int(data.get("tick_count", 10)),
+        max_content_chars=int(data.get("max_content_chars", 500)),
     )
     db.session.add(config)
     db.session.commit()
@@ -161,7 +163,7 @@ def create_config():
 def update_config(config_id):
     config = SimulationConfig.query.get_or_404(config_id)
     data = request.json
-    for field in ["name", "prompt_level_1", "prompt_level_2", "prompt_level_3", "tick_count"]:
+    for field in ["name", "prompt_level_1", "prompt_level_2", "prompt_level_3", "tick_count", "max_content_chars"]:
         if field in data:
             setattr(config, field, data[field])
     db.session.commit()

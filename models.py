@@ -60,6 +60,7 @@ class SimulationConfig(db.Model):
     prompt_level_2 = db.Column(db.Text, default="")
     prompt_level_3 = db.Column(db.Text, default="")
     tick_count = db.Column(db.Integer, default=10)
+    max_content_chars = db.Column(db.Integer, default=500)  # 0 = 제한 없음
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -71,6 +72,7 @@ class SimulationConfig(db.Model):
             "prompt_level_2": self.prompt_level_2,
             "prompt_level_3": self.prompt_level_3,
             "tick_count": self.tick_count,
+            "max_content_chars": self.max_content_chars if self.max_content_chars is not None else 500,
             "is_active": self.is_active,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }

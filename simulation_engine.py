@@ -44,11 +44,11 @@ def run_simulation(run_id: int, app):
                 entries = _query_entries()
 
                 # 컨텍스트 한계 근접 시 자동 요약 먼저 실행
-                if llm_client.needs_summary(entries):
+                max_chars = config.to_dict().get("max_content_chars") or 500
+                if llm_client.needs_summary(entries, max_chars=max_chars):
                     _run_auto_summary(run, tick, entries, config.to_dict())
                     db.session.commit()
                     entries = _query_entries()
-                    ]
 
                 # 일반 틱 실행
                 result = llm_client.run_tick(config.to_dict(), tick, entries)

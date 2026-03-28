@@ -129,7 +129,8 @@
             </div>
             <div class="mb-3">
               <label class="form-label small">내용</label>
-              <textarea class="form-control" id="editContent" rows="8"></textarea>
+              <textarea class="form-control" id="editContent" rows="8" oninput="updateCharCount('editContent','editCharCount')"></textarea>
+              <div id="editCharCount" class="small mt-1" style="color: var(--text-secondary)"></div>
             </div>
             <div class="mb-3">
               <label class="form-label small">참조 엔트리 ID (콤마로 구분)</label>
@@ -173,7 +174,8 @@
         </div>
         <div class="mb-3">
           <label class="form-label small">내용 <span class="text-danger">*</span></label>
-          <textarea class="form-control" id="newContent" rows="6" placeholder="상세한 설명을 입력하세요..."></textarea>
+          <textarea class="form-control" id="newContent" rows="6" placeholder="상세한 설명을 입력하세요..." oninput="updateCharCount('newContent','newCharCount')"></textarea>
+          <div id="newCharCount" class="small mt-1" style="color: var(--text-secondary)"></div>
         </div>
         <div class="mb-3">
           <label class="form-label small">참조 엔트리 ID (콤마로 구분)</label>
@@ -211,12 +213,43 @@ let currentEntry = null;
 let currentCategory = null;
 let createModal;
 let snapshotModal;
+let simMaxChars = 500; // 현재 활성 시뮬레이션 설정의 글자 제한
+
+async function loadSimMaxChars() {
+  try {
+    const res = await fetch('/api/configs');
+    const configs = await res.json();
+    const active = configs.find(c => c.is_active);
+    if (active && active.max_content_chars != null) {
+      simMaxChars = active.max_content_chars;
+    }
+  } catch (e) { /* 무시 */ }
+}
+
+function updateCharCount(textareaId, counterId) {
+  const ta = document.getElementById(textareaId);
+  const counter = document.getElementById(counterId);
+  if (!ta || !counter) return;
+  const len = ta.value.length;
+  const limit = simMaxChars;
+  if (limit > 0) {
+    const over = len - limit;
+    if (over > 0) {
+      counter.innerHTML = `<span style="color:#f59e0b">${len}자</span> / 제한: ${limit}자 &nbsp;<span style="color:#f59e0b">⚠ ${over}자 초과분은 LLM에 전달되지 않습니다</span>`;
+    } else {
+      counter.textContent = `${len}자 / 제한: ${limit}자`;
+    }
+  } else {
+    counter.textContent = `${len}자 (제한 없음)`;
+  }
+}
 
 document.addEventListener('DOMContentLoaded', () => {
   createModal = new bootstrap.Modal(document.getElementById('createModal'));
   snapshotModal = new bootstrap.Modal(document.getElementById('snapshotModal'));
   loadEntries();
   loadSnapshotCount();
+  loadSimMaxChars();
 });
 
 async function loadEntries() {
@@ -328,6 +361,7 @@ function startEdit() {
   document.getElementById('editIsActive').checked = e.is_active;
   document.getElementById('viewMode').style.display = 'none';
   document.getElementById('editMode').style.display = 'block';
+  updateCharCount('editContent', 'editCharCount');
 }
 
 function cancelEdit() {
@@ -427,6 +461,7 @@ function openCreateModal() {
   document.getElementById('newTitle').value = '';
   document.getElementById('newContent').value = '';
   document.getElementById('newReferences').value = '';
+  updateCharCount('newContent', 'newCharCount');
   createModal.show();
 }
 

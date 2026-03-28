@@ -179,8 +179,11 @@ TRANSLATE_PROMPT_TEMPLATE = """\
 """
 
 
-def serialize_world_state(entries: list) -> str:
-    """세계관 엔트리 목록을 LLM이 읽기 좋은 형태로 직렬화"""
+def serialize_world_state(entries: list, max_chars: int = 500) -> str:
+    """
+    세계관 엔트리 목록을 LLM이 읽기 좋은 형태로 직렬화.
+    max_chars: 엔트리당 내용 최대 글자 수 (0 = 제한 없음)
+    """
     lines = []
     by_category = {}
     for e in entries:
@@ -192,15 +195,19 @@ def serialize_world_state(entries: list) -> str:
         for item in items:
             ref_ids = item.get("references", [])
             ref_str = f" (참조: {ref_ids})" if ref_ids else ""
+            content = item["content"]
+            if max_chars and max_chars > 0 and len(content) > max_chars:
+                content = content[:max_chars] + f"…(+{len(item['content'])-max_chars}자 생략)"
             lines.append(f"  ID={item['id']} | {item['title']}{ref_str}")
-            lines.append(f"    {item['content'][:500]}")
+            lines.append(f"    {content}")
 
     return "\n".join(lines)
 
 
 def estimate_world_tokens(entries: list, config: dict = None) -> dict:
     """현재 세계관 + 프롬프트의 예상 토큰 수 반환"""
-    world_state = serialize_world_state(entries)
+    max_chars = (config.get("max_content_chars") or 500) if config else 500
+    world_state = serialize_world_state(entries, max_chars=max_chars)
     world_tokens = estimate_tokens(world_state)
 
     prompt_tokens = 0
@@ -226,13 +233,14 @@ def estimate_world_tokens(entries: list, config: dict = None) -> dict:
 def run_tick(config: dict, tick_number: int, entries: list) -> dict:
     """단일 틱 실행. LLM을 호출해 세계관 변화를 반환."""
     client, model = get_llm_client()
+    max_chars = config.get("max_content_chars") or 500
 
     system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
         prompt_level_1=config.get("prompt_level_1") or "없음",
         prompt_level_2=config.get("prompt_level_2") or "없음",
         prompt_level_3=config.get("prompt_level_3") or "없음",
     )
-    world_state = serialize_world_state(entries)
+    world_state = serialize_world_state(entries, max_chars=max_chars)
     user_prompt = USER_PROMPT_TEMPLATE.format(
         tick_number=tick_number,
         world_state=world_state,
@@ -267,8 +275,9 @@ def run_tick(config: dict, tick_number: int, entries: list) -> dict:
 def run_summary(config: dict, tick_number: int, entries: list) -> dict:
     """컨텍스트 한계 근접 시 전체 세계관을 압축 요약."""
     client, model = get_llm_client()
+    max_chars = config.get("max_content_chars") or 500
 
-    world_state = serialize_world_state(entries)
+    world_state = serialize_world_state(entries, max_chars=max_chars)
     user_prompt = SUMMARY_PROMPT_TEMPLATE.format(
         world_state=world_state,
         tick_number=tick_number,
@@ -319,7 +328,7 @@ def translate_entries(entries: list) -> dict:
     return result
 
 
-def needs_summary(entries: list) -> bool:
+def needs_summary(entries: list, max_chars: int = 500) -> bool:
     """현재 세계관이 컨텍스트 한계에 근접했는지 확인"""
-    world_state = serialize_world_state(entries)
+    world_state = serialize_world_state(entries, max_chars=max_chars)
     return estimate_tokens(world_state) >= CONTEXT_SUMMARY_THRESHOLD

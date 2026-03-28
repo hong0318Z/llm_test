@@ -45,6 +45,9 @@
             <button class="btn btn-primary" id="startBtn" onclick="startSimulation()">
               <i class="bi bi-play-fill me-1"></i>시뮬레이션 시작
             </button>
+            <button class="btn btn-danger" id="cancelBtn" onclick="cancelSimulation()" style="display:none;">
+              <i class="bi bi-stop-fill me-1"></i>실행 중지
+            </button>
           </div>
         </div>
 
@@ -381,6 +384,8 @@ async function deleteConfig(id) {
 async function startSimulation() {
   if (!selectedConfig) return;
   document.getElementById('startBtn').disabled = true;
+  document.getElementById('startBtn').style.display = 'none';
+  document.getElementById('cancelBtn').style.display = '';
   document.getElementById('progressPanel').style.display = 'block';
   document.getElementById('liveLog').innerHTML = '';
   updateProgress(0, selectedConfig.tick_count, '시작 중...');
@@ -394,11 +399,33 @@ async function startSimulation() {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(body),
   });
-  if (!res.ok) { alert('실행 시작 실패'); document.getElementById('startBtn').disabled = false; return; }
+  if (!res.ok) {
+    alert('실행 시작 실패');
+    document.getElementById('startBtn').disabled = false;
+    document.getElementById('startBtn').style.display = '';
+    document.getElementById('cancelBtn').style.display = 'none';
+    return;
+  }
   const run = await res.json();
   selectedRunId = run.id;
   pollProgress(run.id, selectedConfig.tick_count);
   loadRuns();
+}
+
+async function cancelSimulation() {
+  if (!selectedRunId) return;
+  if (!confirm('현재 틱이 끝난 뒤 시뮬레이션을 중지합니다. 계속하시겠습니까?')) return;
+  await fetch(`/api/runs/${selectedRunId}/cancel`, { method: 'PUT' });
+  document.getElementById('cancelBtn').disabled = true;
+  document.getElementById('cancelBtn').innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>중지 중...';
+}
+
+function _resetRunButtons() {
+  document.getElementById('startBtn').disabled = false;
+  document.getElementById('startBtn').style.display = '';
+  document.getElementById('cancelBtn').style.display = 'none';
+  document.getElementById('cancelBtn').disabled = false;
+  document.getElementById('cancelBtn').innerHTML = '<i class="bi bi-stop-fill me-1"></i>실행 중지';
 }
 
 function pollProgress(runId, total) {
@@ -415,9 +442,9 @@ function pollProgress(runId, total) {
     const data = await logRes.json();
     renderLiveLog(data.logs.reverse());
 
-    if (run.status === 'done' || run.status === 'error') {
+    if (['done', 'error', 'cancelled'].includes(run.status)) {
       clearInterval(pollTimer);
-      document.getElementById('startBtn').disabled = false;
+      _resetRunButtons();
       loadRuns();
     }
   }, 2000);
@@ -429,7 +456,7 @@ function updateProgress(cur, total, status) {
   const pct = total > 0 ? Math.round((cur / total) * 100) : 0;
   document.getElementById('progressBar').style.width = pct + '%';
   document.getElementById('progressFrac').textContent = `${cur} / ${total}`;
-  const labels = { pending: '대기 중', running: `틱 ${cur} 진행 중...`, done: '완료!', error: '오류 발생' };
+  const labels = { pending: '대기 중', running: `틱 ${cur} 진행 중...`, done: '완료!', error: '오류 발생', cancelled: '중지됨' };
   document.getElementById('progressLabel').textContent = labels[status] || status;
 }
 
@@ -466,9 +493,11 @@ async function loadRuns() {
     container.innerHTML = '<p class="text-muted small text-center py-2">실행 내역 없음</p>';
     return;
   }
-  const statusColors = { pending: 'secondary', running: 'warning', done: 'success', error: 'danger' };
-  const statusLabels = { pending: '대기', running: '진행 중', done: '완료', error: '오류' };
-  container.innerHTML = runs.map(r => `
+  const statusColors = { pending: 'secondary', running: 'warning', done: 'success', error: 'danger', cancelled: 'secondary' };
+  const statusLabels = { pending: '대기', running: '진행 중', done: '완료', error: '오류', cancelled: '중지됨' };
+  container.innerHTML = runs.map(r => {
+    const isActive = ['running', 'pending'].includes(r.status);
+    return `
     <div class="d-flex align-items-center py-2" style="border-bottom: 1px solid var(--border);">
       <div class="me-3">
         <span class="badge bg-${statusColors[r.status] || 'secondary'}">${statusLabels[r.status] || r.status}</span>
@@ -481,9 +510,36 @@ async function loadRuns() {
           · ${new Date(r.started_at).toLocaleString('ko-KR')}
         </div>
       </div>
-      <a href="/logs?run_id=${r.id}" class="btn btn-sm btn-outline-secondary ms-2"><i class="bi bi-journal-text"></i></a>
-    </div>
-  `).join('');
+      <div class="d-flex gap-1 ms-2">
+        <a href="/logs?run_id=${r.id}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-journal-text"></i></a>
+        ${isActive
+          ? `<button class="btn btn-sm btn-outline-warning" onclick="cancelRun(${r.id})" title="중지"><i class="bi bi-stop-fill"></i></button>`
+          : `<button class="btn btn-sm btn-outline-danger" onclick="deleteRun(${r.id})" title="삭제"><i class="bi bi-trash"></i></button>`
+        }
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function cancelRun(runId) {
+  if (!confirm('현재 틱이 끝난 뒤 중지합니다. 계속하시겠습니까?')) return;
+  const res = await fetch(`/api/runs/${runId}/cancel`, { method: 'PUT' });
+  if (res.ok) loadRuns();
+  else alert('중지 실패: ' + (await res.json()).error);
+}
+
+async function deleteRun(runId) {
+  if (!confirm(`Run #${runId}과 관련 로그를 모두 삭제합니다. 계속하시겠습니까?`)) return;
+  const res = await fetch(`/api/runs/${runId}`, { method: 'DELETE' });
+  if (res.ok) {
+    if (selectedRunId === runId) {
+      document.getElementById('progressPanel').style.display = 'none';
+      selectedRunId = null;
+    }
+    loadRuns();
+  } else {
+    alert('삭제 실패: ' + (await res.json()).error);
+  }
 }
 
 function escHtml(s) {

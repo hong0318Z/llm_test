@@ -37,6 +37,14 @@ with app.app_context():
             except Exception:
                 pass  # 이미 존재하면 무시
 
+    # 앱 재시작 시 고아 런(running/pending) 정리
+    orphans = SimulationRun.query.filter(SimulationRun.status.in_(["running", "pending"])).all()
+    for r in orphans:
+        r.status = "cancelled"
+        r.ended_at = datetime.utcnow()
+    if orphans:
+        db.session.commit()
+
 
 # ─────────────────────────────────────────
 #  페이지 라우트
@@ -326,6 +334,28 @@ def start_run():
 def get_run(run_id):
     run = SimulationRun.query.get_or_404(run_id)
     return jsonify(run.to_dict())
+
+
+@app.route("/api/runs/<int:run_id>/cancel", methods=["PUT"])
+def cancel_run(run_id):
+    run = SimulationRun.query.get_or_404(run_id)
+    if run.status not in ("running", "pending"):
+        return jsonify({"error": "실행 중인 런이 아닙니다."}), 400
+    run.status = "cancelled"
+    run.ended_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify(run.to_dict())
+
+
+@app.route("/api/runs/<int:run_id>", methods=["DELETE"])
+def delete_run(run_id):
+    run = SimulationRun.query.get_or_404(run_id)
+    if run.status in ("running", "pending"):
+        return jsonify({"error": "실행 중인 런은 삭제할 수 없습니다. 먼저 중지하세요."}), 400
+    SimulationLog.query.filter_by(run_id=run_id).delete()
+    db.session.delete(run)
+    db.session.commit()
+    return jsonify({"ok": True})
 
 
 # ─────────────────────────────────────────

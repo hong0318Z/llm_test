@@ -38,6 +38,11 @@ def run_simulation(run_id: int, app):
 
         try:
             for tick in range(1, run.total_ticks + 1):
+                # 매 틱 시작 전 취소 여부 확인
+                db.session.refresh(run)
+                if run.status == "cancelled":
+                    break
+
                 run.current_tick = tick
                 db.session.commit()
 
@@ -56,8 +61,9 @@ def run_simulation(run_id: int, app):
                 _apply_tick_result(run, tick, result)
                 db.session.commit()
 
-            run.status = "done"
-            run.ended_at = datetime.utcnow()
+            if run.status != "cancelled":
+                run.status = "done"
+                run.ended_at = datetime.utcnow()
             db.session.commit()
 
         except Exception as e:

@@ -80,6 +80,9 @@
           <div class="d-flex gap-2 flex-wrap">
             <button class="btn btn-sm btn-outline-secondary" onclick="startEdit()"><i class="bi bi-pencil me-1"></i>편집</button>
             <button class="btn btn-sm btn-outline-secondary" id="toggleActiveBtn" onclick="toggleActive()"></button>
+            <button class="btn btn-sm btn-outline-secondary" onclick="stripMarkdownEntry()" title="**굵게**, # 제목, > 인용 등 마크다운 기호 제거">
+              <i class="bi bi-eraser me-1"></i>MD 제거
+            </button>
             <button class="btn btn-sm" onclick="translateEntry()"
               style="border:1px solid rgba(139,127,247,0.5); color:var(--accent);">
               <i class="bi bi-translate me-1"></i>영문 번역
@@ -128,7 +131,13 @@
               </select>
             </div>
             <div class="mb-3">
-              <label class="form-label small">내용</label>
+              <div class="d-flex align-items-center justify-content-between mb-1">
+                <label class="form-label small mb-0">내용</label>
+                <button type="button" class="btn btn-outline-secondary" style="font-size:0.72rem; padding:1px 8px;"
+                  onclick="stripMarkdownTextarea('editContent','editCharCount')" title="마크다운 기호 제거">
+                  <i class="bi bi-eraser me-1"></i>MD 제거
+                </button>
+              </div>
               <textarea class="form-control" id="editContent" rows="8" oninput="updateCharCount('editContent','editCharCount')"></textarea>
               <div id="editCharCount" class="small mt-1" style="color: var(--text-secondary)"></div>
             </div>
@@ -251,6 +260,73 @@ document.addEventListener('DOMContentLoaded', () => {
   loadSnapshotCount();
   loadSimMaxChars();
 });
+
+// ── 마크다운 제거 ──────────────────────────────
+function stripMarkdown(text) {
+  return text
+    // 코드 블록 (``` ... ```) → 내용만 유지
+    .replace(/```[\w]*\n?([\s\S]*?)```/g, '$1')
+    // 인라인 코드 (`code`) → 내용만 유지
+    .replace(/`([^`]+)`/g, '$1')
+    // 헤더 (# ## ### ...) → 텍스트만 유지
+    .replace(/^#{1,6}\s+/gm, '')
+    // 굵은 기울임 (***text*** 또는 ___text___) → 텍스트만 유지
+    .replace(/\*\*\*(.+?)\*\*\*/g, '$1')
+    .replace(/___(.+?)___/g, '$1')
+    // 굵게 (**text** 또는 __text__) → 텍스트만 유지
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/__(.+?)__/g, '$1')
+    // 기울임 (*text* 또는 _text_) → 텍스트만 유지
+    .replace(/\*(.+?)\*/g, '$1')
+    .replace(/_(.+?)_/g, '$1')
+    // 취소선 (~~text~~) → 텍스트만 유지
+    .replace(/~~(.+?)~~/g, '$1')
+    // 링크 ([text](url)) → 텍스트만 유지
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    // 이미지 (![alt](url)) → alt 텍스트만 유지
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
+    // 인용 (> text) → 텍스트만 유지
+    .replace(/^>\s*/gm, '')
+    // 수평선 (--- / *** / ___) → 제거
+    .replace(/^(\s*[-*_]){3,}\s*$/gm, '')
+    // 순서없는 목록 기호 (- / * / +) → 제거
+    .replace(/^[\s]*[-*+]\s+/gm, '')
+    // 순서있는 목록 기호 (1. / 2. ...) → 제거
+    .replace(/^[\s]*\d+\.\s+/gm, '')
+    // 연속 빈줄 정리 (3줄 이상 → 2줄)
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+// 편집 textarea에서 바로 제거
+function stripMarkdownTextarea(textareaId, counterId) {
+  const ta = document.getElementById(textareaId);
+  if (!ta) return;
+  ta.value = stripMarkdown(ta.value);
+  updateCharCount(textareaId, counterId);
+}
+
+// 현재 선택 엔트리를 바로 저장 (헤더 버튼)
+async function stripMarkdownEntry() {
+  if (!currentEntry) return;
+  const stripped = stripMarkdown(currentEntry.content);
+  if (stripped === currentEntry.content) {
+    alert('제거할 마크다운 기호가 없습니다.');
+    return;
+  }
+  if (!confirm('마크다운 기호를 제거하고 저장합니다.\n\n미리보기:\n' + stripped.slice(0, 200) + (stripped.length > 200 ? '...' : ''))) return;
+  const res = await fetch(`/api/entries/${currentEntry.id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content: stripped }),
+  });
+  if (res.ok) {
+    await loadEntries();
+    selectEntry(currentEntry.id);
+  } else {
+    alert('저장 실패');
+  }
+}
 
 async function loadEntries() {
   const activeOnly = !document.getElementById('showInactive').checked;

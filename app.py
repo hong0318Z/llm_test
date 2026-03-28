@@ -136,6 +136,85 @@ def delete_entry(entry_id):
     return jsonify({"ok": True})
 
 
+@app.route("/api/entries", methods=["DELETE"])
+def delete_all_entries():
+    """세계관 전체 초기화 (엔트리 전체 삭제)"""
+    WorldEntry.query.delete()
+    db.session.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/backup", methods=["GET"])
+def backup_db():
+    """전체 DB를 JSON으로 다운로드"""
+    data = {
+        "version": 2,
+        "exported_at": datetime.utcnow().isoformat(),
+        "entries": [e.to_dict() for e in WorldEntry.query.order_by(WorldEntry.id).all()],
+        "configs": [c.to_dict() for c in SimulationConfig.query.order_by(SimulationConfig.id).all()],
+        "snapshots": [s.to_dict(include_entries=True) for s in WorldSnapshot.query.order_by(WorldSnapshot.id).all()],
+        "settings": AppSettings.get().to_dict(),
+    }
+    filename = f"worldllm_backup_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
+    return Response(
+        _json.dumps(data, ensure_ascii=False, indent=2),
+        mimetype="application/json",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@app.route("/api/restore", methods=["POST"])
+def restore_db():
+    """JSON 백업 파일로 DB 복원 (엔트리 + 설정 덮어쓰기)"""
+    data = request.json or {}
+    entries_data = data.get("entries", [])
+    configs_data = data.get("configs", [])
+    settings_data = data.get("settings", {})
+
+    # 엔트리 복원 (기존 전체 삭제 후 ID 유지 재삽입)
+    WorldEntry.query.delete()
+    db.session.flush()
+    for e in entries_data:
+        entry = WorldEntry(
+            id=e.get("id"),
+            title=e.get("title", ""),
+            category=e.get("category", "세력"),
+            content=e.get("content", ""),
+            references_json=_json.dumps(e.get("references", [])),
+            created_by=e.get("created_by", "user"),
+            tick_created=e.get("tick_created", 0),
+            is_active=e.get("is_active", True),
+            is_summarized=e.get("is_summarized", False),
+        )
+        db.session.add(entry)
+
+    # 시뮬레이션 설정 복원 (선택적)
+    if configs_data:
+        SimulationConfig.query.delete()
+        db.session.flush()
+        for c in configs_data:
+            cfg = SimulationConfig(
+                id=c.get("id"),
+                name=c.get("name", "복원된 설정"),
+                prompt_level_1=c.get("prompt_level_1", ""),
+                prompt_level_2=c.get("prompt_level_2", ""),
+                prompt_level_3=c.get("prompt_level_3", ""),
+                tick_count=c.get("tick_count", 10),
+            )
+            db.session.add(cfg)
+
+    # 마스터 설정 복원
+    if settings_data:
+        s = AppSettings.get()
+        if "max_llm_entry_chars" in settings_data:
+            s.max_llm_entry_chars = settings_data["max_llm_entry_chars"]
+        if "max_user_entry_chars" in settings_data:
+            s.max_user_entry_chars = settings_data["max_user_entry_chars"]
+
+    db.session.commit()
+    return jsonify({"ok": True, "entries_restored": len(entries_data), "configs_restored": len(configs_data)})
+
+
 # ─────────────────────────────────────────
 #  시뮬레이션 설정 API
 # ─────────────────────────────────────────

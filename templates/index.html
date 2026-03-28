@@ -19,11 +19,25 @@
           <i class="bi bi-floppy me-1"></i>현재 상태 저장
         </button>
       </div>
-      <div class="ms-auto">
-        <button class="btn btn-sm btn-outline-secondary" onclick="openSnapshotModal()">
-          <i class="bi bi-clock-history me-1"></i>저장 목록 (<span id="snapCount">0</span>)
-        </button>
-      </div>
+      <button class="btn btn-sm btn-outline-secondary" onclick="openSnapshotModal()">
+        <i class="bi bi-clock-history me-1"></i>저장 목록 (<span id="snapCount">0</span>)
+      </button>
+      <!-- 구분선 -->
+      <div style="width:1px; height:22px; background:var(--border);"></div>
+      <!-- DB 백업/복원 -->
+      <button class="btn btn-sm btn-outline-secondary" onclick="downloadBackup()" title="전체 DB를 JSON으로 다운로드">
+        <i class="bi bi-download me-1"></i>DB 백업
+      </button>
+      <label class="btn btn-sm btn-outline-secondary mb-0" title="JSON 백업 파일로 복원" style="cursor:pointer;">
+        <i class="bi bi-upload me-1"></i>DB 복원
+        <input type="file" id="restoreFileInput" accept=".json" style="display:none;" onchange="restoreBackup(this)">
+      </label>
+      <!-- 구분선 -->
+      <div style="width:1px; height:22px; background:var(--border);"></div>
+      <!-- 초기화 -->
+      <button class="btn btn-sm btn-outline-danger" onclick="resetWorld()">
+        <i class="bi bi-trash3 me-1"></i>세계관 초기화
+      </button>
     </div>
   </div>
 </div>
@@ -322,6 +336,62 @@ async function stripMarkdownEntry() {
     selectEntry(currentEntry.id);
   } else {
     alert('저장 실패');
+  }
+}
+
+// ── 세계관 초기화 ────────────────────────────────
+async function resetWorld() {
+  const count = allEntries.length;
+  if (!confirm(`⚠ 경고: 현재 세계관의 엔트리 ${count}개가 모두 삭제됩니다.\n\n복구하려면 먼저 [DB 백업]으로 저장해 두세요.\n\n정말 초기화하시겠습니까?`)) return;
+  if (!confirm('한 번 더 확인합니다. 정말 모든 엔트리를 삭제하시겠습니까?')) return;
+  const res = await fetch('/api/entries', { method: 'DELETE' });
+  if (res.ok) {
+    currentEntry = null;
+    document.getElementById('detailContent').style.display = 'none';
+    document.getElementById('detailEmpty').style.display = 'flex';
+    await loadEntries();
+  } else {
+    alert('초기화 실패');
+  }
+}
+
+// ── DB 백업 / 복원 ────────────────────────────────
+function downloadBackup() {
+  window.location.href = '/api/backup';
+}
+
+async function restoreBackup(input) {
+  const file = input.files[0];
+  if (!file) return;
+  input.value = '';  // 같은 파일 재업로드 허용
+
+  const text = await file.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (e) {
+    alert('JSON 파싱 실패: 올바른 백업 파일인지 확인하세요.');
+    return;
+  }
+
+  const entryCount = (data.entries || []).length;
+  const configCount = (data.configs || []).length;
+  if (!confirm(`백업 파일 정보:\n· 엔트리: ${entryCount}개\n· 시뮬레이션 설정: ${configCount}개\n· 내보낸 시각: ${data.exported_at || '알 수 없음'}\n\n현재 DB를 덮어쓰고 복원합니다. 계속하시겠습니까?`)) return;
+
+  const res = await fetch('/api/restore', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (res.ok) {
+    const result = await res.json();
+    currentEntry = null;
+    document.getElementById('detailContent').style.display = 'none';
+    document.getElementById('detailEmpty').style.display = 'flex';
+    await loadEntries();
+    alert(`복원 완료!\n· 엔트리: ${result.entries_restored}개\n· 시뮬레이션 설정: ${result.configs_restored}개`);
+  } else {
+    alert('복원 실패');
   }
 }
 

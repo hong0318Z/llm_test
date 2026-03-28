@@ -199,7 +199,7 @@ const DEFAULT_COLOR = { bg: '#4a5568', border: '#718096', font: '#edf2f7' };
 let network = null;
 let allEntries = [];
 let selectedEntry = null;
-let simMaxChars = 500;
+let simMaxChars = 1000;
 let isEditMode = false;
 
 // ── 초기화 ───────────────────────────────────────
@@ -211,10 +211,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 async function loadSimMaxChars() {
   try {
-    const res = await fetch('/api/configs');
-    const configs = await res.json();
-    const active = configs.find(c => c.is_active);
-    if (active && active.max_content_chars != null) simMaxChars = active.max_content_chars;
+    const res = await fetch('/api/settings');
+    const s = await res.json();
+    simMaxChars = s.max_user_entry_chars ?? 1000;
   } catch (e) {}
 }
 

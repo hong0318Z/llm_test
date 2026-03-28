@@ -3,7 +3,7 @@
 토큰 사용량 추적 및 컨텍스트 한계 시 자동 요약 포함
 """
 from datetime import datetime
-from models import db, WorldEntry, SimulationRun, SimulationLog, CREATOR_LLM
+from models import db, WorldEntry, SimulationRun, SimulationLog, AppSettings, CREATOR_LLM
 import llm_client
 
 
@@ -44,14 +44,15 @@ def run_simulation(run_id: int, app):
                 entries = _query_entries()
 
                 # 컨텍스트 한계 근접 시 자동 요약 먼저 실행
-                max_chars = config.to_dict().get("max_content_chars") or 500
+                max_chars = AppSettings.get().max_llm_entry_chars or 500
+                cfg_dict = {**config.to_dict(), "max_content_chars": max_chars}
                 if llm_client.needs_summary(entries, max_chars=max_chars):
-                    _run_auto_summary(run, tick, entries, config.to_dict())
+                    _run_auto_summary(run, tick, entries, cfg_dict)
                     db.session.commit()
                     entries = _query_entries()
 
                 # 일반 틱 실행
-                result = llm_client.run_tick(config.to_dict(), tick, entries)
+                result = llm_client.run_tick(cfg_dict, tick, entries)
                 _apply_tick_result(run, tick, result)
                 db.session.commit()
 

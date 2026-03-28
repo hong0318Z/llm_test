@@ -4,7 +4,7 @@ import csv
 import io
 import json as _json
 from flask import Flask, jsonify, request, render_template, abort, Response
-from models import db, WorldEntry, SimulationConfig, SimulationRun, SimulationLog, WorldSnapshot, CATEGORIES
+from models import db, WorldEntry, SimulationConfig, SimulationRun, SimulationLog, WorldSnapshot, AppSettings, CATEGORIES
 from datetime import datetime
 
 app = Flask(__name__)
@@ -24,7 +24,7 @@ with app.app_context():
         ("simulation_runs",  "total_tokens",            "INTEGER DEFAULT 0"),
         ("simulation_runs",  "selected_entry_ids_json",  "TEXT"),
         ("simulation_runs",  "exclude_llm_entries",       "BOOLEAN DEFAULT 0"),
-        ("simulation_configs","max_content_chars",        "INTEGER DEFAULT 500"),
+
         ("simulation_logs",  "tokens_in",               "INTEGER DEFAULT 0"),
         ("simulation_logs",  "tokens_out",              "INTEGER DEFAULT 0"),
         ("simulation_logs",  "tokens_total",            "INTEGER DEFAULT 0"),
@@ -157,7 +157,6 @@ def create_config():
         prompt_level_2=data.get("prompt_level_2", ""),
         prompt_level_3=data.get("prompt_level_3", ""),
         tick_count=int(data.get("tick_count", 10)),
-        max_content_chars=int(data.get("max_content_chars", 500)),
     )
     db.session.add(config)
     db.session.commit()
@@ -168,7 +167,7 @@ def create_config():
 def update_config(config_id):
     config = SimulationConfig.query.get_or_404(config_id)
     data = request.json
-    for field in ["name", "prompt_level_1", "prompt_level_2", "prompt_level_3", "tick_count", "max_content_chars"]:
+    for field in ["name", "prompt_level_1", "prompt_level_2", "prompt_level_3", "tick_count"]:
         if field in data:
             setattr(config, field, data[field])
     db.session.commit()
@@ -181,6 +180,27 @@ def delete_config(config_id):
     db.session.delete(config)
     db.session.commit()
     return jsonify({"ok": True})
+
+
+# ─────────────────────────────────────────
+#  마스터 설정 API
+# ─────────────────────────────────────────
+
+@app.route("/api/settings", methods=["GET"])
+def get_settings():
+    return jsonify(AppSettings.get().to_dict())
+
+
+@app.route("/api/settings", methods=["PUT"])
+def update_settings():
+    data = request.json or {}
+    s = AppSettings.get()
+    if "max_llm_entry_chars" in data:
+        s.max_llm_entry_chars = int(data["max_llm_entry_chars"])
+    if "max_user_entry_chars" in data:
+        s.max_user_entry_chars = int(data["max_user_entry_chars"])
+    db.session.commit()
+    return jsonify(s.to_dict())
 
 
 # ─────────────────────────────────────────
@@ -551,6 +571,11 @@ def token_estimate():
     if config_id:
         cfg = SimulationConfig.query.get(int(config_id))
         config = cfg.to_dict() if cfg else None
+
+    max_chars = AppSettings.get().max_llm_entry_chars
+    if config is None:
+        config = {}
+    config["max_content_chars"] = max_chars  # llm_client 인터페이스 호환
 
     result = lc.estimate_world_tokens(entries, config)
     return jsonify(result)

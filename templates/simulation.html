@@ -156,17 +156,6 @@
             <input type="number" class="form-control" id="cfgTickCount" value="10" min="1" max="100">
             <div class="form-text">LLM이 자율적으로 시간을 진행할 횟수</div>
           </div>
-          <div class="col-6">
-            <label class="form-label small">엔트리 내용 최대 전달 글자 수</label>
-            <input type="number" class="form-control" id="cfgMaxChars" value="500" min="0">
-            <div class="form-text">
-              0 = 제한 없음 (전체 전달) · 기본값 500<br>
-              <span style="color:#ffb86c; font-size:0.75rem;">
-                ⚠ 값이 작을수록 LLM에 전달되는 정보가 줄어들고 토큰이 절약됩니다.<br>
-                유저 입력이 핵심이라면 충분히 크게 설정하세요.
-              </span>
-            </div>
-          </div>
         </div>
 
         <hr style="border-color: var(--border);">
@@ -338,7 +327,6 @@ function openConfigModal(id) {
     document.getElementById('configModalTitle').textContent = '설정 편집';
     document.getElementById('cfgName').value = c.name;
     document.getElementById('cfgTickCount').value = c.tick_count;
-    document.getElementById('cfgMaxChars').value = c.max_content_chars ?? 500;
     document.getElementById('cfgL1').value = c.prompt_level_1;
     document.getElementById('cfgL2').value = c.prompt_level_2;
     document.getElementById('cfgL3').value = c.prompt_level_3;
@@ -362,7 +350,6 @@ async function saveConfig() {
     prompt_level_1: document.getElementById('cfgL1').value.trim(),
     prompt_level_2: document.getElementById('cfgL2').value.trim(),
     prompt_level_3: document.getElementById('cfgL3').value.trim(),
-    max_content_chars: parseInt(document.getElementById('cfgMaxChars').value) || 0,
   };
   if (!body.name) { alert('이름을 입력하세요.'); return; }
 

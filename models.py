@@ -51,6 +51,32 @@ class WorldEntry(db.Model):
         }
 
 
+class AppSettings(db.Model):
+    """전역 마스터 설정 (싱글톤)"""
+    __tablename__ = "app_settings"
+
+    id = db.Column(db.Integer, primary_key=True, default=1)
+    # LLM이 생성하는 엔트리 1개당 최대 글자수 (0 = 제한 없음)
+    max_llm_entry_chars = db.Column(db.Integer, default=500)
+    # 유저 입력 엔트리 1개당 최대 글자수 (UI 카운터용, 0 = 제한 없음)
+    max_user_entry_chars = db.Column(db.Integer, default=1000)
+
+    @staticmethod
+    def get():
+        s = AppSettings.query.first()
+        if not s:
+            s = AppSettings(id=1)
+            db.session.add(s)
+            db.session.commit()
+        return s
+
+    def to_dict(self):
+        return {
+            "max_llm_entry_chars": self.max_llm_entry_chars if self.max_llm_entry_chars is not None else 500,
+            "max_user_entry_chars": self.max_user_entry_chars if self.max_user_entry_chars is not None else 1000,
+        }
+
+
 class SimulationConfig(db.Model):
     __tablename__ = "simulation_configs"
 
@@ -60,7 +86,6 @@ class SimulationConfig(db.Model):
     prompt_level_2 = db.Column(db.Text, default="")
     prompt_level_3 = db.Column(db.Text, default="")
     tick_count = db.Column(db.Integer, default=10)
-    max_content_chars = db.Column(db.Integer, default=500)  # 0 = 제한 없음
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -72,7 +97,6 @@ class SimulationConfig(db.Model):
             "prompt_level_2": self.prompt_level_2,
             "prompt_level_3": self.prompt_level_3,
             "tick_count": self.tick_count,
-            "max_content_chars": self.max_content_chars if self.max_content_chars is not None else 500,
             "is_active": self.is_active,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }

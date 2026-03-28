@@ -10,9 +10,9 @@ from openai import OpenAI
 
 COPILOT_BASE_URL = "https://api.githubcopilot.com"
 DEFAULT_MODEL = "claude-sonnet-4.5"
+MAX_TOKENS = 16000  # Copilot API 최대값
 
 # 세계관 직렬화가 이 토큰 수를 넘으면 자동 요약 실행
-# (claude-sonnet-4.5 context 200k, 프롬프트/응답 여유분 제외)
 CONTEXT_SUMMARY_THRESHOLD = 120_000
 
 
@@ -43,6 +43,40 @@ def estimate_tokens(text: str) -> int:
     return max(1, int(len(text) / 1.5))
 
 
+def _parse_json_safe(raw: str, context: str = "") -> dict:
+    """
+    LLM 응답을 JSON으로 파싱. 잘리거나 깨진 경우 빈 결과 반환.
+    """
+    clean = raw.strip()
+    # 마크다운 코드블록 제거
+    if clean.startswith("```"):
+        lines = clean.split("\n")
+        clean = "\n".join(lines[1:]).rstrip("`").strip()
+
+    try:
+        return json.loads(clean)
+    except json.JSONDecodeError:
+        # 응답이 잘린 경우: 마지막 완전한 JSON 객체를 닫아서 재시도
+        try:
+            # 열린 괄호 수만큼 닫기
+            opens = clean.count("{") - clean.count("}")
+            if opens > 0:
+                patched = clean + ("}" * opens)
+                return json.loads(patched)
+        except Exception:
+            pass
+        # 최후 fallback: 빈 결과
+        return {
+            "_parse_error": True,
+            "_raw_error": f"JSON 파싱 실패({context}): 응답이 잘렸거나 형식이 맞지 않습니다.",
+            "reasoning": f"[파싱 오류] {context} - max_tokens 초과 또는 응답 형식 오류",
+            "events": [],
+            "entry_updates": [],
+            "new_entries": [],
+            "deactivated_entries": [],
+        }
+
+
 SYSTEM_PROMPT_TEMPLATE = """\
 당신은 세계관 자율 진화 엔진입니다.
 주어진 세계관 엔트리들을 기반으로 논리적으로 일관된 사건과 변화를 생성합니다.
@@ -59,6 +93,7 @@ SYSTEM_PROMPT_TEMPLATE = """\
 출력 규칙:
 - 반드시 유효한 JSON만 출력하세요 (마크다운 코드블록 없이)
 - 스키마를 정확히 따르세요
+- 각 항목의 내용은 간결하게 작성하세요 (토큰 절약)
 """
 
 USER_PROMPT_TEMPLATE = """\
@@ -71,7 +106,7 @@ USER_PROMPT_TEMPLATE = """\
 
 출력 JSON 스키마:
 {{
-  "reasoning": "이번 틱의 전반적인 흐름 설명 (한국어)",
+  "reasoning": "이번 틱의 전반적인 흐름 설명 (한국어, 3문장 이내)",
   "events": [
     {{
       "type": "world_event",
@@ -124,6 +159,25 @@ SUMMARY_PROMPT_TEMPLATE = """\
 }}
 """
 
+TRANSLATE_PROMPT_TEMPLATE = """\
+아래 세계관 엔트리들을 영어로 번역하세요.
+제목과 내용 모두 자연스러운 영어로 번역하되, 고유명사는 원문을 병기하세요.
+
+=== 번역할 엔트리 ===
+{entries_text}
+
+출력 JSON 스키마:
+{{
+  "translations": [
+    {{
+      "id": 1,
+      "title_en": "English Title",
+      "content_en": "English content..."
+    }}
+  ]
+}}
+"""
+
 
 def serialize_world_state(entries: list) -> str:
     """세계관 엔트리 목록을 LLM이 읽기 좋은 형태로 직렬화"""
@@ -144,11 +198,33 @@ def serialize_world_state(entries: list) -> str:
     return "\n".join(lines)
 
 
+def estimate_world_tokens(entries: list, config: dict = None) -> dict:
+    """현재 세계관 + 프롬프트의 예상 토큰 수 반환"""
+    world_state = serialize_world_state(entries)
+    world_tokens = estimate_tokens(world_state)
+
+    prompt_tokens = 0
+    if config:
+        system = SYSTEM_PROMPT_TEMPLATE.format(
+            prompt_level_1=config.get("prompt_level_1") or "없음",
+            prompt_level_2=config.get("prompt_level_2") or "없음",
+            prompt_level_3=config.get("prompt_level_3") or "없음",
+        )
+        prompt_tokens = estimate_tokens(system) + estimate_tokens(USER_PROMPT_TEMPLATE)
+
+    total = world_tokens + prompt_tokens
+    return {
+        "world_tokens": world_tokens,
+        "prompt_tokens": prompt_tokens,
+        "total_estimated": total,
+        "context_limit": 200_000,
+        "usage_pct": round(total / 200_000 * 100, 1),
+        "entry_count": len(entries),
+    }
+
+
 def run_tick(config: dict, tick_number: int, entries: list) -> dict:
-    """
-    단일 틱 실행. LLM을 호출해 세계관 변화를 반환.
-    반환값에 _raw, _tokens_in, _tokens_out, _total_tokens 포함
-    """
+    """단일 틱 실행. LLM을 호출해 세계관 변화를 반환."""
     client, model = get_llm_client()
 
     system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
@@ -169,16 +245,16 @@ def run_tick(config: dict, tick_number: int, entries: list) -> dict:
             {"role": "user", "content": user_prompt},
         ],
         temperature=0.8,
-        max_tokens=4096,
+        max_tokens=MAX_TOKENS,
     )
 
-    raw = response.choices[0].message.content
-    # JSON 파싱 (코드블록 감싸진 경우 대응)
-    clean = raw.strip()
-    if clean.startswith("```"):
-        clean = "\n".join(clean.split("\n")[1:])
-        clean = clean.rstrip("`").strip()
-    result = json.loads(clean)
+    raw = response.choices[0].message.content or ""
+    finish_reason = response.choices[0].finish_reason
+
+    result = _parse_json_safe(raw, context=f"틱{tick_number}")
+    if finish_reason == "length":
+        result["_truncated"] = True
+        result["reasoning"] = "[응답 잘림] " + result.get("reasoning", "")
 
     usage = response.usage
     result["_raw"] = raw
@@ -189,10 +265,7 @@ def run_tick(config: dict, tick_number: int, entries: list) -> dict:
 
 
 def run_summary(config: dict, tick_number: int, entries: list) -> dict:
-    """
-    컨텍스트 한계 근접 시 전체 세계관을 압축 요약.
-    반환값에 _tokens_in, _tokens_out, _total_tokens 포함
-    """
+    """컨텍스트 한계 근접 시 전체 세계관을 압축 요약."""
     client, model = get_llm_client()
 
     world_state = serialize_world_state(entries)
@@ -205,15 +278,11 @@ def run_summary(config: dict, tick_number: int, entries: list) -> dict:
         model=model,
         messages=[{"role": "user", "content": user_prompt}],
         temperature=0.3,
-        max_tokens=4096,
+        max_tokens=MAX_TOKENS,
     )
 
-    raw = response.choices[0].message.content
-    clean = raw.strip()
-    if clean.startswith("```"):
-        clean = "\n".join(clean.split("\n")[1:])
-        clean = clean.rstrip("`").strip()
-    result = json.loads(clean)
+    raw = response.choices[0].message.content or ""
+    result = _parse_json_safe(raw, context="요약")
 
     usage = response.usage
     result["_raw"] = raw
@@ -223,8 +292,34 @@ def run_summary(config: dict, tick_number: int, entries: list) -> dict:
     return result
 
 
+def translate_entries(entries: list) -> dict:
+    """선택된 엔트리들을 영문으로 번역."""
+    client, model = get_llm_client()
+
+    entries_text = "\n".join([
+        f"ID={e['id']} [{e['category']}] {e['title']}\n  {e['content'][:400]}"
+        for e in entries
+    ])
+    user_prompt = TRANSLATE_PROMPT_TEMPLATE.format(entries_text=entries_text)
+
+    response = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "user", "content": user_prompt}],
+        temperature=0.3,
+        max_tokens=MAX_TOKENS,
+    )
+
+    raw = response.choices[0].message.content or ""
+    result = _parse_json_safe(raw, context="번역")
+
+    usage = response.usage
+    result["_tokens_in"] = usage.prompt_tokens if usage else estimate_tokens(user_prompt)
+    result["_tokens_out"] = usage.completion_tokens if usage else estimate_tokens(raw)
+    result["_total_tokens"] = usage.total_tokens if usage else (result["_tokens_in"] + result["_tokens_out"])
+    return result
+
+
 def needs_summary(entries: list) -> bool:
     """현재 세계관이 컨텍스트 한계에 근접했는지 확인"""
     world_state = serialize_world_state(entries)
-    estimated = estimate_tokens(world_state)
-    return estimated >= CONTEXT_SUMMARY_THRESHOLD
+    return estimate_tokens(world_state) >= CONTEXT_SUMMARY_THRESHOLD

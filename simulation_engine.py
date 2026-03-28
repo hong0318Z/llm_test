@@ -18,16 +18,24 @@ def run_simulation(run_id: int, app):
         run.status = "running"
         db.session.commit()
 
+        import json as _json
+        selected_ids = None
+        if run.selected_entry_ids_json:
+            try:
+                selected_ids = _json.loads(run.selected_entry_ids_json)
+            except Exception:
+                selected_ids = None
+
         try:
             for tick in range(1, run.total_ticks + 1):
                 run.current_tick = tick
                 db.session.commit()
 
-                # 활성 엔트리 조회 (요약된 항목 제외)
-                entries = [
-                    e.to_dict()
-                    for e in WorldEntry.query.filter_by(is_active=True, is_summarized=False).all()
-                ]
+                # 활성 엔트리 조회 (요약된 항목 제외, 선택 ID 필터 적용)
+                q = WorldEntry.query.filter_by(is_active=True, is_summarized=False)
+                if selected_ids:
+                    q = q.filter(WorldEntry.id.in_(selected_ids))
+                entries = [e.to_dict() for e in q.all()]
 
                 # 컨텍스트 한계 근접 시 자동 요약 먼저 실행
                 if llm_client.needs_summary(entries):

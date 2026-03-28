@@ -77,8 +77,13 @@
             <span id="detailTitle" class="fw-bold"></span>
             <span id="detailCreatorBadge"></span>
           </div>
-          <div class="d-flex gap-2">
+          <div class="d-flex gap-2 flex-wrap">
             <button class="btn btn-sm btn-outline-secondary" onclick="startEdit()"><i class="bi bi-pencil me-1"></i>편집</button>
+            <button class="btn btn-sm btn-outline-secondary" id="toggleActiveBtn" onclick="toggleActive()"></button>
+            <button class="btn btn-sm" onclick="translateEntry()"
+              style="border:1px solid rgba(139,127,247,0.5); color:var(--accent);">
+              <i class="bi bi-translate me-1"></i>영문 번역
+            </button>
             <button class="btn btn-sm btn-outline-danger" onclick="deleteEntry()"><i class="bi bi-trash me-1"></i>삭제</button>
           </div>
         </div>
@@ -283,9 +288,21 @@ function showDetail() {
   document.getElementById('detailContentText').textContent = e.content;
   document.getElementById('detailTick').textContent = e.tick_created === 0 ? '초기 설정' : `틱 ${e.tick_created}`;
   document.getElementById('detailStatus').innerHTML = e.is_active
-    ? '<span class="text-success">활성</span>'
-    : '<span class="text-danger">비활성</span>';
+    ? '<span style="color:#6eeab0;">● 활성</span>'
+    : '<span style="color:#ff7070;">● 비활성</span>';
   document.getElementById('detailCreatedAt').textContent = new Date(e.created_at).toLocaleString('ko-KR');
+
+  // 비활성화/활성화 버튼 텍스트 갱신
+  const toggleBtn = document.getElementById('toggleActiveBtn');
+  if (e.is_active) {
+    toggleBtn.innerHTML = '<i class="bi bi-eye-slash me-1"></i>비활성화';
+    toggleBtn.className = 'btn btn-sm btn-outline-secondary';
+  } else {
+    toggleBtn.innerHTML = '<i class="bi bi-eye me-1"></i>활성화';
+    toggleBtn.className = 'btn btn-sm btn-outline-secondary';
+    toggleBtn.style.borderColor = '#6eeab0';
+    toggleBtn.style.color = '#6eeab0';
+  }
 
   const refs = e.references || [];
   if (refs.length > 0) {
@@ -340,13 +357,70 @@ async function saveEdit() {
   }
 }
 
+async function toggleActive() {
+  const newState = !currentEntry.is_active;
+  const res = await fetch(`/api/entries/${currentEntry.id}`, {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ is_active: newState }),
+  });
+  if (res.ok) {
+    currentEntry = await res.json();
+    await loadEntries();
+    showDetail();
+  }
+}
+
 async function deleteEntry() {
-  if (!confirm(`'${currentEntry.title}'을 삭제하시겠습니까?`)) return;
+  if (!confirm(`'${currentEntry.title}'을 영구 삭제하시겠습니까?\n(비활성화를 원하면 '비활성화' 버튼을 사용하세요)`)) return;
   await fetch(`/api/entries/${currentEntry.id}`, { method: 'DELETE' });
   currentEntry = null;
   document.getElementById('detailEmpty').style.display = 'flex';
   document.getElementById('detailContent').style.display = 'none';
   loadEntries();
+}
+
+async function translateEntry() {
+  const btn = event.target.closest('button');
+  const orig = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>번역 중...';
+
+  try {
+    const res = await fetch('/api/translate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ entry_ids: [currentEntry.id] }),
+    });
+    const data = await res.json();
+    if (data.error) { alert('번역 실패: ' + data.error); return; }
+
+    const t = (data.translations || [])[0];
+    if (!t) { alert('번역 결과가 없습니다.'); return; }
+
+    // 번역 결과를 새 엔트리로 저장
+    const createRes = await fetch('/api/entries', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        title: t.title_en,
+        category: currentEntry.category,
+        content: t.content_en,
+        references: [currentEntry.id],
+      }),
+    });
+    if (createRes.ok) {
+      const newEntry = await createRes.json();
+      await loadEntries();
+      selectEntry(newEntry.id);
+      alert(`영문 번역 엔트리가 생성되었습니다:\n"${t.title_en}"\n\n원본 엔트리(ID:${currentEntry.id})를 참조로 연결했습니다.`);
+    }
+  } catch(e) {
+    alert('오류: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = orig;
+  }
 }
 
 function openCreateModal() {

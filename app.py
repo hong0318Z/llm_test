@@ -15,13 +15,14 @@ with app.app_context():
     db.create_all()
     # 기존 DB에 누락된 컬럼 자동 추가 (마이그레이션)
     _migrate_columns = [
-        ("world_entries",    "is_summarized",    "BOOLEAN DEFAULT 0"),
-        ("simulation_runs",  "total_tokens_in",  "INTEGER DEFAULT 0"),
-        ("simulation_runs",  "total_tokens_out", "INTEGER DEFAULT 0"),
-        ("simulation_runs",  "total_tokens",     "INTEGER DEFAULT 0"),
-        ("simulation_logs",  "tokens_in",        "INTEGER DEFAULT 0"),
-        ("simulation_logs",  "tokens_out",       "INTEGER DEFAULT 0"),
-        ("simulation_logs",  "tokens_total",     "INTEGER DEFAULT 0"),
+        ("world_entries",    "is_summarized",           "BOOLEAN DEFAULT 0"),
+        ("simulation_runs",  "total_tokens_in",         "INTEGER DEFAULT 0"),
+        ("simulation_runs",  "total_tokens_out",        "INTEGER DEFAULT 0"),
+        ("simulation_runs",  "total_tokens",            "INTEGER DEFAULT 0"),
+        ("simulation_runs",  "selected_entry_ids_json", "TEXT"),
+        ("simulation_logs",  "tokens_in",               "INTEGER DEFAULT 0"),
+        ("simulation_logs",  "tokens_out",              "INTEGER DEFAULT 0"),
+        ("simulation_logs",  "tokens_total",            "INTEGER DEFAULT 0"),
     ]
     with db.engine.connect() as conn:
         for table, col, col_def in _migrate_columns:
@@ -189,11 +190,14 @@ def start_run():
         return jsonify({"error": "config_id는 필수입니다."}), 400
 
     config = SimulationConfig.query.get_or_404(config_id)
+    import json as _json
+    entry_ids = data.get("entry_ids")  # None이면 전체
     run = SimulationRun(
         config_id=config.id,
         status="pending",
         current_tick=0,
         total_ticks=config.tick_count,
+        selected_entry_ids_json=_json.dumps(entry_ids) if entry_ids else None,
     )
     db.session.add(run)
     db.session.commit()
@@ -354,6 +358,50 @@ def test_llm():
 @app.route("/api/categories", methods=["GET"])
 def get_categories():
     return jsonify(CATEGORIES)
+
+
+@app.route("/api/token-estimate", methods=["GET"])
+def token_estimate():
+    """현재 활성 DB 엔트리의 예상 토큰 수 반환"""
+    import llm_client as lc
+    entry_ids = request.args.get("ids")  # 콤마 구분 id 목록 (없으면 전체)
+    config_id = request.args.get("config_id")
+
+    q = WorldEntry.query.filter_by(is_active=True, is_summarized=False)
+    if entry_ids:
+        ids = [int(i) for i in entry_ids.split(",") if i.strip().isdigit()]
+        q = q.filter(WorldEntry.id.in_(ids))
+    entries = [e.to_dict() for e in q.all()]
+
+    config = None
+    if config_id:
+        cfg = SimulationConfig.query.get(int(config_id))
+        config = cfg.to_dict() if cfg else None
+
+    result = lc.estimate_world_tokens(entries, config)
+    return jsonify(result)
+
+
+@app.route("/api/translate", methods=["POST"])
+def translate_entries_api():
+    """선택된 엔트리들을 영문으로 번역"""
+    import llm_client as lc
+    data = request.json or {}
+    entry_ids = data.get("entry_ids", [])
+    if not entry_ids:
+        return jsonify({"error": "entry_ids가 필요합니다."}), 400
+
+    entries = [WorldEntry.query.get(eid).to_dict()
+               for eid in entry_ids
+               if WorldEntry.query.get(eid)]
+    if not entries:
+        return jsonify({"error": "유효한 엔트리가 없습니다."}), 400
+
+    try:
+        result = lc.translate_entries(entries)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":

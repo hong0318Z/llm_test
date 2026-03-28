@@ -88,6 +88,7 @@ class SimulationRun(db.Model):
     total_tokens_in = db.Column(db.Integer, default=0)
     total_tokens_out = db.Column(db.Integer, default=0)
     total_tokens = db.Column(db.Integer, default=0)
+    selected_entry_ids_json = db.Column(db.Text, nullable=True)  # None=전체
     started_at = db.Column(db.DateTime, default=datetime.utcnow)
     ended_at = db.Column(db.DateTime, nullable=True)
 

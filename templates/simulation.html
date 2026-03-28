@@ -29,15 +29,34 @@
         <p class="text-muted small">왼쪽에서 설정을 선택한 뒤 실행하세요.</p>
       </div>
       <div class="card-body p-4" id="runContent" style="display:none;">
-        <div class="mb-3 d-flex align-items-center gap-3">
+        <div class="mb-3 d-flex align-items-center gap-3 flex-wrap">
           <div>
-            <div class="small text-muted">설정</div>
+            <div style="font-size:0.78rem; color:var(--text-secondary);">설정</div>
             <div class="fw-bold" id="runConfigName"></div>
           </div>
-          <div class="ms-auto">
+          <div class="ms-auto d-flex gap-2">
+            <button class="btn btn-sm btn-outline-secondary" onclick="openEntrySelectModal()">
+              <i class="bi bi-toggles me-1"></i>엔트리 선택 (<span id="selectedCount">전체</span>)
+            </button>
             <button class="btn btn-primary" id="startBtn" onclick="startSimulation()">
               <i class="bi bi-play-fill me-1"></i>시뮬레이션 시작
             </button>
+          </div>
+        </div>
+
+        <!-- DB 토큰 추정 -->
+        <div id="tokenEstimate" class="mb-3 p-3 rounded" style="background:rgba(139,127,247,0.07); border:1px solid rgba(139,127,247,0.2); display:none;">
+          <div class="d-flex align-items-center gap-3 flex-wrap">
+            <div style="font-size:0.8rem; color:var(--text-secondary);">
+              <i class="bi bi-calculator me-1"></i>현재 DB 예상 토큰
+            </div>
+            <span style="font-size:0.85rem;">
+              세계관 <strong id="estWorld">-</strong> tok
+              + 프롬프트 <strong id="estPrompt">-</strong> tok
+              = 총 <strong id="estTotal" style="color:var(--accent);">-</strong> tok
+            </span>
+            <span id="estPctBadge" style="font-size:0.78rem; border-radius:12px; padding:2px 10px;"></span>
+            <span style="font-size:0.78rem; color:var(--text-secondary);">엔트리 <span id="estEntries">-</span>개</span>
           </div>
         </div>
         <!-- 진행 상황 -->
@@ -81,6 +100,34 @@
       </div>
       <div class="card-body p-3">
         <div id="runList"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 엔트리 선택 모달 -->
+<div class="modal fade" id="entrySelectModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-toggles me-2"></i>틱에 포함할 엔트리 선택</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-3">
+        <div class="d-flex gap-2 mb-3">
+          <button class="btn btn-sm btn-outline-secondary" onclick="selectAllEntries(true)">전체 선택</button>
+          <button class="btn btn-sm btn-outline-secondary" onclick="selectAllEntries(false)">전체 해제</button>
+          <span class="ms-auto" style="font-size:0.82rem; color:var(--text-secondary);">
+            선택된 엔트리만 틱 컨텍스트에 포함됩니다
+          </span>
+        </div>
+        <div id="entrySelectList" style="max-height:420px; overflow-y:auto;"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">닫기</button>
+        <button class="btn btn-primary" onclick="applyEntrySelection()">
+          <i class="bi bi-check-lg me-1"></i>적용
+        </button>
       </div>
     </div>
   </div>
@@ -150,9 +197,13 @@ let selectedConfig = null;
 let selectedRunId = null;
 let pollTimer = null;
 let configModal;
+let entrySelectModal;
+let allDbEntries = [];      // 전체 엔트리 목록
+let selectedEntryIds = null; // null = 전체, [] = 선택된 목록
 
 document.addEventListener('DOMContentLoaded', () => {
   configModal = new bootstrap.Modal(document.getElementById('configModal'));
+  entrySelectModal = new bootstrap.Modal(document.getElementById('entrySelectModal'));
   loadConfigs();
   loadRuns();
 });
@@ -190,12 +241,77 @@ function renderConfigs() {
 
 function selectConfig(id) {
   selectedConfig = configs.find(c => c.id === id);
+  selectedEntryIds = null; // 설정 바꾸면 선택 초기화
   renderConfigs();
   document.getElementById('runEmpty').style.display = 'none';
   document.getElementById('runContent').style.display = 'block';
   document.getElementById('runConfigName').textContent = selectedConfig.name;
   document.getElementById('progressPanel').style.display = 'none';
   document.getElementById('startBtn').disabled = false;
+  document.getElementById('selectedCount').textContent = '전체';
+  loadTokenEstimate();
+}
+
+async function loadTokenEstimate() {
+  const el = document.getElementById('tokenEstimate');
+  el.style.display = 'block';
+  let url = `/api/token-estimate?config_id=${selectedConfig.id}`;
+  if (selectedEntryIds !== null) url += `&ids=${selectedEntryIds.join(',')}`;
+  const res = await fetch(url);
+  const d = await res.json();
+  document.getElementById('estWorld').textContent = d.world_tokens.toLocaleString();
+  document.getElementById('estPrompt').textContent = d.prompt_tokens.toLocaleString();
+  document.getElementById('estTotal').textContent = d.total_estimated.toLocaleString();
+  document.getElementById('estEntries').textContent = d.entry_count;
+  const pct = d.usage_pct;
+  const badge = document.getElementById('estPctBadge');
+  badge.textContent = `컨텍스트 ${pct}%`;
+  badge.style.background = pct >= 80 ? 'rgba(255,112,112,0.15)' : pct >= 50 ? 'rgba(255,184,108,0.15)' : 'rgba(139,127,247,0.15)';
+  badge.style.color = pct >= 80 ? '#ff7070' : pct >= 50 ? '#ffb86c' : 'var(--accent)';
+}
+
+async function openEntrySelectModal() {
+  const res = await fetch('/api/entries?active=true');
+  allDbEntries = await res.json();
+  renderEntrySelectList();
+  entrySelectModal.show();
+}
+
+function renderEntrySelectList() {
+  const container = document.getElementById('entrySelectList');
+  const byCategory = {};
+  allDbEntries.forEach(e => {
+    byCategory[e.category] = byCategory[e.category] || [];
+    byCategory[e.category].push(e);
+  });
+  let html = '';
+  for (const [cat, items] of Object.entries(byCategory)) {
+    html += `<div class="mb-2" style="font-size:0.78rem; font-weight:700; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.8px;">${cat}</div>`;
+    items.forEach(e => {
+      const checked = selectedEntryIds === null || selectedEntryIds.includes(e.id);
+      html += `
+        <label class="d-flex align-items-center gap-2 p-2 mb-1 rounded" style="cursor:pointer; background:rgba(255,255,255,0.03);">
+          <input type="checkbox" class="entry-check" value="${e.id}" ${checked ? 'checked' : ''}>
+          <span class="category-badge cat-${e.category}" style="font-size:0.65rem;">${e.category}</span>
+          <span style="font-size:0.88rem;">${escHtml(e.title)}</span>
+          <span style="font-size:0.75rem; color:var(--text-secondary); margin-left:auto;">${e.created_by === 'llm' ? 'LLM' : '유저'}</span>
+        </label>`;
+    });
+  }
+  container.innerHTML = html || '<p style="color:var(--text-secondary);">활성 엔트리가 없습니다.</p>';
+}
+
+function selectAllEntries(checked) {
+  document.querySelectorAll('.entry-check').forEach(cb => cb.checked = checked);
+}
+
+function applyEntrySelection() {
+  const checked = [...document.querySelectorAll('.entry-check:checked')].map(cb => parseInt(cb.value));
+  selectedEntryIds = checked.length === allDbEntries.length ? null : checked;
+  document.getElementById('selectedCount').textContent =
+    selectedEntryIds === null ? '전체' : `${selectedEntryIds.length}개 선택`;
+  entrySelectModal.hide();
+  loadTokenEstimate();
 }
 
 function openConfigModal(id) {
@@ -262,10 +378,13 @@ async function startSimulation() {
   document.getElementById('liveLog').innerHTML = '';
   updateProgress(0, selectedConfig.tick_count, '시작 중...');
 
+  const body = { config_id: selectedConfig.id };
+  if (selectedEntryIds !== null) body.entry_ids = selectedEntryIds;
+
   const res = await fetch('/api/runs', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ config_id: selectedConfig.id })
+    body: JSON.stringify(body),
   });
   if (!res.ok) { alert('실행 시작 실패'); document.getElementById('startBtn').disabled = false; return; }
   const run = await res.json();

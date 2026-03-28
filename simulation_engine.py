@@ -3,7 +3,7 @@
 토큰 사용량 추적 및 컨텍스트 한계 시 자동 요약 포함
 """
 from datetime import datetime
-from models import db, WorldEntry, SimulationRun, SimulationLog, AppSettings, CREATOR_LLM
+from models import db, WorldEntry, SimulationRun, SimulationLog, AppSettings, CREATOR_LLM, CREATOR_USER
 import llm_client
 
 
@@ -159,6 +159,33 @@ def _apply_tick_result(run: SimulationRun, tick: int, result: dict):
         entry = WorldEntry.query.get(update.get("id"))
         if not entry:
             continue
+
+        # 유저 엔트리는 직접 수정 금지 → 새 LLM 엔트리로 대체
+        if entry.created_by == CREATOR_USER:
+            derived = WorldEntry(
+                title=f"{entry.title} (변화 - 틱 {tick})",
+                category=entry.category,
+                content=update.get("new_content", ""),
+                created_by=CREATOR_LLM,
+                tick_created=tick,
+                is_active=True,
+            )
+            derived.references = [entry.id]
+            db.session.add(derived)
+            db.session.flush()
+            log = SimulationLog(
+                run_id=run.id,
+                tick_number=tick,
+                event_type="entry_created",
+                description=f"[{entry.category}] '{entry.title}' 파생 엔트리 생성 (유저 원본 보호): {update.get('reason', '')}",
+                affected_entries_json=f"[{derived.id}]",
+                llm_reasoning=reasoning,
+                raw_llm_output=raw,
+                tokens_in=0, tokens_out=0, tokens_total=0,
+            )
+            db.session.add(log)
+            continue
+
         old_content = entry.content
         entry.content = update.get("new_content", entry.content)
         entry.updated_at = datetime.utcnow()
@@ -204,6 +231,22 @@ def _apply_tick_result(run: SimulationRun, tick: int, result: dict):
         entry = WorldEntry.query.get(deact.get("id"))
         if not entry:
             continue
+
+        # 유저 엔트리는 비활성화 금지 → 로그만 기록하고 무시
+        if entry.created_by == CREATOR_USER:
+            log = SimulationLog(
+                run_id=run.id,
+                tick_number=tick,
+                event_type="entry_protected",
+                description=f"[{entry.category}] '{entry.title}' 비활성화 시도 차단 (유저 원본 보호): {deact.get('reason', '')}",
+                affected_entries_json=f"[{entry.id}]",
+                llm_reasoning=reasoning,
+                raw_llm_output=raw,
+                tokens_in=0, tokens_out=0, tokens_total=0,
+            )
+            db.session.add(log)
+            continue
+
         entry.is_active = False
         entry.updated_at = datetime.utcnow()
         log = SimulationLog(

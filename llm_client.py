@@ -94,6 +94,12 @@ SYSTEM_PROMPT_TEMPLATE = """\
 - 반드시 유효한 JSON만 출력하세요 (마크다운 코드블록 없이)
 - 스키마를 정확히 따르세요
 - 각 항목의 내용은 간결하게 작성하세요 (토큰 절약)
+
+핵심 제약:
+- [🔒유저] 태그가 붙은 엔트리는 절대 entry_updates나 deactivated_entries에 포함하지 마세요.
+  이 엔트리들은 사용자가 설정한 세계관 코어이며 수정/비활성화가 금지됩니다.
+- 유저 엔트리에서 파생된 변화를 표현해야 한다면, 반드시 new_entries로 새 엔트리를 생성하고
+  references 필드에 원본 유저 엔트리 ID를 포함하세요.
 """
 
 USER_PROMPT_TEMPLATE = """\
@@ -198,7 +204,8 @@ def serialize_world_state(entries: list, max_chars: int = 500) -> str:
             content = item["content"]
             if max_chars and max_chars > 0 and len(content) > max_chars:
                 content = content[:max_chars] + f"…(+{len(item['content'])-max_chars}자 생략)"
-            lines.append(f"  ID={item['id']} | {item['title']}{ref_str}")
+            creator_tag = " [🔒유저]" if item.get("created_by") == "user" else ""
+            lines.append(f"  ID={item['id']} | {item['title']}{creator_tag}{ref_str}")
             lines.append(f"    {content}")
 
     return "\n".join(lines)

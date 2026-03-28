@@ -57,6 +57,11 @@ def logs_page():
     return render_template("logs.html")
 
 
+@app.route("/graph")
+def graph_page():
+    return render_template("graph.html", categories=CATEGORIES)
+
+
 # ─────────────────────────────────────────
 #  세계관 엔트리 API
 # ─────────────────────────────────────────

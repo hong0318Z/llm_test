@@ -139,6 +139,9 @@
       <div class="side-card-body">
         <!-- 뷰 모드 -->
         <div id="viewBlock">
+          <!-- 이미지 영역 -->
+          <div id="sdImageArea" class="mb-3"></div>
+
           <div class="mb-3">
             <div class="meta-label mb-1">내용</div>
             <div id="sdContent" style="white-space:pre-wrap;font-size:0.84rem;line-height:1.7;color:var(--text-secondary);max-height:200px;overflow-y:auto;"></div>
@@ -304,11 +307,13 @@ function buildGraph(entries) {
         face: 'Segoe UI, system-ui, sans-serif',
         vadjust: 0,
       },
-      shape: 'dot',
-      size: e.created_by === 'user' ? 18 : 13,
-      borderWidth: e.created_by === 'user' ? 2.5 : 1.5,
-      shadow: { enabled: !inactive, color: p.glow, size: 12, x: 0, y: 0 },
-      opacity: inactive ? 0.35 : 1.0,
+      shape: e.image_filename ? 'circularImage' : 'dot',
+      image: e.image_filename ? `/storage/${e.image_filename}` : undefined,
+      brokenImage: undefined,
+      size: e.image_filename ? 28 : (e.created_by === 'user' ? 18 : 13),
+      borderWidth: e.image_filename ? 3 : (e.created_by === 'user' ? 2.5 : 1.5),
+      shadow: { enabled: !inactive, color: p.glow, size: e.image_filename ? 18 : 12, x: 0, y: 0 },
+      opacity: inactive ? 0.45 : 1.0,
       _data: e,
     };
   }));
@@ -397,6 +402,9 @@ function showSidePanel(entry) {
   document.getElementById('sdTitle').textContent = entry.title;
   document.getElementById('sdContent').textContent = entry.content || '';
 
+  // 이미지 영역
+  renderImageArea(entry);
+
   // 키워드
   const kwEl = document.getElementById('sdKeywords');
   if (entry.keywords) {
@@ -435,6 +443,69 @@ function showSidePanel(entry) {
   showViewMode();
   network && network.selectNodes([entry.id]);
   network && network.focus(entry.id, { scale: 1.1, animation: { duration: 350, easingFunction: 'easeInOutQuad' } });
+}
+
+// ── 이미지 ───────────────────────────────────────────────
+function renderImageArea(entry) {
+  const area = document.getElementById('sdImageArea');
+  if (entry.image_filename) {
+    area.innerHTML = `
+      <img src="/storage/${entry.image_filename}" alt="이미지"
+        style="width:100%;max-height:180px;object-fit:cover;border-radius:8px;border:1px solid var(--border);display:block;">
+      <div class="d-flex gap-2 mt-2">
+        <label style="background:none;border:1px solid var(--border);color:var(--text-muted);border-radius:6px;
+          padding:3px 10px;font-size:0.75rem;cursor:pointer;flex:1;text-align:center;">
+          <i class="bi bi-arrow-repeat me-1"></i>교체
+          <input type="file" accept="image/*" style="display:none;" onchange="uploadImageGraph(this)">
+        </label>
+        <button onclick="deleteImageGraph()"
+          style="background:none;border:1px solid rgba(255,112,112,0.3);color:#ff7070;border-radius:6px;
+          padding:3px 10px;font-size:0.75rem;cursor:pointer;">
+          <i class="bi bi-trash"></i>
+        </button>
+      </div>`;
+  } else {
+    area.innerHTML = `
+      <label style="display:flex;align-items:center;justify-content:center;gap:8px;
+        border:1px dashed var(--border);border-radius:8px;padding:14px;cursor:pointer;
+        color:var(--text-muted);font-size:0.78rem;transition:border-color 0.15s;width:100%;"
+        onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
+        <i class="bi bi-image" style="font-size:1.1rem;"></i>이미지 추가
+        <input type="file" accept="image/*" style="display:none;" onchange="uploadImageGraph(this)">
+      </label>`;
+  }
+}
+
+async function uploadImageGraph(input) {
+  if (!selectedEntry || !input.files[0]) return;
+  const file = input.files[0];
+  if (file.size > 5 * 1024 * 1024) { alert('파일 크기는 5MB 이하여야 합니다.'); return; }
+  const fd = new FormData();
+  fd.append('image', file);
+  const res = await fetch(`/api/entries/${selectedEntry.id}/image`, { method: 'POST', body: fd });
+  if (res.ok) {
+    const data = await res.json();
+    selectedEntry.image_filename = data.image_filename;
+    const idx = allEntries.findIndex(e => e.id === selectedEntry.id);
+    if (idx >= 0) allEntries[idx].image_filename = data.image_filename;
+    renderImageArea(selectedEntry);
+    await reloadGraph();
+  } else {
+    alert('이미지 업로드 실패');
+  }
+  input.value = '';
+}
+
+async function deleteImageGraph() {
+  if (!selectedEntry || !confirm('이미지를 삭제하시겠습니까?')) return;
+  const res = await fetch(`/api/entries/${selectedEntry.id}/image`, { method: 'DELETE' });
+  if (res.ok) {
+    selectedEntry.image_filename = null;
+    const idx = allEntries.findIndex(e => e.id === selectedEntry.id);
+    if (idx >= 0) allEntries[idx].image_filename = null;
+    renderImageArea(selectedEntry);
+    await reloadGraph();
+  }
 }
 
 function showConnected(entryId) {

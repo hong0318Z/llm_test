@@ -42,6 +42,10 @@
             <button class="btn btn-sm btn-outline-secondary" onclick="openEntrySelectModal()">
               <i class="bi bi-toggles me-1"></i>엔트리 선택 (<span id="selectedCount">전체</span>)
             </button>
+            <button class="btn btn-sm" id="timelinePickBtn" onclick="openTimelineModal()"
+              style="border:1px solid rgba(139,127,247,0.4); color:var(--accent); font-size:0.8rem;">
+              <i class="bi bi-clock-history me-1"></i><span id="timelinePickLabel">타임라인 없음</span>
+            </button>
             <button class="btn btn-primary" id="startBtn" onclick="startSimulation()">
               <i class="bi bi-play-fill me-1"></i>시뮬레이션 시작
             </button>
@@ -207,12 +211,17 @@ let selectedRunId = null;
 let pollTimer = null;
 let configModal;
 let entrySelectModal;
-let allDbEntries = [];      // 전체 엔트리 목록
+let timelineModal;
+let allDbEntries = [];       // 전체 엔트리 목록
 let selectedEntryIds = null; // null = 전체, [] = 선택된 목록
+let _selectedTimelineId = null;
+let _newTimelineName = '';
+let _allTimelines = [];
 
 document.addEventListener('DOMContentLoaded', () => {
   configModal = new bootstrap.Modal(document.getElementById('configModal'));
   entrySelectModal = new bootstrap.Modal(document.getElementById('entrySelectModal'));
+  timelineModal = new bootstrap.Modal(document.getElementById('timelineModal'));
   loadConfigs();
   loadRuns();
 });
@@ -393,6 +402,8 @@ async function startSimulation() {
   const body = { config_id: selectedConfig.id };
   if (selectedEntryIds !== null) body.entry_ids = selectedEntryIds;
   if (document.getElementById('excludeLlmToggle').checked) body.exclude_llm_entries = true;
+  if (_selectedTimelineId)     body.timeline_id = _selectedTimelineId;
+  if (_newTimelineName.trim()) body.new_timeline_name = _newTimelineName.trim();
 
   const res = await fetch('/api/runs', {
     method: 'POST',
@@ -545,5 +556,94 @@ async function deleteRun(runId) {
 function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
+
+// ── 타임라인 선택 ─────────────────────────────────────────
+async function openTimelineModal() {
+  const res = await fetch('/api/timelines');
+  _allTimelines = await res.json();
+  const list = document.getElementById('tlPickList');
+  list.innerHTML = `
+    <div class="form-check mb-2">
+      <input class="form-check-input" type="radio" name="tlPick" id="tlPickNone" value=""
+        ${!_selectedTimelineId && !_newTimelineName ? 'checked' : ''}>
+      <label class="form-check-label small" for="tlPickNone">타임라인 없이 실행</label>
+    </div>
+    <div class="form-check mb-2">
+      <input class="form-check-input" type="radio" name="tlPick" id="tlPickNew" value="__new__"
+        ${_newTimelineName ? 'checked' : ''}>
+      <label class="form-check-label small" for="tlPickNew">
+        <i class="bi bi-plus-circle me-1"></i>새 타임라인 생성
+      </label>
+    </div>
+    <div id="tlNewNameWrap" class="ms-4 mb-2" style="${_newTimelineName ? '' : 'display:none;'}">
+      <input type="text" class="form-control form-control-sm" id="tlNewName"
+        placeholder="새 타임라인 이름" value="${escHtml(_newTimelineName)}">
+    </div>
+    ${_allTimelines.length > 0 ? '<hr style="border-color:var(--border); margin:8px 0;">' : ''}
+    ${_allTimelines.map(t => `
+      <div class="form-check mb-2">
+        <input class="form-check-input" type="radio" name="tlPick" id="tlPick${t.id}" value="${t.id}"
+          ${_selectedTimelineId === t.id ? 'checked' : ''}>
+        <label class="form-check-label small" for="tlPick${t.id}">
+          ${escHtml(t.name)}
+          <span style="color:var(--text-muted); font-size:0.72rem;">(${t.event_count}개 에피소드)</span>
+        </label>
+      </div>`).join('')}
+  `;
+  // 새 타임라인 라디오 토글 시 이름 입력창 표시
+  list.querySelectorAll('input[name="tlPick"]').forEach(r => {
+    r.addEventListener('change', () => {
+      document.getElementById('tlNewNameWrap').style.display =
+        r.value === '__new__' ? '' : 'none';
+    });
+  });
+  timelineModal.show();
+}
+
+function applyTimelinePick() {
+  const checked = document.querySelector('input[name="tlPick"]:checked');
+  if (!checked) return;
+  _selectedTimelineId = null;
+  _newTimelineName = '';
+  if (checked.value === '__new__') {
+    _newTimelineName = (document.getElementById('tlNewName').value || '').trim();
+    if (!_newTimelineName) { alert('타임라인 이름을 입력하세요.'); return; }
+  } else if (checked.value) {
+    _selectedTimelineId = parseInt(checked.value);
+  }
+  // 버튼 레이블 갱신
+  let label = '타임라인 없음';
+  if (_newTimelineName) label = `+ ${_newTimelineName}`;
+  else if (_selectedTimelineId) {
+    const tl = _allTimelines.find(t => t.id === _selectedTimelineId);
+    if (tl) label = tl.name;
+  }
+  document.getElementById('timelinePickLabel').textContent = label;
+  document.getElementById('timelinePickBtn').style.borderColor =
+    (_selectedTimelineId || _newTimelineName) ? 'var(--accent)' : 'rgba(139,127,247,0.4)';
+  timelineModal.hide();
+}
 </script>
+
+<!-- 타임라인 선택 모달 -->
+<div class="modal fade" id="timelineModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" style="font-size:0.95rem;">
+          <i class="bi bi-clock-history me-2" style="color:var(--accent);"></i>타임라인 연결
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body py-3" id="tlPickList"></div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">취소</button>
+        <button class="btn btn-primary btn-sm" onclick="applyTimelinePick()">
+          <i class="bi bi-check-lg me-1"></i>적용
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
 {% endblock %}

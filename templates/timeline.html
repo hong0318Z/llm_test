@@ -1,0 +1,512 @@
+{% extends "base.html" %}
+{% block title %}타임라인{% endblock %}
+
+{% block content %}
+<style>
+  /* ── 레이아웃 ── */
+  #tlWrap { display:flex; gap:1rem; height:calc(100vh - 128px); }
+  #tlList { width:260px; flex-shrink:0; display:flex; flex-direction:column; gap:0.5rem; overflow-y:auto; }
+  #tlMain { flex:1; display:flex; flex-direction:column; overflow:hidden; }
+  #tlBody  { flex:1; overflow-y:auto; padding-right:4px; }
+
+  /* ── 타임라인 목록 카드 ── */
+  .tl-item {
+    padding:10px 14px; border-radius:10px;
+    border:1px solid var(--border); background:var(--bg-card);
+    cursor:pointer; transition:all 0.15s;
+  }
+  .tl-item:hover { border-color:rgba(139,127,247,0.5); }
+  .tl-item.active { border-color:var(--accent); background:rgba(139,127,247,0.08); }
+  .tl-item-name { font-size:0.88rem; font-weight:600; color:var(--text-primary); }
+  .tl-item-meta { font-size:0.72rem; color:var(--text-muted); margin-top:2px; }
+
+  /* ── 헤더 ── */
+  #tlHeader {
+    border-radius:12px; border:1px solid var(--border); background:var(--bg-card);
+    padding:14px 18px; margin-bottom:1rem;
+    display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+  }
+  #tlHeaderName { font-size:1.05rem; font-weight:700; flex:1; }
+  #tlHeaderDesc { font-size:0.8rem; color:var(--text-secondary); }
+
+  /* ── 세로 타임라인 ── */
+  .tl-events { position:relative; padding-left:52px; }
+  .tl-events::before {
+    content:''; position:absolute; left:20px; top:0; bottom:0;
+    width:2px; background:linear-gradient(to bottom, transparent, var(--border) 5%, var(--border) 95%, transparent);
+  }
+
+  .tl-event {
+    position:relative; margin-bottom:1.5rem;
+  }
+  /* 틱 마커 */
+  .tl-tick-marker {
+    position:absolute; left:-40px; top:12px;
+    width:32px; height:32px; border-radius:50%;
+    display:flex; align-items:center; justify-content:center;
+    font-size:0.65rem; font-weight:700; line-height:1;
+    border:2px solid; transition:transform 0.15s;
+    cursor:default; flex-direction:column; gap:1px;
+  }
+  .tl-tick-marker.auto  { background:#0d1018; border-color:var(--accent); color:var(--accent); }
+  .tl-tick-marker.user  { background:rgba(106,173,255,0.12); border-color:#6aadff; color:#6aadff; }
+
+  /* 이벤트 카드 */
+  .tl-event-card {
+    border-radius:10px; border:1px solid var(--border); background:var(--bg-card);
+    padding:12px 16px; transition:border-color 0.15s;
+  }
+  .tl-event-card:hover { border-color:rgba(139,127,247,0.4); }
+  .tl-event-title { font-size:0.88rem; font-weight:600; color:var(--text-primary); margin-bottom:4px; }
+  .tl-event-desc  { font-size:0.8rem; color:var(--text-secondary); white-space:pre-wrap; line-height:1.6; }
+  .tl-event-footer { margin-top:8px; display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  .entry-badge {
+    padding:2px 8px; border-radius:10px; font-size:0.68rem; font-weight:500;
+    background:rgba(139,127,247,0.12); color:var(--accent);
+    border:1px solid rgba(139,127,247,0.25); cursor:pointer; white-space:nowrap;
+  }
+  .tl-actions { margin-left:auto; display:flex; gap:4px; opacity:0; transition:opacity 0.15s; }
+  .tl-event-card:hover .tl-actions { opacity:1; }
+  .tl-act-btn {
+    background:none; border:1px solid var(--border); border-radius:5px;
+    padding:2px 7px; font-size:0.7rem; color:var(--text-muted); cursor:pointer;
+    transition:all 0.12s;
+  }
+  .tl-act-btn:hover { border-color:var(--accent); color:var(--accent); }
+  .tl-act-btn.danger:hover { border-color:#ff7070; color:#ff7070; }
+
+  /* 틱 그룹 헤더 */
+  .tl-tick-group-label {
+    font-size:0.7rem; text-transform:uppercase; letter-spacing:0.6px;
+    color:var(--text-muted); margin-bottom:0.5rem; margin-top:0.25rem;
+  }
+
+  /* 새 에피소드 추가 폼 */
+  #addEventForm {
+    border-radius:10px; border:1px solid var(--border); background:var(--bg-card);
+    padding:14px 16px; margin-bottom:1rem; display:none;
+  }
+
+  /* 빈 상태 */
+  #tlEmpty { text-align:center; color:var(--text-muted); padding:4rem 0; }
+
+  /* 입력 */
+  .form-control, .form-select {
+    background:var(--bg-input) !important; border-color:var(--border) !important;
+    color:var(--text-primary) !important; font-size:0.85rem;
+  }
+  .form-control:focus, .form-select:focus {
+    border-color:var(--accent) !important;
+    box-shadow:0 0 0 2px rgba(139,127,247,0.18) !important;
+  }
+</style>
+
+<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.75rem;">
+  <h5 class="mb-0" style="color:var(--text-primary);">
+    <i class="bi bi-clock-history me-2" style="color:var(--accent);"></i>타임라인
+  </h5>
+  <button class="btn btn-sm btn-primary" onclick="openCreateTimeline()">
+    <i class="bi bi-plus-lg me-1"></i>새 타임라인
+  </button>
+</div>
+
+<div id="tlWrap">
+
+  <!-- ── 왼쪽: 타임라인 목록 ── -->
+  <div id="tlList">
+    <div id="tlListInner">
+      <div class="text-muted small text-center py-4">로딩 중...</div>
+    </div>
+  </div>
+
+  <!-- ── 오른쪽: 타임라인 뷰 ── -->
+  <div id="tlMain">
+
+    <!-- 선택 전 안내 -->
+    <div id="tlSelectHint" style="text-align:center; color:var(--text-muted); padding:5rem 0;">
+      <i class="bi bi-arrow-left display-4 opacity-20 d-block mb-3"></i>
+      <p class="small">왼쪽에서 타임라인을 선택하세요.</p>
+    </div>
+
+    <!-- 타임라인 뷰 -->
+    <div id="tlView" style="display:none; height:100%; display:flex; flex-direction:column;">
+
+      <!-- 헤더 -->
+      <div id="tlHeader">
+        <div style="flex:1; min-width:0;">
+          <div id="tlHeaderName">—</div>
+          <div id="tlHeaderDesc"></div>
+        </div>
+        <div class="d-flex gap-2 align-items-center flex-wrap">
+          <span id="tlEventCount" class="badge" style="background:rgba(139,127,247,0.2);color:var(--accent);font-size:0.75rem;"></span>
+          <button class="btn btn-sm" onclick="openAddEvent()"
+            style="border:1px solid rgba(139,127,247,0.4);color:var(--accent);font-size:0.78rem;padding:4px 10px;">
+            <i class="bi bi-plus-lg me-1"></i>에피소드 추가
+          </button>
+          <button class="btn btn-sm btn-outline-secondary" onclick="openEditTimeline()" style="font-size:0.78rem;padding:4px 10px;">
+            <i class="bi bi-pencil me-1"></i>편집
+          </button>
+          <button class="btn btn-sm" onclick="deleteTimeline()"
+            style="border:1px solid rgba(255,112,112,0.3);color:#ff7070;font-size:0.78rem;padding:4px 10px;">
+            <i class="bi bi-trash me-1"></i>삭제
+          </button>
+        </div>
+      </div>
+
+      <!-- 에피소드 추가 폼 -->
+      <div id="addEventForm">
+        <div class="row g-2 mb-2">
+          <div class="col-3">
+            <label class="form-label" style="font-size:0.75rem;">틱 번호</label>
+            <input type="number" class="form-control form-control-sm" id="addTick" min="0" value="0">
+          </div>
+          <div class="col-9">
+            <label class="form-label" style="font-size:0.75rem;">에피소드 제목 <span style="color:#ff7070;">*</span></label>
+            <input type="text" class="form-control form-control-sm" id="addTitle" placeholder="제목을 입력하세요">
+          </div>
+        </div>
+        <div class="mb-2">
+          <label class="form-label" style="font-size:0.75rem;">설명</label>
+          <textarea class="form-control form-control-sm" id="addDesc" rows="3" placeholder="이 에피소드에 대한 설명..."></textarea>
+        </div>
+        <div class="d-flex gap-2 justify-content-end">
+          <button class="btn btn-sm btn-outline-secondary" onclick="closeAddEvent()">취소</button>
+          <button class="btn btn-sm btn-primary" onclick="submitAddEvent()">
+            <i class="bi bi-check-lg me-1"></i>추가
+          </button>
+        </div>
+      </div>
+
+      <!-- 타임라인 바디 -->
+      <div id="tlBody">
+        <div id="tlEmpty" style="display:none;">
+          <i class="bi bi-hourglass display-4 opacity-20 d-block mb-3"></i>
+          <p class="small">에피소드가 없습니다.<br>시뮬레이션 실행 시 자동으로 기록되거나<br>[에피소드 추가]로 직접 입력하세요.</p>
+        </div>
+        <div id="tlEventsList" class="tl-events"></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── 타임라인 생성/편집 모달 ── -->
+<div class="modal fade" id="tlModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="tlModalTitle">새 타임라인</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label small">이름 <span style="color:#ff7070;">*</span></label>
+          <input type="text" class="form-control" id="tlModalName" placeholder="타임라인 이름">
+        </div>
+        <div class="mb-1">
+          <label class="form-label small">설명</label>
+          <textarea class="form-control" id="tlModalDesc" rows="3" placeholder="이 타임라인에 대한 설명..."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">취소</button>
+        <button class="btn btn-primary" onclick="saveTimeline()">
+          <i class="bi bi-check-lg me-1"></i>저장
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── 에피소드 편집 모달 ── -->
+<div class="modal fade" id="editEventModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">에피소드 편집</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="editEvId">
+        <div class="mb-3">
+          <label class="form-label small">틱 번호</label>
+          <input type="number" class="form-control form-control-sm" id="editEvTick" min="0">
+        </div>
+        <div class="mb-3">
+          <label class="form-label small">제목</label>
+          <input type="text" class="form-control form-control-sm" id="editEvTitle">
+        </div>
+        <div class="mb-1">
+          <label class="form-label small">설명</label>
+          <textarea class="form-control form-control-sm" id="editEvDesc" rows="5"></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">취소</button>
+        <button class="btn btn-primary" onclick="saveEditEvent()">저장</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const CAT_COLORS = {
+  '세력':'#ff7070','인물':'#6aadff','관념':'#b07aff',
+  '물건':'#ffb86c','종족':'#6eeab0','사건':'#ffe96a',
+};
+
+let timelines = [];
+let currentTl = null;
+let tlModal, editEventModal;
+
+document.addEventListener('DOMContentLoaded', async () => {
+  tlModal = new bootstrap.Modal(document.getElementById('tlModal'));
+  editEventModal = new bootstrap.Modal(document.getElementById('editEventModal'));
+  await loadTimelines();
+});
+
+// ── 타임라인 목록 ────────────────────────────────────────
+async function loadTimelines() {
+  const res = await fetch('/api/timelines');
+  timelines = await res.json();
+  renderList();
+  if (currentTl) {
+    const still = timelines.find(t => t.id === currentTl.id);
+    if (still) await selectTimeline(still.id);
+    else { currentTl = null; showSelectHint(); }
+  }
+}
+
+function renderList() {
+  const el = document.getElementById('tlListInner');
+  if (timelines.length === 0) {
+    el.innerHTML = '<div class="text-muted small text-center py-4">타임라인이 없습니다.<br>위 버튼으로 생성하세요.</div>';
+    return;
+  }
+  el.innerHTML = timelines.map(t => `
+    <div class="tl-item ${currentTl && currentTl.id === t.id ? 'active' : ''}" onclick="selectTimeline(${t.id})">
+      <div class="tl-item-name">${escHtml(t.name)}</div>
+      <div class="tl-item-meta">에피소드 ${t.event_count}개 · ${fmtDate(t.created_at)}</div>
+    </div>
+  `).join('');
+}
+
+async function selectTimeline(id) {
+  const res = await fetch(`/api/timelines/${id}`);
+  currentTl = await res.json();
+  renderList();
+  renderTimeline();
+  document.getElementById('tlSelectHint').style.display = 'none';
+  document.getElementById('tlView').style.display = 'flex';
+}
+
+function showSelectHint() {
+  document.getElementById('tlSelectHint').style.display = 'block';
+  document.getElementById('tlView').style.display = 'none';
+}
+
+// ── 타임라인 렌더 ────────────────────────────────────────
+function renderTimeline() {
+  if (!currentTl) return;
+  document.getElementById('tlHeaderName').textContent = currentTl.name;
+  document.getElementById('tlHeaderDesc').textContent = currentTl.description || '';
+  document.getElementById('tlEventCount').textContent = `${currentTl.event_count}개 에피소드`;
+
+  const events = currentTl.events || [];
+  const empty = document.getElementById('tlEmpty');
+  const list = document.getElementById('tlEventsList');
+
+  if (events.length === 0) {
+    empty.style.display = 'block';
+    list.innerHTML = '';
+    return;
+  }
+  empty.style.display = 'none';
+
+  // 틱별 그룹핑
+  const byTick = {};
+  events.forEach(ev => {
+    const k = ev.tick_number;
+    if (!byTick[k]) byTick[k] = [];
+    byTick[k].push(ev);
+  });
+
+  const ticks = Object.keys(byTick).map(Number).sort((a,b) => a-b);
+  list.innerHTML = ticks.map(tick => {
+    const tickEvents = byTick[tick];
+    return tickEvents.map((ev, idx) => renderEvent(ev, tick, idx === 0)).join('');
+  }).join('');
+}
+
+function renderEvent(ev, tick, showTick) {
+  const isAuto = ev.event_type === 'auto';
+  const markerClass = isAuto ? 'auto' : 'user';
+  const markerLabel = tick === 0 ? '사용자' : `틱<br>${tick}`;
+  const markerTitle = isAuto ? `자동 기록 (틱 ${tick})` : `수동 추가 (틱 ${tick})`;
+
+  const entryBadges = (ev.affected_entries || []).map(e => {
+    const col = CAT_COLORS[e.category] || '#8892a4';
+    return `<span class="entry-badge" style="background:${col}18;color:${col};border-color:${col}33;"
+      title="${e.category}">${escHtml(e.title)}</span>`;
+  }).join('');
+
+  const desc = ev.description
+    ? `<div class="tl-event-desc mt-2" style="display:none;">${escHtml(ev.description)}</div>` : '';
+  const toggleDesc = ev.description
+    ? `<button class="tl-act-btn" onclick="toggleDesc(this)" title="설명 펼치기">
+        <i class="bi bi-chevron-down"></i></button>` : '';
+
+  return `
+    <div class="tl-event" id="ev-${ev.id}">
+      ${showTick ? `<div class="tl-tick-marker ${markerClass}" title="${markerTitle}">
+        ${markerLabel}
+      </div>` : `<div class="tl-tick-marker ${markerClass}" style="opacity:0;pointer-events:none;">${markerLabel}</div>`}
+      <div class="tl-event-card">
+        <div class="d-flex align-items-start gap-2">
+          <div class="tl-event-title flex-grow-1">${escHtml(ev.title)}</div>
+          <div class="tl-actions">
+            ${toggleDesc}
+            <button class="tl-act-btn" onclick="openEditEvent(${ev.id})" title="편집">
+              <i class="bi bi-pencil"></i></button>
+            <button class="tl-act-btn danger" onclick="deleteEvent(${ev.id})" title="삭제">
+              <i class="bi bi-trash"></i></button>
+          </div>
+        </div>
+        ${desc}
+        ${entryBadges ? `<div class="tl-event-footer">${entryBadges}</div>` : ''}
+      </div>
+    </div>`;
+}
+
+function toggleDesc(btn) {
+  const desc = btn.closest('.tl-event-card').querySelector('.tl-event-desc');
+  if (!desc) return;
+  const visible = desc.style.display !== 'none';
+  desc.style.display = visible ? 'none' : 'block';
+  btn.innerHTML = visible ? '<i class="bi bi-chevron-down"></i>' : '<i class="bi bi-chevron-up"></i>';
+}
+
+// ── CRUD ────────────────────────────────────────────────
+function openCreateTimeline() {
+  document.getElementById('tlModalTitle').textContent = '새 타임라인';
+  document.getElementById('tlModalName').value = '';
+  document.getElementById('tlModalDesc').value = '';
+  tlModal._editId = null;
+  tlModal.show();
+}
+
+function openEditTimeline() {
+  if (!currentTl) return;
+  document.getElementById('tlModalTitle').textContent = '타임라인 편집';
+  document.getElementById('tlModalName').value = currentTl.name;
+  document.getElementById('tlModalDesc').value = currentTl.description || '';
+  tlModal._editId = currentTl.id;
+  tlModal.show();
+}
+
+async function saveTimeline() {
+  const name = document.getElementById('tlModalName').value.trim();
+  if (!name) { alert('이름을 입력하세요.'); return; }
+  const body = { name, description: document.getElementById('tlModalDesc').value.trim() };
+  const editId = tlModal._editId;
+  const url = editId ? `/api/timelines/${editId}` : '/api/timelines';
+  const method = editId ? 'PUT' : 'POST';
+  const res = await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  if (res.ok) {
+    tlModal.hide();
+    await loadTimelines();
+    if (!editId) {
+      const tl = await res.json();
+      await selectTimeline(tl.id);
+    } else {
+      await selectTimeline(editId);
+    }
+  } else {
+    alert('저장 실패');
+  }
+}
+
+async function deleteTimeline() {
+  if (!currentTl || !confirm(`"${currentTl.name}" 타임라인을 삭제하시겠습니까?\n모든 에피소드가 함께 삭제됩니다.`)) return;
+  await fetch(`/api/timelines/${currentTl.id}`, { method: 'DELETE' });
+  currentTl = null;
+  await loadTimelines();
+  showSelectHint();
+}
+
+// ── 에피소드 추가 ────────────────────────────────────────
+function openAddEvent() {
+  const form = document.getElementById('addEventForm');
+  form.style.display = form.style.display === 'none' ? 'block' : 'none';
+  if (form.style.display === 'block') {
+    document.getElementById('addTitle').focus();
+  }
+}
+function closeAddEvent() {
+  document.getElementById('addEventForm').style.display = 'none';
+  document.getElementById('addTitle').value = '';
+  document.getElementById('addDesc').value = '';
+}
+async function submitAddEvent() {
+  const title = document.getElementById('addTitle').value.trim();
+  if (!title) { alert('제목을 입력하세요.'); return; }
+  const body = {
+    title,
+    description: document.getElementById('addDesc').value.trim(),
+    tick_number: parseInt(document.getElementById('addTick').value) || 0,
+  };
+  const res = await fetch(`/api/timelines/${currentTl.id}/events`, {
+    method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body),
+  });
+  if (res.ok) {
+    closeAddEvent();
+    await selectTimeline(currentTl.id);
+  } else {
+    alert('추가 실패');
+  }
+}
+
+// ── 에피소드 편집/삭제 ────────────────────────────────────
+function openEditEvent(evId) {
+  const ev = (currentTl.events || []).find(e => e.id === evId);
+  if (!ev) return;
+  document.getElementById('editEvId').value = evId;
+  document.getElementById('editEvTick').value = ev.tick_number;
+  document.getElementById('editEvTitle').value = ev.title;
+  document.getElementById('editEvDesc').value = ev.description || '';
+  editEventModal.show();
+}
+async function saveEditEvent() {
+  const id = parseInt(document.getElementById('editEvId').value);
+  const body = {
+    tick_number: parseInt(document.getElementById('editEvTick').value) || 0,
+    title: document.getElementById('editEvTitle').value.trim(),
+    description: document.getElementById('editEvDesc').value.trim(),
+  };
+  if (!body.title) { alert('제목을 입력하세요.'); return; }
+  const res = await fetch(`/api/timeline-events/${id}`, {
+    method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body),
+  });
+  if (res.ok) {
+    editEventModal.hide();
+    await selectTimeline(currentTl.id);
+  } else {
+    alert('저장 실패');
+  }
+}
+async function deleteEvent(evId) {
+  if (!confirm('이 에피소드를 삭제하시겠습니까?')) return;
+  const res = await fetch(`/api/timeline-events/${evId}`, { method: 'DELETE' });
+  if (res.ok) await selectTimeline(currentTl.id);
+}
+
+// ── 유틸 ────────────────────────────────────────────────
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function fmtDate(iso) {
+  if (!iso) return '';
+  return new Date(iso).toLocaleDateString('ko-KR', { month:'short', day:'numeric' });
+}
+</script>
+{% endblock %}

@@ -8,7 +8,7 @@ import json as _json
 from collections import Counter
 from flask import Flask, jsonify, request, render_template, abort, Response, send_from_directory
 from werkzeug.utils import secure_filename
-from models import db, WorldEntry, SimulationConfig, SimulationRun, SimulationLog, WorldSnapshot, AppSettings, CATEGORIES
+from models import db, WorldEntry, SimulationConfig, SimulationRun, SimulationLog, WorldSnapshot, AppSettings, Timeline, TimelineEvent, CATEGORIES
 from datetime import datetime
 
 app = Flask(__name__)
@@ -35,6 +35,7 @@ with app.app_context():
         ("world_entries",    "keywords",                "TEXT DEFAULT ''"),
         ("world_entries",    "image_filename",          "TEXT"),
         ("app_settings",     "rag_token_budget",        "INTEGER DEFAULT 0"),
+        ("simulation_runs",  "timeline_id",             "INTEGER"),
     ]
     with db.engine.connect() as conn:
         for table, col, col_def in _migrate_columns:
@@ -89,6 +90,11 @@ def graph_page():
 @app.route("/stats")
 def stats_page():
     return render_template("stats.html")
+
+
+@app.route("/timeline")
+def timeline_page():
+    return render_template("timeline.html")
 
 
 @app.route("/storage/<path:filename>")
@@ -400,6 +406,133 @@ def update_settings():
 
 
 # ─────────────────────────────────────────
+#  타임라인 API
+# ─────────────────────────────────────────
+
+@app.route("/api/timelines", methods=["GET"])
+def list_timelines():
+    tls = Timeline.query.order_by(Timeline.created_at.desc()).all()
+    return jsonify([t.to_dict() for t in tls])
+
+
+@app.route("/api/timelines", methods=["POST"])
+def create_timeline():
+    data = request.json or {}
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "name은 필수입니다."}), 400
+    tl = Timeline(name=name, description=data.get("description", ""))
+    db.session.add(tl)
+    db.session.commit()
+    return jsonify(tl.to_dict()), 201
+
+
+@app.route("/api/timelines/<int:tl_id>", methods=["GET"])
+def get_timeline(tl_id):
+    tl = Timeline.query.get_or_404(tl_id)
+    # 이벤트에 엔트리 상세 포함
+    events = []
+    entry_ids_all = set()
+    for ev in tl.events:
+        entry_ids_all.update(ev.affected_entry_ids)
+    entry_map = {e.id: e.to_dict() for e in WorldEntry.query.filter(WorldEntry.id.in_(entry_ids_all)).all()} if entry_ids_all else {}
+    for ev in tl.events:
+        d = ev.to_dict()
+        d["affected_entries"] = [entry_map[eid] for eid in d["affected_entry_ids"] if eid in entry_map]
+        events.append(d)
+    result = tl.to_dict()
+    result["events"] = events
+    return jsonify(result)
+
+
+@app.route("/api/timelines/<int:tl_id>", methods=["PUT"])
+def update_timeline(tl_id):
+    tl = Timeline.query.get_or_404(tl_id)
+    data = request.json or {}
+    if "name" in data:
+        tl.name = data["name"]
+    if "description" in data:
+        tl.description = data["description"]
+    db.session.commit()
+    return jsonify(tl.to_dict())
+
+
+@app.route("/api/timelines/<int:tl_id>", methods=["DELETE"])
+def delete_timeline(tl_id):
+    tl = Timeline.query.get_or_404(tl_id)
+    db.session.delete(tl)
+    db.session.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/timelines/<int:tl_id>/events", methods=["POST"])
+def add_timeline_event(tl_id):
+    """타임라인에 에피소드 수동 추가"""
+    tl = Timeline.query.get_or_404(tl_id)
+    data = request.json or {}
+    title = (data.get("title") or "").strip()
+    if not title:
+        return jsonify({"error": "title은 필수입니다."}), 400
+    # order_index: 같은 tick 내 마지막 순서
+    max_order = db.session.query(db.func.max(TimelineEvent.order_index)).filter_by(
+        timeline_id=tl_id, tick_number=data.get("tick_number", 0)
+    ).scalar() or 0
+    ev = TimelineEvent(
+        timeline_id=tl_id,
+        tick_number=int(data.get("tick_number", 0)),
+        order_index=max_order + 1,
+        title=title,
+        description=data.get("description", ""),
+        event_type="user",
+    )
+    ev.affected_entry_ids = data.get("affected_entry_ids", [])
+    db.session.add(ev)
+    db.session.commit()
+    return jsonify(ev.to_dict()), 201
+
+
+@app.route("/api/timeline-events/<int:ev_id>", methods=["PUT"])
+def update_timeline_event(ev_id):
+    ev = TimelineEvent.query.get_or_404(ev_id)
+    data = request.json or {}
+    if "title" in data:
+        ev.title = data["title"]
+    if "description" in data:
+        ev.description = data["description"]
+    if "tick_number" in data:
+        ev.tick_number = int(data["tick_number"])
+    if "affected_entry_ids" in data:
+        ev.affected_entry_ids = data["affected_entry_ids"]
+    db.session.commit()
+    return jsonify(ev.to_dict())
+
+
+@app.route("/api/timeline-events/<int:ev_id>", methods=["DELETE"])
+def delete_timeline_event(ev_id):
+    ev = TimelineEvent.query.get_or_404(ev_id)
+    db.session.delete(ev)
+    db.session.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/entries/<int:entry_id>/timeline-events", methods=["GET"])
+def get_entry_timeline_events(entry_id):
+    """특정 엔트리에 관련된 모든 타임라인 이벤트"""
+    # affected_entry_ids_json에 entry_id가 포함된 이벤트를 JSON like 검색
+    events = TimelineEvent.query.filter(
+        TimelineEvent.affected_entry_ids_json.contains(str(entry_id))
+    ).order_by(TimelineEvent.tick_number).all()
+    # 정확한 ID 매칭 (문자열 포함 검색이므로 재확인)
+    result = [ev.to_dict() for ev in events if entry_id in ev.affected_entry_ids]
+    # 타임라인 이름 추가
+    tl_ids = {ev["timeline_id"] for ev in result}
+    tl_map = {t.id: t.name for t in Timeline.query.filter(Timeline.id.in_(tl_ids)).all()}
+    for ev in result:
+        ev["timeline_name"] = tl_map.get(ev["timeline_id"], "")
+    return jsonify(result)
+
+
+# ─────────────────────────────────────────
 #  연구 통계 API
 # ─────────────────────────────────────────
 
@@ -532,6 +665,19 @@ def start_run():
     import json as _json
     entry_ids = data.get("entry_ids")  # None이면 전체
     exclude_llm = bool(data.get("exclude_llm_entries", False))
+
+    # 타임라인 연결 처리
+    timeline_id = data.get("timeline_id")  # 기존 타임라인 ID
+    new_timeline_name = (data.get("new_timeline_name") or "").strip()
+    if new_timeline_name:
+        tl = Timeline(name=new_timeline_name, description=f"시뮬레이션 '{config.name}' 자동 생성")
+        db.session.add(tl)
+        db.session.flush()
+        timeline_id = tl.id
+    elif timeline_id:
+        if not Timeline.query.get(timeline_id):
+            timeline_id = None
+
     run = SimulationRun(
         config_id=config.id,
         status="pending",
@@ -539,6 +685,7 @@ def start_run():
         total_ticks=config.tick_count,
         selected_entry_ids_json=_json.dumps(entry_ids) if entry_ids else None,
         exclude_llm_entries=exclude_llm,
+        timeline_id=timeline_id,
     )
     db.session.add(run)
     db.session.commit()

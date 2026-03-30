@@ -3,7 +3,7 @@
 토큰 사용량 추적 및 컨텍스트 한계 시 자동 요약 포함
 """
 from datetime import datetime
-from models import db, WorldEntry, SimulationRun, SimulationLog, AppSettings, CREATOR_LLM, CREATOR_USER
+from models import db, WorldEntry, SimulationRun, SimulationLog, TimelineEvent, AppSettings, CREATOR_LLM, CREATOR_USER
 import llm_client
 
 
@@ -89,6 +89,11 @@ def run_simulation(run_id: int, app):
                     db.session.add(rag_log)
 
                 _apply_tick_result(run, tick, result)
+
+                # 타임라인 연결된 경우 에피소드 자동 기록
+                if run.timeline_id:
+                    _record_timeline_event(run, tick, result)
+
                 db.session.commit()
 
             if run.status != "cancelled":
@@ -290,6 +295,56 @@ def _apply_tick_result(run: SimulationRun, tick: int, result: dict):
             tokens_in=0, tokens_out=0, tokens_total=0,
         )
         db.session.add(log)
+
+
+def _record_timeline_event(run: SimulationRun, tick: int, result: dict):
+    """틱 결과를 타임라인 에피소드로 자동 기록"""
+    reasoning = result.get("reasoning", "")
+    events = result.get("events", [])
+    new_entries = result.get("new_entries", [])
+    deactivated = result.get("deactivated_entries", [])
+
+    # 이번 틱에서 영향받은 엔트리 ID 수집
+    affected_ids = set()
+    for ev in events:
+        affected_ids.update(ev.get("affected_entry_ids", []))
+    for upd in result.get("entry_updates", []):
+        if upd.get("id"):
+            affected_ids.add(upd["id"])
+    for deact in deactivated:
+        if deact.get("id"):
+            affected_ids.add(deact["id"])
+
+    # 에피소드 제목: 첫 번째 이벤트 설명 또는 기본값
+    if events:
+        title = events[0].get("description", f"틱 {tick} 이벤트")[:120]
+    elif new_entries:
+        title = f"틱 {tick}: {new_entries[0].get('title', '새 엔트리')} 등 {len(new_entries)}개 생성"
+    else:
+        title = f"틱 {tick} 진행"
+
+    # 설명: LLM 추론 요약
+    description = reasoning or ""
+    if len(events) > 1:
+        extras = [e.get("description", "") for e in events[1:4]]
+        description += "\n\n" + "\n".join(f"• {d}" for d in extras if d)
+
+    # order_index: 같은 tick 내 순서
+    existing = TimelineEvent.query.filter_by(
+        timeline_id=run.timeline_id, tick_number=tick
+    ).count()
+
+    ev = TimelineEvent(
+        timeline_id=run.timeline_id,
+        run_id=run.id,
+        tick_number=tick,
+        order_index=existing,
+        title=title.strip(),
+        description=description.strip(),
+        event_type="auto",
+    )
+    ev.affected_entry_ids = list(affected_ids)
+    db.session.add(ev)
 
 
 def _log_error(run: SimulationRun, error_msg: str):

@@ -123,6 +123,7 @@ class SimulationRun(db.Model):
     total_tokens = db.Column(db.Integer, default=0)
     selected_entry_ids_json = db.Column(db.Text, nullable=True)  # None=전체
     exclude_llm_entries = db.Column(db.Boolean, default=False)   # LLM 생성 엔트리 제외 여부
+    timeline_id = db.Column(db.Integer, db.ForeignKey("timelines.id"), nullable=True)  # 연결된 타임라인
     started_at = db.Column(db.DateTime, default=datetime.utcnow)
     ended_at = db.Column(db.DateTime, nullable=True)
 
@@ -139,6 +140,7 @@ class SimulationRun(db.Model):
             "total_tokens_out": self.total_tokens_out,
             "total_tokens": self.total_tokens,
             "exclude_llm_entries": self.exclude_llm_entries,
+            "timeline_id": self.timeline_id,
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "ended_at": self.ended_at.isoformat() if self.ended_at else None,
         }
@@ -212,3 +214,77 @@ class WorldSnapshot(db.Model):
             except Exception:
                 d["entries"] = []
         return d
+
+
+# ─────────────────────────────────────────────────────────────
+#  타임라인 시스템
+# ─────────────────────────────────────────────────────────────
+
+class Timeline(db.Model):
+    """대 타임라인 (스토리 아크 단위)"""
+    __tablename__ = "timelines"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text, default="")
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    events = db.relationship(
+        "TimelineEvent",
+        backref="timeline",
+        order_by="TimelineEvent.tick_number, TimelineEvent.order_index",
+        cascade="all, delete-orphan",
+    )
+
+    def to_dict(self, include_events=False):
+        d = {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "event_count": len(self.events),
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+        if include_events:
+            d["events"] = [e.to_dict() for e in self.events]
+        return d
+
+
+class TimelineEvent(db.Model):
+    """타임라인 에피소드 (틱 단위 자동 기록 또는 수동 추가)"""
+    __tablename__ = "timeline_events"
+
+    id = db.Column(db.Integer, primary_key=True)
+    timeline_id = db.Column(db.Integer, db.ForeignKey("timelines.id", ondelete="CASCADE"), nullable=False)
+    run_id = db.Column(db.Integer, db.ForeignKey("simulation_runs.id"), nullable=True)
+    tick_number = db.Column(db.Integer, default=0)
+    order_index = db.Column(db.Integer, default=0)
+    title = db.Column(db.String(300), nullable=False)
+    description = db.Column(db.Text, default="")
+    event_type = db.Column(db.String(20), default="auto")  # auto | user
+    affected_entry_ids_json = db.Column(db.Text, default="[]")
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    @property
+    def affected_entry_ids(self):
+        try:
+            return json.loads(self.affected_entry_ids_json or "[]")
+        except Exception:
+            return []
+
+    @affected_entry_ids.setter
+    def affected_entry_ids(self, value):
+        self.affected_entry_ids_json = json.dumps(value or [])
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "timeline_id": self.timeline_id,
+            "run_id": self.run_id,
+            "tick_number": self.tick_number,
+            "order_index": self.order_index,
+            "title": self.title,
+            "description": self.description,
+            "event_type": self.event_type,
+            "affected_entry_ids": self.affected_entry_ids,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }

@@ -2,84 +2,107 @@
 {% block title %}관계도{% endblock %}
 
 {% block content %}
-<!-- vis.js Network CDN -->
 <script src="https://cdn.jsdelivr.net/npm/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
 
 <style>
   #graphWrap {
     display: flex;
     gap: 1rem;
-    height: calc(100vh - 130px);
+    height: calc(100vh - 128px);
   }
   #networkCanvas {
     flex: 1;
-    border-radius: 10px;
+    border-radius: 12px;
     border: 1px solid var(--border);
-    background: var(--bg-card);
+    background: #0d1018;
     overflow: hidden;
     position: relative;
   }
-  #networkCanvas .empty-hint {
-    position: absolute;
-    top: 50%; left: 50%;
+  #emptyHint {
+    position: absolute; top: 50%; left: 50%;
     transform: translate(-50%, -50%);
-    color: var(--text-secondary);
-    text-align: center;
-    pointer-events: none;
+    color: var(--text-muted); text-align: center; pointer-events: none;
   }
   #sidePanel {
-    width: 360px;
-    flex-shrink: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
+    width: 340px; flex-shrink: 0;
+    display: flex; flex-direction: column; gap: 0.75rem;
     overflow-y: auto;
   }
-  /* 그래프 컨트롤 바 */
+  /* 컨트롤 바 */
   #graphControls {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-    margin-bottom: 0.75rem;
+    display: flex; align-items: center; gap: 0.6rem;
+    flex-wrap: wrap; margin-bottom: 0.75rem;
   }
   /* 범례 */
-  .legend-dot {
-    display: inline-block;
-    width: 12px; height: 12px;
-    border-radius: 50%;
-    margin-right: 4px;
+  .legend-pill {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 3px 10px; border-radius: 20px;
+    font-size: 0.73rem; border: 1px solid; font-weight: 500;
+    cursor: pointer; transition: opacity 0.15s;
+    user-select: none;
   }
-  /* 편집 토글 */
-  #viewBlock, #editBlock { transition: opacity 0.15s; }
-  /* 노드 선택 강조 */
-  .node-selected { box-shadow: 0 0 0 2px var(--accent); }
+  .legend-pill.muted { opacity: 0.35; }
+  .legend-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+  /* 사이드 패널 카드 */
+  .side-card {
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px;
+    overflow: hidden;
+  }
+  .side-card-header {
+    padding: 12px 16px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .side-card-body { padding: 14px 16px; }
+  .meta-row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+  .meta-label { font-size: 0.72rem; color: var(--text-muted); }
+  .meta-val   { font-size: 0.82rem; color: var(--text-secondary); }
+
+  /* 연결 노드 아이템 */
+  .connected-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 8px; border-radius: 8px;
+    cursor: pointer; transition: background 0.12s;
+  }
+  .connected-item:hover { background: rgba(255,255,255,0.05); }
+
+  /* 편집 폼 */
+  .form-control, .form-select {
+    background: var(--bg-input) !important; border-color: var(--border) !important;
+    color: var(--text-primary) !important; font-size: 0.85rem;
+  }
+  .form-control:focus, .form-select:focus {
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 2px rgba(139,127,247,0.2) !important;
+  }
+
+  /* 선택 노드 강조 링 → vis.js의 highlight 색으로 처리 */
 </style>
 
-<!-- 상단 컨트롤 -->
+<!-- 컨트롤 바 -->
 <div id="graphControls">
-  <span style="font-weight:600; font-size:0.9rem;"><i class="bi bi-diagram-3 me-1"></i>엔트리 관계도</span>
-  <div class="d-flex gap-1 ms-2 flex-wrap" id="legendBar">
-    <!-- JS로 채움 -->
-  </div>
-  <div class="ms-auto d-flex gap-2 align-items-center flex-wrap">
+  <span style="font-weight:600; font-size:0.88rem; color:var(--text-primary);">
+    <i class="bi bi-diagram-3 me-1" style="color:var(--accent);"></i>엔트리 관계도
+  </span>
+  <div id="legendBar" class="d-flex flex-wrap gap-1 ms-2"></div>
+  <div class="ms-auto d-flex gap-2 align-items-center">
     <div class="form-check form-switch mb-0 d-flex align-items-center gap-1">
       <input class="form-check-input" type="checkbox" id="showInactiveGraph" onchange="reloadGraph()">
-      <label class="form-check-label small" for="showInactiveGraph">비활성 포함</label>
+      <label class="form-check-label small" for="showInactiveGraph" style="font-size:0.78rem;">비활성 포함</label>
     </div>
-    <button class="btn btn-sm btn-outline-secondary" onclick="network && network.fit()">
-      <i class="bi bi-fullscreen me-1"></i>전체 보기
+    <button class="btn btn-sm btn-outline-secondary" onclick="network && network.fit({ animation: { duration:400, easingFunction:'easeInOutQuad' } })">
+      <i class="bi bi-fullscreen"></i>
     </button>
     <button class="btn btn-sm btn-outline-secondary" onclick="reloadGraph()">
-      <i class="bi bi-arrow-clockwise me-1"></i>새로고침
+      <i class="bi bi-arrow-clockwise"></i>
     </button>
   </div>
 </div>
 
 <div id="graphWrap">
-  <!-- 그래프 캔버스 -->
+  <!-- 캔버스 -->
   <div id="networkCanvas">
-    <div class="empty-hint" id="emptyHint" style="display:none;">
+    <div id="emptyHint" style="display:none;">
       <i class="bi bi-diagram-3 display-4 opacity-25 d-block mb-2"></i>
       <p class="small">등록된 엔트리가 없습니다.</p>
     </div>
@@ -87,58 +110,63 @@
 
   <!-- 사이드 패널 -->
   <div id="sidePanel">
-    <!-- 선택 전 안내 -->
-    <div class="card" id="sideEmpty">
-      <div class="card-body text-center py-5" style="color:var(--text-secondary);">
-        <i class="bi bi-cursor display-4 opacity-25 d-block mb-3"></i>
-        <p class="small">그래프에서 노드를 클릭하면<br>상세 정보가 여기에 표시됩니다.</p>
+
+    <!-- 빈 상태 안내 -->
+    <div class="side-card" id="sideEmpty">
+      <div class="side-card-body text-center py-5" style="color:var(--text-muted);">
+        <i class="bi bi-cursor display-4 opacity-20 d-block mb-3"></i>
+        <p class="small mb-0">노드를 클릭하면<br>상세 정보가 표시됩니다.</p>
       </div>
     </div>
 
-    <!-- 상세/편집 카드 -->
-    <div class="card" id="sideDetail" style="display:none;">
-      <div class="card-header py-3 d-flex align-items-center justify-content-between">
-        <div class="d-flex align-items-center gap-2">
-          <span id="sdCategoryBadge"></span>
-          <span id="sdTitle" class="fw-bold" style="font-size:0.95rem;"></span>
-        </div>
-        <div class="d-flex gap-1">
-          <button class="btn btn-sm btn-outline-secondary" id="editToggleBtn" onclick="toggleEditMode()">
-            <i class="bi bi-pencil me-1"></i>편집
+    <!-- 상세 카드 -->
+    <div class="side-card" id="sideDetail" style="display:none;">
+      <div class="side-card-header">
+        <span id="sdCategoryBadge"></span>
+        <span id="sdTitle" class="fw-semibold" style="font-size:0.9rem; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></span>
+        <div class="d-flex gap-1 ms-2">
+          <button class="btn btn-sm" id="editToggleBtn" onclick="toggleEditMode()"
+            style="padding:3px 8px;font-size:0.75rem;border:1px solid var(--border);color:var(--text-secondary);">
+            <i class="bi bi-pencil"></i>
           </button>
-          <button class="btn btn-sm btn-outline-danger" onclick="deleteFromGraph()">
+          <button class="btn btn-sm" onclick="deleteFromGraph()"
+            style="padding:3px 8px;font-size:0.75rem;border:1px solid rgba(255,112,112,0.3);color:#ff7070;">
             <i class="bi bi-trash"></i>
           </button>
         </div>
       </div>
-      <div class="card-body p-3">
 
+      <div class="side-card-body">
         <!-- 뷰 모드 -->
         <div id="viewBlock">
           <div class="mb-3">
-            <div class="small text-muted mb-1">내용</div>
-            <div id="sdContent" style="white-space:pre-wrap; font-size:0.875rem; line-height:1.7;"></div>
+            <div class="meta-label mb-1">내용</div>
+            <div id="sdContent" style="white-space:pre-wrap;font-size:0.84rem;line-height:1.7;color:var(--text-secondary);max-height:200px;overflow-y:auto;"></div>
           </div>
-          <div class="mb-2">
-            <div class="small text-muted mb-1">참조 엔트리</div>
+          <div class="mb-3">
+            <div class="meta-label mb-1">키워드</div>
+            <div id="sdKeywords"></div>
+          </div>
+          <div class="mb-3">
+            <div class="meta-label mb-1">참조 엔트리</div>
             <div id="sdRefs" class="d-flex flex-wrap gap-1"></div>
           </div>
-          <hr style="border-color:var(--border);">
-          <div class="row g-2" style="font-size:0.8rem; color:var(--text-secondary);">
-            <div class="col-6"><span class="text-muted">생성 틱</span><br><span id="sdTick"></span></div>
-            <div class="col-6"><span class="text-muted">상태</span><br><span id="sdStatus"></span></div>
-            <div class="col-12 mt-1"><span class="text-muted">등록일</span><br><span id="sdCreatedAt"></span></div>
+          <hr style="border-color:var(--border); margin:10px 0;">
+          <div class="d-flex gap-3 flex-wrap" style="font-size:0.78rem;">
+            <div><span class="meta-label">생성 틱</span><br><span id="sdTick" class="meta-val"></span></div>
+            <div><span class="meta-label">상태</span><br><span id="sdStatus"></span></div>
+            <div><span class="meta-label">등록일</span><br><span id="sdCreatedAt" class="meta-val"></span></div>
           </div>
         </div>
 
         <!-- 편집 모드 -->
         <div id="editBlock" style="display:none;">
           <div class="mb-3">
-            <label class="form-label small">제목</label>
+            <label class="form-label" style="font-size:0.78rem;">제목</label>
             <input type="text" class="form-control form-control-sm" id="sdEditTitle">
           </div>
           <div class="mb-3">
-            <label class="form-label small">분류</label>
+            <label class="form-label" style="font-size:0.78rem;">분류</label>
             <select class="form-select form-select-sm" id="sdEditCategory">
               {% for cat in categories %}
               <option value="{{ cat }}">{{ cat }}</option>
@@ -147,62 +175,66 @@
           </div>
           <div class="mb-3">
             <div class="d-flex align-items-center justify-content-between mb-1">
-              <label class="form-label small mb-0">내용</label>
-              <button type="button" class="btn btn-outline-secondary" style="font-size:0.7rem;padding:1px 6px;"
-                onclick="stripMdSide()"><i class="bi bi-eraser me-1"></i>MD 제거</button>
+              <label class="form-label mb-0" style="font-size:0.78rem;">내용</label>
+              <button type="button" onclick="stripMdSide()"
+                style="background:none;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;padding:1px 6px;font-size:0.7rem;cursor:pointer;">
+                <i class="bi bi-eraser"></i> MD 제거</button>
             </div>
             <textarea class="form-control form-control-sm" id="sdEditContent" rows="8"
               oninput="updateSideCharCount()"></textarea>
-            <div id="sdCharCount" class="small mt-1" style="color:var(--text-secondary);"></div>
+            <div id="sdCharCount" class="small mt-1" style="color:var(--text-muted); font-size:0.72rem;"></div>
           </div>
           <div class="mb-3">
-            <label class="form-label small">참조 ID (콤마로 구분)</label>
+            <label class="form-label" style="font-size:0.78rem;">참조 ID (콤마 구분)</label>
             <input type="text" class="form-control form-control-sm" id="sdEditRefs" placeholder="예: 1, 3, 7">
           </div>
           <div class="mb-3 form-check">
             <input type="checkbox" class="form-check-input" id="sdEditActive">
-            <label class="form-check-label small" for="sdEditActive">활성 상태</label>
+            <label class="form-check-label" style="font-size:0.78rem;" for="sdEditActive">활성 상태</label>
           </div>
           <div class="d-flex gap-2">
-            <button class="btn btn-sm btn-primary" onclick="saveFromGraph()">
+            <button class="btn btn-sm btn-primary" onclick="saveFromGraph()" style="font-size:0.8rem;">
               <i class="bi bi-check-lg me-1"></i>저장
             </button>
-            <button class="btn btn-sm btn-outline-secondary" onclick="cancelEditMode()">취소</button>
+            <button class="btn btn-sm btn-outline-secondary" onclick="cancelEditMode()" style="font-size:0.8rem;">취소</button>
           </div>
         </div>
-
       </div>
     </div>
 
-    <!-- 연결된 노드 목록 -->
-    <div class="card" id="sideConnected" style="display:none;">
-      <div class="card-header py-2" style="font-size:0.85rem;">
-        <i class="bi bi-link-45deg me-1"></i>연결된 엔트리
+    <!-- 연결 엔트리 -->
+    <div class="side-card" id="sideConnected" style="display:none;">
+      <div class="side-card-header" style="padding:10px 16px;">
+        <i class="bi bi-share me-1" style="color:var(--accent); font-size:0.85rem;"></i>
+        <span style="font-size:0.8rem; font-weight:500;">연결된 엔트리</span>
+        <span id="connectedCount" class="ms-auto badge" style="background:rgba(139,127,247,0.2);color:var(--accent);font-size:0.7rem;"></span>
       </div>
-      <div class="card-body p-2" id="connectedList"></div>
+      <div class="side-card-body p-2" id="connectedList"></div>
     </div>
+
   </div>
 </div>
 
 <script>
-// ── 카테고리 색상 ────────────────────────────────
-const CAT_COLORS = {
-  '세력': { bg: '#3b6fd4', border: '#5a8fee', font: '#e8f0ff' },
-  '인물': { bg: '#7c4dbb', border: '#a070d4', font: '#f0e8ff' },
-  '관념': { bg: '#2a8a6e', border: '#40b890', font: '#e0fff5' },
-  '물건': { bg: '#b86a1e', border: '#de8a40', font: '#fff3e0' },
-  '종족': { bg: '#1e7aa0', border: '#3aa0cc', font: '#e0f4ff' },
-  '사건': { bg: '#c0392b', border: '#e05040', font: '#ffe8e5' },
+// ── 팔레트 ─────────────────────────────────────────────────
+// 조용하고 세련된 색상 (배경 어두운 tone-on-tone)
+const PALETTE = {
+  '세력': { node: '#e05252', border: '#ff8080', glow: '#ff404044', font: '#fff0f0' },
+  '인물': { node: '#4a90d9', border: '#72b0f0', glow: '#4a90d944', font: '#e8f4ff' },
+  '관념': { node: '#8a65d4', border: '#b090f0', glow: '#8a65d444', font: '#f0eaff' },
+  '물건': { node: '#c8823a', border: '#e8a860', glow: '#c8823a44', font: '#fff4e4' },
+  '종족': { node: '#3aaa7a', border: '#60d0a0', glow: '#3aaa7a44', font: '#e4fff4' },
+  '사건': { node: '#c8b040', border: '#e8d060', glow: '#c8b04044', font: '#fffce4' },
 };
-const DEFAULT_COLOR = { bg: '#4a5568', border: '#718096', font: '#edf2f7' };
+const DEFAULT_PAL = { node: '#5a6080', border: '#8890b0', glow: '#5a608044', font: '#e4e8ff' };
 
 let network = null;
 let allEntries = [];
 let selectedEntry = null;
 let simMaxChars = 1000;
 let isEditMode = false;
+let hiddenCats = new Set();
 
-// ── 초기화 ───────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
   buildLegend();
   await loadSimMaxChars();
@@ -211,127 +243,145 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 async function loadSimMaxChars() {
   try {
-    const res = await fetch('/api/settings');
-    const s = await res.json();
+    const r = await fetch('/api/settings');
+    const s = await r.json();
     simMaxChars = s.max_user_entry_chars ?? 1000;
-  } catch (e) {}
+  } catch(e) {}
 }
 
+// ── 범례 (클릭으로 카테고리 토글) ──────────────────────────
 function buildLegend() {
   const bar = document.getElementById('legendBar');
-  bar.innerHTML = Object.entries(CAT_COLORS).map(([name, c]) =>
-    `<span class="small" style="display:inline-flex;align-items:center;margin-right:6px;">
-      <span class="legend-dot" style="background:${c.bg};border:2px solid ${c.border};"></span>${name}
-    </span>`
-  ).join('');
+  bar.innerHTML = Object.entries(PALETTE).map(([name, p]) => `
+    <span class="legend-pill" data-cat="${name}"
+      style="background:${p.node}18;color:${p.border};border-color:${p.node}44;"
+      onclick="toggleCat('${name}')">
+      <span class="legend-dot" style="background:${p.node};"></span>${name}
+    </span>
+  `).join('');
 }
 
-// ── 그래프 로드 ──────────────────────────────────
+function toggleCat(cat) {
+  if (hiddenCats.has(cat)) hiddenCats.delete(cat);
+  else hiddenCats.add(cat);
+  document.querySelectorAll('.legend-pill').forEach(el => {
+    el.classList.toggle('muted', hiddenCats.has(el.dataset.cat));
+  });
+  reloadGraph();
+}
+
+// ── 그래프 로드 ──────────────────────────────────────────
 async function reloadGraph() {
   const showInactive = document.getElementById('showInactiveGraph').checked;
   const res = await fetch(`/api/entries?active=${!showInactive}`);
   allEntries = await res.json();
 
-  if (allEntries.length === 0) {
-    document.getElementById('emptyHint').style.display = 'block';
-  } else {
-    document.getElementById('emptyHint').style.display = 'none';
-  }
-
-  buildGraph(allEntries);
+  const visible = allEntries.filter(e => !hiddenCats.has(e.category));
+  document.getElementById('emptyHint').style.display = visible.length === 0 ? 'block' : 'none';
+  buildGraph(visible);
 }
 
 function buildGraph(entries) {
   const container = document.getElementById('networkCanvas');
+  const idSet = new Set(entries.map(e => e.id));
 
-  // 노드 생성
-  const nodes = entries.map(e => {
-    const c = CAT_COLORS[e.category] || DEFAULT_COLOR;
+  const nodes = new vis.DataSet(entries.map(e => {
+    const p = PALETTE[e.category] || DEFAULT_PAL;
     const inactive = !e.is_active;
     return {
       id: e.id,
-      label: e.title.length > 14 ? e.title.slice(0, 13) + '…' : e.title,
-      title: `[${e.category}] ${e.title}`,   // hover tooltip
+      label: e.title.length > 15 ? e.title.slice(0, 14) + '…' : e.title,
+      title: `[${e.category}] ${e.title}`,
       color: {
-        background: inactive ? '#3a3a4a' : c.bg,
-        border: inactive ? '#555' : c.border,
-        highlight: { background: c.bg, border: '#fff' },
-        hover: { background: c.bg, border: '#fff' },
+        background: inactive ? '#282c3a' : p.node,
+        border: inactive ? '#44485a' : p.border,
+        highlight: { background: p.node, border: '#ffffff' },
+        hover:      { background: p.node, border: p.border },
       },
-      font: { color: inactive ? '#888' : c.font, size: 13 },
-      shape: shapeFor(e.category),
-      size: 22,
-      opacity: inactive ? 0.5 : 1.0,
+      font: {
+        color: inactive ? '#5a6080' : p.font,
+        size: 12,
+        face: 'Segoe UI, system-ui, sans-serif',
+        vadjust: 0,
+      },
+      shape: 'dot',
+      size: e.created_by === 'user' ? 18 : 13,
+      borderWidth: e.created_by === 'user' ? 2.5 : 1.5,
+      shadow: { enabled: !inactive, color: p.glow, size: 12, x: 0, y: 0 },
+      opacity: inactive ? 0.35 : 1.0,
       _data: e,
     };
-  });
+  }));
 
-  // 엣지 생성 (참조 관계)
   const edgeSet = new Set();
-  const edges = [];
-  const idSet = new Set(entries.map(e => e.id));
+  const edges = new vis.DataSet();
   entries.forEach(e => {
     (e.references || []).forEach(refId => {
       if (!idSet.has(refId)) return;
       const key = [Math.min(e.id, refId), Math.max(e.id, refId)].join('-');
       if (!edgeSet.has(key)) {
         edgeSet.add(key);
-        edges.push({
+        edges.add({
           from: e.id, to: refId,
-          color: { color: 'rgba(140,150,180,0.45)', highlight: 'rgba(200,210,255,0.9)' },
-          width: 1.5,
-          smooth: { type: 'continuous' },
+          color: { color: 'rgba(120,130,160,0.25)', highlight: 'rgba(180,190,255,0.7)', hover: 'rgba(160,170,220,0.5)' },
+          width: 1.2,
+          smooth: { enabled: true, type: 'dynamic', roundness: 0.3 },
+          arrows: { to: { enabled: true, scaleFactor: 0.5 } },
         });
       }
     });
   });
 
-  const data = {
-    nodes: new vis.DataSet(nodes),
-    edges: new vis.DataSet(edges),
-  };
-
   const options = {
     physics: {
-      solver: 'forceAtlas2Based',
-      forceAtlas2Based: { gravitationalConstant: -60, springLength: 130, springConstant: 0.06 },
-      stabilization: { iterations: 150 },
+      enabled: true,
+      solver: 'barnesHut',
+      barnesHut: {
+        gravitationalConstant: -5000,
+        centralGravity: 0.3,
+        springLength: 160,
+        springConstant: 0.04,
+        damping: 0.18,
+        avoidOverlap: 0.6,
+      },
+      stabilization: { enabled: true, iterations: 200, fit: true },
     },
     interaction: {
       hover: true,
-      tooltipDelay: 200,
+      tooltipDelay: 300,
       zoomView: true,
       dragView: true,
+      hideEdgesOnDrag: true,
     },
-    layout: { improvedLayout: true },
+    layout: { improvedLayout: entries.length < 200 },
+    nodes: { chosen: false },
+    edges: { chosen: false },
   };
 
   if (network) network.destroy();
-  network = new vis.Network(container, data, options);
+  network = new vis.Network(container, { nodes, edges }, options);
+
+  network.on('stabilizationIterationsDone', () => {
+    network.setOptions({ physics: { enabled: false } });
+  });
 
   network.on('click', params => {
     if (params.nodes.length > 0) {
-      const nodeId = params.nodes[0];
-      const entry = entries.find(e => e.id === nodeId);
+      const entry = entries.find(e => e.id === params.nodes[0]);
       if (entry) showSidePanel(entry);
     } else {
       clearSidePanel();
     }
   });
 
-  // 선택된 엔트리 유지
+  // 재로드 후 선택 유지
   if (selectedEntry) {
     const still = entries.find(e => e.id === selectedEntry.id);
     if (still) showSidePanel(still);
   }
 }
 
-function shapeFor(cat) {
-  const map = { '세력': 'diamond', '인물': 'ellipse', '관념': 'hexagon', '물건': 'box', '종족': 'triangle', '사건': 'star' };
-  return map[cat] || 'ellipse';
-}
-
-// ── 사이드 패널 ───────────────────────────────────
+// ── 사이드 패널 ───────────────────────────────────────────
 function showSidePanel(entry) {
   selectedEntry = entry;
   isEditMode = false;
@@ -339,64 +389,71 @@ function showSidePanel(entry) {
   document.getElementById('sideEmpty').style.display = 'none';
   document.getElementById('sideDetail').style.display = 'block';
 
-  const c = CAT_COLORS[entry.category] || DEFAULT_COLOR;
+  const p = PALETTE[entry.category] || DEFAULT_PAL;
   document.getElementById('sdCategoryBadge').innerHTML =
-    `<span class="badge" style="background:${c.bg};color:${c.font};font-size:0.75rem;">${entry.category}</span>`;
+    `<span style="background:${p.node}22;color:${p.border};border:1px solid ${p.node}44;
+      border-radius:12px;padding:2px 10px;font-size:0.72rem;font-weight:600;white-space:nowrap;"
+    >${entry.category}</span>`;
   document.getElementById('sdTitle').textContent = entry.title;
-  document.getElementById('sdContent').textContent = entry.content;
-  document.getElementById('sdTick').textContent = entry.created_at_tick != null ? `Tick ${entry.created_at_tick}` : '수동 입력';
-  document.getElementById('sdStatus').innerHTML = entry.is_active
-    ? '<span class="badge bg-success">활성</span>'
-    : '<span class="badge bg-secondary">비활성</span>';
-  document.getElementById('sdCreatedAt').textContent = entry.created_at || '';
+  document.getElementById('sdContent').textContent = entry.content || '';
 
-  // 참조 배지
+  // 키워드
+  const kwEl = document.getElementById('sdKeywords');
+  if (entry.keywords) {
+    kwEl.innerHTML = entry.keywords.split(',').map(k => k.trim()).filter(Boolean).map(k =>
+      `<span style="background:rgba(106,173,255,0.1);color:#6aadff;border:1px solid rgba(106,173,255,0.25);
+        border-radius:12px;padding:2px 9px;font-size:0.7rem;display:inline-block;margin:2px;">${k}</span>`
+    ).join('');
+  } else {
+    kwEl.innerHTML = '<span style="font-size:0.75rem;color:var(--text-muted);">없음</span>';
+  }
+
+  document.getElementById('sdTick').textContent =
+    entry.tick_created === 0 ? '초기 설정' : `틱 ${entry.tick_created}`;
+  document.getElementById('sdStatus').innerHTML = entry.is_active
+    ? '<span style="color:#6eeab0;font-size:0.78rem;">● 활성</span>'
+    : '<span style="color:#ff7070;font-size:0.78rem;">● 비활성</span>';
+  document.getElementById('sdCreatedAt').textContent =
+    entry.created_at ? new Date(entry.created_at).toLocaleString('ko-KR') : '';
+
+  // 참조
   const refsDiv = document.getElementById('sdRefs');
   if (entry.references && entry.references.length > 0) {
     refsDiv.innerHTML = entry.references.map(refId => {
       const ref = allEntries.find(e => e.id === refId);
-      const label = ref ? ref.title : `#${refId}`;
-      const rc = ref ? (CAT_COLORS[ref.category] || DEFAULT_COLOR) : DEFAULT_COLOR;
-      return `<span class="badge" style="background:${rc.bg};color:${rc.font};cursor:pointer;"
-        onclick="jumpToNode(${refId})">${label}</span>`;
-    }).join('');
+      if (!ref) return `<span style="color:var(--text-muted);font-size:0.75rem;">#${refId}</span>`;
+      const rp = PALETTE[ref.category] || DEFAULT_PAL;
+      return `<span onclick="jumpToNode(${refId})" style="background:${rp.node}22;color:${rp.border};
+        border:1px solid ${rp.node}44;border-radius:12px;padding:2px 9px;font-size:0.72rem;
+        cursor:pointer;display:inline-block;">${ref.title}</span>`;
+    }).join(' ');
   } else {
-    refsDiv.innerHTML = '<span class="small text-muted">없음</span>';
+    refsDiv.innerHTML = '<span style="font-size:0.75rem;color:var(--text-muted);">없음</span>';
   }
 
-  // 연결된 노드 (역방향 포함)
   showConnected(entry.id);
-
-  // 뷰모드로 리셋
   showViewMode();
-
-  // 그래프에서 해당 노드 선택 표시
-  network && network.selectNodes([entry.id], false);
-  network && network.focus(entry.id, { scale: 1.2, animation: { duration: 400, easingFunction: 'easeInOutQuad' } });
+  network && network.selectNodes([entry.id]);
+  network && network.focus(entry.id, { scale: 1.1, animation: { duration: 350, easingFunction: 'easeInOutQuad' } });
 }
 
 function showConnected(entryId) {
+  const refs = (selectedEntry?.references || []);
   const connected = allEntries.filter(e =>
-    (e.references || []).includes(entryId) || ((selectedEntry?.references || []).includes(e.id))
-  ).filter(e => e.id !== entryId);
-
+    e.id !== entryId && ((e.references || []).includes(entryId) || refs.includes(e.id))
+  );
   const card = document.getElementById('sideConnected');
   const list = document.getElementById('connectedList');
 
-  if (connected.length === 0) {
-    card.style.display = 'none';
-    return;
-  }
+  if (connected.length === 0) { card.style.display = 'none'; return; }
   card.style.display = 'block';
+  document.getElementById('connectedCount').textContent = connected.length;
   list.innerHTML = connected.map(e => {
-    const c = CAT_COLORS[e.category] || DEFAULT_COLOR;
-    return `<div class="d-flex align-items-center gap-2 py-1 px-1 rounded mb-1"
-        style="cursor:pointer; transition:background 0.15s;"
-        onmouseover="this.style.background='rgba(255,255,255,0.05)'"
-        onmouseout="this.style.background=''"
-        onclick="jumpToNode(${e.id})">
-      <span class="badge" style="background:${c.bg};color:${c.font};font-size:0.7rem;flex-shrink:0;">${e.category}</span>
-      <span style="font-size:0.85rem;">${e.title}</span>
+    const p = PALETTE[e.category] || DEFAULT_PAL;
+    return `<div class="connected-item" onclick="jumpToNode(${e.id})">
+      <span style="background:${p.node}22;color:${p.border};border:1px solid ${p.node}44;
+        border-radius:10px;padding:1px 8px;font-size:0.68rem;white-space:nowrap;flex-shrink:0;">${e.category}</span>
+      <span style="font-size:0.82rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${e.title}</span>
     </div>`;
   }).join('');
 }
@@ -410,14 +467,11 @@ function clearSidePanel() {
 
 function jumpToNode(id) {
   const entry = allEntries.find(e => e.id === id);
-  if (!entry) return;
-  showSidePanel(entry);
+  if (entry) showSidePanel(entry);
 }
 
-// ── 편집 모드 ─────────────────────────────────────
-function toggleEditMode() {
-  isEditMode ? cancelEditMode() : startEditMode();
-}
+// ── 편집 모드 ─────────────────────────────────────────────
+function toggleEditMode() { isEditMode ? cancelEditMode() : startEditMode(); }
 
 function startEditMode() {
   isEditMode = true;
@@ -431,21 +485,17 @@ function startEditMode() {
   updateSideCharCount();
 }
 
-function cancelEditMode() {
-  isEditMode = false;
-  showViewMode();
-}
+function cancelEditMode() { isEditMode = false; showViewMode(); }
 
 function showViewMode() {
   document.getElementById('viewBlock').style.display = 'block';
   document.getElementById('editBlock').style.display = 'none';
-  document.getElementById('editToggleBtn').innerHTML = '<i class="bi bi-pencil me-1"></i>편집';
+  document.getElementById('editToggleBtn').innerHTML = '<i class="bi bi-pencil"></i>';
 }
-
 function showEditMode() {
   document.getElementById('viewBlock').style.display = 'none';
   document.getElementById('editBlock').style.display = 'block';
-  document.getElementById('editToggleBtn').innerHTML = '<i class="bi bi-x me-1"></i>취소';
+  document.getElementById('editToggleBtn').innerHTML = '<i class="bi bi-x"></i>';
 }
 
 async function saveFromGraph() {
@@ -463,61 +513,42 @@ async function saveFromGraph() {
   const res = await fetch(`/api/entries/${selectedEntry.id}`, {
     method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   });
-  if (res.ok) {
-    await reloadGraph();
-  } else {
-    alert('저장 실패');
-  }
+  if (res.ok) await reloadGraph();
+  else alert('저장 실패');
 }
 
 async function deleteFromGraph() {
-  if (!selectedEntry) return;
-  if (!confirm(`"${selectedEntry.title}" 엔트리를 삭제하시겠습니까?`)) return;
+  if (!selectedEntry || !confirm(`"${selectedEntry.title}" 엔트리를 삭제하시겠습니까?`)) return;
   const res = await fetch(`/api/entries/${selectedEntry.id}`, { method: 'DELETE' });
-  if (res.ok) {
-    selectedEntry = null;
-    clearSidePanel();
-    await reloadGraph();
-  }
+  if (res.ok) { selectedEntry = null; clearSidePanel(); await reloadGraph(); }
 }
 
-// ── 글자수 카운터 ──────────────────────────────────
+// ── 글자수 카운터 ─────────────────────────────────────────
 function updateSideCharCount() {
   const ta = document.getElementById('sdEditContent');
-  const counter = document.getElementById('sdCharCount');
   const len = ta.value.length;
+  const el = document.getElementById('sdCharCount');
   if (simMaxChars > 0) {
     const over = len - simMaxChars;
-    if (over > 0) {
-      counter.innerHTML = `<span style="color:#f59e0b">${len}자</span> / 제한: ${simMaxChars}자 &nbsp;<span style="color:#f59e0b">⚠ ${over}자 초과</span>`;
-    } else {
-      counter.textContent = `${len}자 / 제한: ${simMaxChars}자`;
-    }
+    el.innerHTML = over > 0
+      ? `<span style="color:#f59e0b;">${len}자 / ${simMaxChars}자 ⚠ ${over}자 초과</span>`
+      : `${len}자 / ${simMaxChars}자`;
   } else {
-    counter.textContent = `${len}자 (제한 없음)`;
+    el.textContent = `${len}자`;
   }
 }
 
-// ── MD 제거 (사이드 패널) ──────────────────────────
+// ── MD 제거 ───────────────────────────────────────────────
 function stripMarkdown(text) {
   return text
-    .replace(/```[\w]*\n?([\s\S]*?)```/g, '$1')
-    .replace(/`([^`]+)`/g, '$1')
+    .replace(/```[\w]*\n?([\s\S]*?)```/g, '$1').replace(/`([^`]+)`/g, '$1')
     .replace(/^#{1,6}\s+/gm, '')
-    .replace(/\*\*\*(.+?)\*\*\*/g, '$1').replace(/___(.+?)___/g, '$1')
-    .replace(/\*\*(.+?)\*\*/g, '$1').replace(/__(.+?)__/g, '$1')
-    .replace(/\*(.+?)\*/g, '$1').replace(/_(.+?)_/g, '$1')
-    .replace(/~~(.+?)~~/g, '$1')
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
-    .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
-    .replace(/^>\s*/gm, '')
-    .replace(/^(\s*[-*_]){3,}\s*$/gm, '')
-    .replace(/^[\s]*[-*+]\s+/gm, '')
-    .replace(/^[\s]*\d+\.\s+/gm, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+    .replace(/\*\*\*(.+?)\*\*\*/g, '$1').replace(/\*\*(.+?)\*\*/g, '$1').replace(/\*(.+?)\*/g, '$1')
+    .replace(/__(.+?)__/g, '$1').replace(/_(.+?)_/g, '$1').replace(/~~(.+?)~~/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
+    .replace(/^>\s*/gm, '').replace(/^[\s]*[-*+]\s+/gm, '').replace(/^[\s]*\d+\.\s+/gm, '')
+    .replace(/\n{3,}/g, '\n\n').trim();
 }
-
 function stripMdSide() {
   const ta = document.getElementById('sdEditContent');
   ta.value = stripMarkdown(ta.value);

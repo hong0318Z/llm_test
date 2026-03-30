@@ -1,9 +1,13 @@
 import os
+import re
+import uuid
 import threading
 import csv
 import io
 import json as _json
-from flask import Flask, jsonify, request, render_template, abort, Response
+from collections import Counter
+from flask import Flask, jsonify, request, render_template, abort, Response, send_from_directory
+from werkzeug.utils import secure_filename
 from models import db, WorldEntry, SimulationConfig, SimulationRun, SimulationLog, WorldSnapshot, AppSettings, CATEGORIES
 from datetime import datetime
 
@@ -28,6 +32,9 @@ with app.app_context():
         ("simulation_logs",  "tokens_in",               "INTEGER DEFAULT 0"),
         ("simulation_logs",  "tokens_out",              "INTEGER DEFAULT 0"),
         ("simulation_logs",  "tokens_total",            "INTEGER DEFAULT 0"),
+        ("world_entries",    "keywords",                "TEXT DEFAULT ''"),
+        ("world_entries",    "image_filename",          "TEXT"),
+        ("app_settings",     "rag_token_budget",        "INTEGER DEFAULT 0"),
     ]
     with db.engine.connect() as conn:
         for table, col, col_def in _migrate_columns:
@@ -44,6 +51,15 @@ with app.app_context():
         r.ended_at = datetime.utcnow()
     if orphans:
         db.session.commit()
+
+
+STORAGE_DIR = os.path.join(os.path.dirname(__file__), "storage")
+ALLOWED_IMAGE_EXT = {"jpg", "jpeg", "png", "gif", "webp"}
+MAX_IMAGE_SIZE = 5 * 1024 * 1024  # 5MB
+
+
+def _allowed_image(filename: str) -> bool:
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_IMAGE_EXT
 
 
 # ─────────────────────────────────────────
@@ -68,6 +84,17 @@ def logs_page():
 @app.route("/graph")
 def graph_page():
     return render_template("graph.html", categories=CATEGORIES)
+
+
+@app.route("/stats")
+def stats_page():
+    return render_template("stats.html")
+
+
+@app.route("/storage/<path:filename>")
+def serve_storage(filename):
+    """엔트리 이미지 정적 파일 서빙"""
+    return send_from_directory(STORAGE_DIR, filename)
 
 
 # ─────────────────────────────────────────
@@ -180,6 +207,48 @@ def refresh_entry_keywords(entry_id):
         return jsonify({"keywords": entry.keywords, "ok": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/entries/<int:entry_id>/image", methods=["POST"])
+def upload_entry_image(entry_id):
+    """엔트리 이미지 업로드 (multipart/form-data, field: 'image')"""
+    entry = WorldEntry.query.get_or_404(entry_id)
+    if "image" not in request.files:
+        return jsonify({"error": "image 필드가 없습니다."}), 400
+    f = request.files["image"]
+    if not f.filename or not _allowed_image(f.filename):
+        return jsonify({"error": "허용되지 않는 파일 형식입니다 (jpg/png/gif/webp)."}), 400
+
+    ext = f.filename.rsplit(".", 1)[1].lower()
+    img_dir = os.path.join(STORAGE_DIR, f"{entry_id}-img")
+    os.makedirs(img_dir, exist_ok=True)
+
+    # 기존 이미지 삭제
+    if entry.image_filename:
+        old_path = os.path.join(STORAGE_DIR, entry.image_filename)
+        if os.path.exists(old_path):
+            os.remove(old_path)
+
+    new_name = f"{uuid.uuid4().hex}.{ext}"
+    rel_path = f"{entry_id}-img/{new_name}"
+    f.save(os.path.join(STORAGE_DIR, rel_path))
+
+    entry.image_filename = rel_path
+    db.session.commit()
+    return jsonify({"image_filename": rel_path, "ok": True})
+
+
+@app.route("/api/entries/<int:entry_id>/image", methods=["DELETE"])
+def delete_entry_image(entry_id):
+    """엔트리 이미지 삭제"""
+    entry = WorldEntry.query.get_or_404(entry_id)
+    if entry.image_filename:
+        path = os.path.join(STORAGE_DIR, entry.image_filename)
+        if os.path.exists(path):
+            os.remove(path)
+        entry.image_filename = None
+        db.session.commit()
+    return jsonify({"ok": True})
 
 
 @app.route("/api/entries", methods=["DELETE"])
@@ -328,6 +397,118 @@ def update_settings():
         s.rag_token_budget = int(data["rag_token_budget"])
     db.session.commit()
     return jsonify(s.to_dict())
+
+
+# ─────────────────────────────────────────
+#  연구 통계 API
+# ─────────────────────────────────────────
+
+@app.route("/api/stats", methods=["GET"])
+def get_stats():
+    """연구용 통계: 런별 작업시간/토큰/틱, 참조 Top10, 단어 Top10"""
+    runs = SimulationRun.query.order_by(SimulationRun.started_at.desc()).all()
+    logs = SimulationLog.query.all()
+    entries = WorldEntry.query.all()
+
+    # ── 런별 통계 ───────────────────────────────────────────────
+    run_stats = []
+    for run in runs:
+        run_logs = [l for l in logs if l.run_id == run.id]
+        duration = None
+        if run.started_at and run.ended_at:
+            duration = (run.ended_at - run.started_at).total_seconds()
+        completed = run.current_tick or 0
+        avg_tick_sec = round(duration / completed, 2) if duration and completed > 0 else None
+        rag_ticks = sum(1 for l in run_logs if l.event_type == "rag_filter")
+        run_stats.append({
+            "id": run.id,
+            "status": run.status,
+            "total_ticks": run.total_ticks,
+            "completed_ticks": completed,
+            "tokens_in": run.total_tokens_in or 0,
+            "tokens_out": run.total_tokens_out or 0,
+            "tokens_total": run.total_tokens or 0,
+            "duration_sec": round(duration, 1) if duration else None,
+            "avg_tick_sec": avg_tick_sec,
+            "rag_ticks": rag_ticks,
+            "started_at": run.started_at.isoformat() if run.started_at else None,
+            "ended_at": run.ended_at.isoformat() if run.ended_at else None,
+        })
+
+    # ── 총계 ─────────────────────────────────────────────────────
+    done_runs = [r for r in run_stats if r["status"] == "done"]
+    total_dur = sum(r["duration_sec"] or 0 for r in run_stats)
+    avg_run_dur = round(total_dur / len(done_runs), 1) if done_runs else None
+    totals = {
+        "tokens_in": sum(r["tokens_in"] for r in run_stats),
+        "tokens_out": sum(r["tokens_out"] for r in run_stats),
+        "tokens_total": sum(r["tokens_total"] for r in run_stats),
+        "run_count": len(runs),
+        "done_run_count": len(done_runs),
+        "entry_count": len(entries),
+        "log_count": len(logs),
+        "total_duration_sec": round(total_dur, 1),
+        "avg_run_duration_sec": avg_run_dur,
+        "user_entries": sum(1 for e in entries if e.created_by == "user"),
+        "llm_entries": sum(1 for e in entries if e.created_by == "llm"),
+    }
+
+    # ── 가장 많이 참조된 엔트리 Top10 ───────────────────────────
+    entry_ref_count = Counter()
+    for log in logs:
+        raw_ids = log.affected_entries_json or "[]"
+        try:
+            ids = _json.loads(raw_ids)
+        except Exception:
+            try:
+                import ast as _ast
+                ids = _ast.literal_eval(raw_ids)
+            except Exception:
+                ids = []
+        for eid in ids:
+            try:
+                entry_ref_count[int(eid)] += 1
+            except Exception:
+                pass
+
+    entry_map = {e.id: {"title": e.title, "category": e.category} for e in entries}
+    top_refs = [
+        {
+            "id": eid,
+            "title": entry_map.get(eid, {}).get("title", f"삭제됨 #{eid}"),
+            "category": entry_map.get(eid, {}).get("category", ""),
+            "count": cnt,
+        }
+        for eid, cnt in entry_ref_count.most_common(10)
+    ]
+
+    # ── 가장 많이 언급된 한국어 단어 Top10 ──────────────────────
+    _stopwords = {
+        '있다', '없다', '하다', '이다', '되다', '않다', '것이', '위해', '통해', '대한',
+        '로서', '에서', '으로', '이를', '그의', '그녀', '그들', '이것', '저것', '때문',
+        '이후', '이전', '현재', '시작', '통한', '이번', '발생', '세계', '세력', '인물',
+        '사건', '관념', '물건', '종족', '관련', '상태', '변화', '생성', '엔트리', '틱',
+        '소멸', '비활성', '활성', '수정', '삭제', '보호', '유저', '원본', '내용', '이유',
+        '대해', '통해', '위한', '결과', '새로운', '기존', '전체', '각각', '이라', '그리고',
+        '하여', '하며', '하지', '이며', '으며', '지만', '하면', '이면', '에게', '에게서',
+    }
+    all_text = " ".join(
+        (l.description or "") + " " + (l.llm_reasoning or "")
+        for l in logs
+        if l.event_type not in ("rag_filter", "error", "context_summary", "entry_protected")
+    )
+    word_counter = Counter()
+    for w in re.findall(r'[가-힣]{2,}', all_text):
+        if w not in _stopwords:
+            word_counter[w] += 1
+    top_words = [{"word": w, "count": c} for w, c in word_counter.most_common(10)]
+
+    return jsonify({
+        "runs": run_stats,
+        "totals": totals,
+        "top_referenced": top_refs,
+        "top_words": top_words,
+    })
 
 
 # ─────────────────────────────────────────

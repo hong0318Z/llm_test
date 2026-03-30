@@ -124,6 +124,31 @@
         <div class="p-4">
           <!-- 뷰 모드 -->
           <div id="viewMode">
+            <!-- 이미지 영역 -->
+            <div id="entryImageArea" class="mb-3" style="display:none;">
+              <img id="entryImageEl" src="" alt="엔트리 이미지"
+                style="width:100%;max-height:220px;object-fit:cover;border-radius:8px;border:1px solid var(--border);">
+              <div class="mt-1 d-flex gap-2">
+                <label class="btn btn-sm" style="border:1px solid var(--border);color:var(--text-muted);font-size:0.75rem;padding:2px 8px;cursor:pointer;margin:0;">
+                  <i class="bi bi-arrow-repeat me-1"></i>교체
+                  <input type="file" accept="image/*" style="display:none;" onchange="uploadImage(this)">
+                </label>
+                <button class="btn btn-sm" onclick="deleteImage()"
+                  style="border:1px solid rgba(255,112,112,0.3);color:#ff7070;font-size:0.75rem;padding:2px 8px;">
+                  <i class="bi bi-trash me-1"></i>삭제
+                </button>
+              </div>
+            </div>
+            <div id="entryImageUploadArea" class="mb-3" style="display:none;">
+              <label class="d-flex align-items-center justify-content-center gap-2"
+                style="border:1px dashed var(--border);border-radius:8px;padding:16px;cursor:pointer;color:var(--text-muted);font-size:0.8rem;transition:border-color 0.15s;"
+                onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
+                <i class="bi bi-image" style="font-size:1.2rem;"></i>
+                이미지 추가 (jpg/png/gif/webp, 최대 5MB)
+                <input type="file" accept="image/*" style="display:none;" onchange="uploadImage(this)">
+              </label>
+            </div>
+
             <div class="mb-3">
               <label class="form-label small text-muted">내용</label>
               <div id="detailContentText" style="white-space: pre-wrap; font-size: 0.9rem; line-height: 1.7;"></div>
@@ -534,7 +559,9 @@ function renderList() {
   }
   container.innerHTML = items.map(e => `
     <div class="entry-card mb-2 ${e.is_active ? '' : 'inactive'} ${selectedIds.has(e.id) ? 'selected' : ''}"
-      onclick="selectEntry(${e.id})" style="position:relative;">
+      onclick="selectEntry(${e.id})" style="position:relative;overflow:hidden;">
+      ${e.image_filename ? `<img src="/storage/${e.image_filename}" alt=""
+        style="width:100%;height:80px;object-fit:cover;border-radius:8px 8px 0 0;margin:-0px;display:block;margin-bottom:8px;opacity:${e.is_active?1:0.4};">` : ''}
       <input type="checkbox" class="entry-checkbox"
         data-id="${e.id}" ${selectedIds.has(e.id) ? 'checked' : ''}
         onclick="toggleSelect(${e.id}, event)"
@@ -585,6 +612,16 @@ function showDetail() {
     toggleBtn.className = 'btn btn-sm btn-outline-secondary';
     toggleBtn.style.borderColor = '#6eeab0';
     toggleBtn.style.color = '#6eeab0';
+  }
+
+  // 이미지 표시
+  if (e.image_filename) {
+    document.getElementById('entryImageEl').src = `/storage/${e.image_filename}`;
+    document.getElementById('entryImageArea').style.display = 'block';
+    document.getElementById('entryImageUploadArea').style.display = 'none';
+  } else {
+    document.getElementById('entryImageArea').style.display = 'none';
+    document.getElementById('entryImageUploadArea').style.display = 'block';
   }
 
   // 키워드 표시
@@ -675,6 +712,38 @@ async function refreshKeywords() {
   } finally {
     btn.disabled = false;
     btn.innerHTML = '<i class="bi bi-arrow-clockwise me-1"></i>갱신';
+  }
+}
+
+async function uploadImage(input) {
+  if (!currentEntry || !input.files[0]) return;
+  const file = input.files[0];
+  if (file.size > 5 * 1024 * 1024) { alert('파일 크기는 5MB 이하여야 합니다.'); return; }
+  const fd = new FormData();
+  fd.append('image', file);
+  const res = await fetch(`/api/entries/${currentEntry.id}/image`, { method: 'POST', body: fd });
+  if (res.ok) {
+    const data = await res.json();
+    currentEntry.image_filename = data.image_filename;
+    const idx = allEntries.findIndex(e => e.id === currentEntry.id);
+    if (idx >= 0) allEntries[idx].image_filename = data.image_filename;
+    showDetail();
+    renderList();
+  } else {
+    alert('이미지 업로드 실패');
+  }
+  input.value = '';
+}
+
+async function deleteImage() {
+  if (!currentEntry || !confirm('이미지를 삭제하시겠습니까?')) return;
+  const res = await fetch(`/api/entries/${currentEntry.id}/image`, { method: 'DELETE' });
+  if (res.ok) {
+    currentEntry.image_filename = null;
+    const idx = allEntries.findIndex(e => e.id === currentEntry.id);
+    if (idx >= 0) allEntries[idx].image_filename = null;
+    showDetail();
+    renderList();
   }
 }
 

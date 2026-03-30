@@ -22,6 +22,7 @@ class WorldEntry(db.Model):
     is_active = db.Column(db.Boolean, default=True)
     is_summarized = db.Column(db.Boolean, default=False)  # 요약으로 대체된 항목
     keywords = db.Column(db.Text, default="")  # 쉼표 구분 핵심 키워드 (최대 5개)
+    image_filename = db.Column(db.String(300), nullable=True)  # 첨부 이미지 경로
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -48,6 +49,7 @@ class WorldEntry(db.Model):
             "is_active": self.is_active,
             "is_summarized": self.is_summarized,
             "keywords": self.keywords or "",
+            "image_filename": self.image_filename or None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }

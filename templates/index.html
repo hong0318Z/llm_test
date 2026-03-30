@@ -129,6 +129,17 @@
               <div id="detailContentText" style="white-space: pre-wrap; font-size: 0.9rem; line-height: 1.7;"></div>
             </div>
             <div class="mb-3">
+              <label class="form-label small text-muted">
+                핵심 키워드
+                <button class="btn btn-sm ms-2 py-0" id="kwRefreshBtn"
+                  onclick="refreshKeywords()"
+                  style="font-size:0.7rem;border:1px solid rgba(106,173,255,0.4);color:#6aadff;padding:1px 6px;">
+                  <i class="bi bi-arrow-clockwise me-1"></i>갱신
+                </button>
+              </label>
+              <div id="detailKeywords"></div>
+            </div>
+            <div class="mb-3">
               <label class="form-label small text-muted">참조 엔트리</label>
               <div id="detailReferences"></div>
             </div>
@@ -511,7 +522,9 @@ function renderList() {
   let items = allEntries;
   if (currentCategory) items = items.filter(e => e.category === currentCategory);
   if (search) items = items.filter(e =>
-    e.title.toLowerCase().includes(search) || e.content.toLowerCase().includes(search)
+    e.title.toLowerCase().includes(search) ||
+    e.content.toLowerCase().includes(search) ||
+    (e.keywords || '').toLowerCase().includes(search)
   );
 
   const container = document.getElementById('entryList');
@@ -534,6 +547,9 @@ function renderList() {
         </span>
       </div>
       <div class="entry-content">${escHtml(e.content)}</div>
+      ${e.keywords ? `<div class="mt-1">${e.keywords.split(',').map(k => k.trim()).filter(Boolean).map(k =>
+        `<span class="badge me-1" style="font-size:0.68rem;background:rgba(106,173,255,0.15);color:#6aadff;border:1px solid rgba(106,173,255,0.3);">${escHtml(k)}</span>`
+      ).join('')}</div>` : ''}
     </div>
   `).join('');
 }
@@ -569,6 +585,17 @@ function showDetail() {
     toggleBtn.className = 'btn btn-sm btn-outline-secondary';
     toggleBtn.style.borderColor = '#6eeab0';
     toggleBtn.style.color = '#6eeab0';
+  }
+
+  // 키워드 표시
+  const kwDiv = document.getElementById('detailKeywords');
+  if (e.keywords) {
+    const kws = e.keywords.split(',').map(k => k.trim()).filter(Boolean);
+    kwDiv.innerHTML = kws.map(k =>
+      `<span class="badge me-1" style="font-size:0.75rem;background:rgba(106,173,255,0.15);color:#6aadff;border:1px solid rgba(106,173,255,0.3);">${escHtml(k)}</span>`
+    ).join('');
+  } else {
+    kwDiv.innerHTML = '<span class="text-muted small">없음 (갱신 버튼으로 생성)</span>';
   }
 
   const refs = e.references || [];
@@ -622,6 +649,32 @@ async function saveEdit() {
     showDetail();
   } else {
     alert('저장 실패');
+  }
+}
+
+async function refreshKeywords() {
+  if (!currentEntry) return;
+  const btn = document.getElementById('kwRefreshBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>생성 중...';
+  try {
+    const res = await fetch(`/api/entries/${currentEntry.id}/keywords`, { method: 'POST' });
+    if (res.ok) {
+      const data = await res.json();
+      currentEntry.keywords = data.keywords || '';
+      // allEntries 캐시도 갱신
+      const idx = allEntries.findIndex(e => e.id === currentEntry.id);
+      if (idx >= 0) allEntries[idx].keywords = currentEntry.keywords;
+      showDetail();
+      renderList();
+    } else {
+      alert('키워드 생성 실패');
+    }
+  } catch (err) {
+    alert('오류: ' + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-arrow-clockwise me-1"></i>갱신';
   }
 }
 

@@ -49,15 +49,45 @@ def run_simulation(run_id: int, app):
                 entries = _query_entries()
 
                 # 컨텍스트 한계 근접 시 자동 요약 먼저 실행
-                max_chars = AppSettings.get().max_llm_entry_chars or 500
-                cfg_dict = {**config.to_dict(), "max_content_chars": max_chars}
+                settings = AppSettings.get()
+                max_chars = settings.max_llm_entry_chars or 500
+                rag_budget = settings.rag_token_budget or 0
+                cfg_dict = {**config.to_dict(), "max_content_chars": max_chars, "rag_token_budget": rag_budget}
                 if llm_client.needs_summary(entries, max_chars=max_chars):
                     _run_auto_summary(run, tick, entries, cfg_dict)
                     db.session.commit()
                     entries = _query_entries()
 
+                # 최근 틱 로그 → RAG 컨텍스트 문자열 생성
+                recent_logs = (
+                    SimulationLog.query
+                    .filter_by(run_id=run.id)
+                    .order_by(SimulationLog.id.desc())
+                    .limit(12)
+                    .all()
+                )
+                recent_context = " ".join(
+                    l.description for l in reversed(recent_logs) if l.description
+                )
+
                 # 일반 틱 실행
-                result = llm_client.run_tick(cfg_dict, tick, entries)
+                result = llm_client.run_tick(cfg_dict, tick, entries, recent_context=recent_context)
+                # RAG가 적용됐으면 로그 기록
+                rag_info = result.get("_rag_info")
+                if rag_info and rag_info.get("rag_applied"):
+                    rag_log = SimulationLog(
+                        run_id=run.id,
+                        tick_number=tick,
+                        event_type="rag_filter",
+                        description=(
+                            f"RAG 필터 적용: 전체 {rag_info['total']}개 중 "
+                            f"{rag_info['selected']}개 선택 "
+                            f"(유저 {rag_info['user_entries']}개 필수 + "
+                            f"LLM {rag_info['llm_selected']}/{rag_info['llm_total']}개)"
+                        ),
+                    )
+                    db.session.add(rag_log)
+
                 _apply_tick_result(run, tick, result)
                 db.session.commit()
 

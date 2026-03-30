@@ -112,6 +112,18 @@ def create_entry():
     entry.references = data.get("references", [])
     db.session.add(entry)
     db.session.commit()
+
+    # 키워드 자동 생성 (LLM 연결 있을 때만, 실패해도 무시)
+    if os.environ.get("GITHUB_TOKEN") and entry.content:
+        try:
+            from llm_client import generate_keywords
+            kws = generate_keywords(entry.title, entry.category, entry.content)
+            if kws:
+                entry.keywords = ", ".join(kws)
+                db.session.commit()
+        except Exception:
+            pass
+
     return jsonify(entry.to_dict()), 201
 
 
@@ -133,6 +145,18 @@ def update_entry(entry_id):
         entry.is_active = data["is_active"]
     entry.updated_at = datetime.utcnow()
     db.session.commit()
+
+    # 내용이 변경됐으면 키워드 재생성
+    if "content" in data and os.environ.get("GITHUB_TOKEN") and entry.content:
+        try:
+            from llm_client import generate_keywords
+            kws = generate_keywords(entry.title, entry.category, entry.content)
+            if kws:
+                entry.keywords = ", ".join(kws)
+                db.session.commit()
+        except Exception:
+            pass
+
     return jsonify(entry.to_dict())
 
 
@@ -142,6 +166,20 @@ def delete_entry(entry_id):
     db.session.delete(entry)
     db.session.commit()
     return jsonify({"ok": True})
+
+
+@app.route("/api/entries/<int:entry_id>/keywords", methods=["POST"])
+def refresh_entry_keywords(entry_id):
+    """엔트리 키워드를 LLM으로 재생성"""
+    entry = WorldEntry.query.get_or_404(entry_id)
+    try:
+        from llm_client import generate_keywords
+        kws = generate_keywords(entry.title, entry.category, entry.content)
+        entry.keywords = ", ".join(kws) if kws else ""
+        db.session.commit()
+        return jsonify({"keywords": entry.keywords, "ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/entries", methods=["DELETE"])
@@ -286,6 +324,8 @@ def update_settings():
         s.max_llm_entry_chars = int(data["max_llm_entry_chars"])
     if "max_user_entry_chars" in data:
         s.max_user_entry_chars = int(data["max_user_entry_chars"])
+    if "rag_token_budget" in data:
+        s.rag_token_budget = int(data["rag_token_budget"])
     db.session.commit()
     return jsonify(s.to_dict())
 

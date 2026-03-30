@@ -264,7 +264,7 @@
             </div>
           </div>
 
-          <div class="mb-2">
+          <div class="mb-4">
             <label class="form-label">
               <i class="bi bi-person me-1" style="color:#6eeab0;"></i>
               유저 입력 엔트리 최대 글자 수 (UI 가이드)
@@ -274,6 +274,22 @@
               DB 입력창에서 글자수 카운터로 표시되는 기준입니다.<br>
               초과해도 저장은 되지만 LLM 전달 시 LLM 제한값으로 잘립니다.<br>
               <span style="color:#ffb86c;">0 = 제한 없음 표시</span>
+            </div>
+          </div>
+
+          <hr style="border-color:var(--border);">
+
+          <div class="mb-2">
+            <label class="form-label">
+              <i class="bi bi-search me-1" style="color:#6aadff;"></i>
+              RAG 토큰 예산
+            </label>
+            <input type="number" class="form-control" id="msRagBudget" min="0" placeholder="예: 3000">
+            <div class="form-text">
+              시뮬레이션 중 세계관 엔트리가 이 값의 <strong>50%</strong>를 초과하면<br>
+              유저 엔트리(필수)와 최근 컨텍스트 기반 관련 LLM 엔트리만 선택합니다.<br>
+              각 엔트리에 저장된 <strong>핵심 키워드 5개</strong>로 관련도를 계산합니다.<br>
+              <span style="color:#ffb86c;">0 = RAG 비활성화 (전체 엔트리 전달)</span>
             </div>
           </div>
         </div>
@@ -386,6 +402,7 @@
     const s = await res.json();
     document.getElementById('msLlmChars').value = s.max_llm_entry_chars ?? 500;
     document.getElementById('msUserChars').value = s.max_user_entry_chars ?? 1000;
+    document.getElementById('msRagBudget').value = s.rag_token_budget ?? 0;
     masterSettingsModal.show();
   }
 
@@ -393,6 +410,7 @@
     const body = {
       max_llm_entry_chars: parseInt(document.getElementById('msLlmChars').value) || 0,
       max_user_entry_chars: parseInt(document.getElementById('msUserChars').value) || 0,
+      rag_token_budget: parseInt(document.getElementById('msRagBudget').value) || 0,
     };
     const res = await fetch('/api/settings', {
       method: 'PUT',

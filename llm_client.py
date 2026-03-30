@@ -5,6 +5,7 @@ LLM Client - GitHub Copilot API (OpenAI 호환)
   - 모델: claude-sonnet-4.5 (context window: 200k tokens)
 """
 import os
+import re
 import json
 from openai import OpenAI
 
@@ -237,10 +238,18 @@ def estimate_world_tokens(entries: list, config: dict = None) -> dict:
     }
 
 
-def run_tick(config: dict, tick_number: int, entries: list) -> dict:
+def run_tick(config: dict, tick_number: int, entries: list, recent_context: str = "") -> dict:
     """단일 틱 실행. LLM을 호출해 세계관 변화를 반환."""
     client, model = get_llm_client()
     max_chars = config.get("max_content_chars") or 500
+    rag_budget = config.get("rag_token_budget") or 0
+
+    # RAG: 세계관이 예산의 50%를 초과하면 관련 엔트리만 선택
+    rag_info = None
+    if rag_budget > 0:
+        full_state = serialize_world_state(entries, max_chars=max_chars)
+        if estimate_tokens(full_state) > rag_budget // 2:
+            entries, rag_info = select_entries_rag(entries, recent_context, rag_budget, max_chars)
 
     system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
         prompt_level_1=config.get("prompt_level_1") or "없음",
@@ -276,6 +285,7 @@ def run_tick(config: dict, tick_number: int, entries: list) -> dict:
     result["_tokens_in"] = usage.prompt_tokens if usage else estimate_tokens(system_prompt + user_prompt)
     result["_tokens_out"] = usage.completion_tokens if usage else estimate_tokens(raw)
     result["_total_tokens"] = usage.total_tokens if usage else (result["_tokens_in"] + result["_tokens_out"])
+    result["_rag_info"] = rag_info
     return result
 
 
@@ -339,6 +349,102 @@ def needs_summary(entries: list, max_chars: int = 500) -> bool:
     """현재 세계관이 컨텍스트 한계에 근접했는지 확인"""
     world_state = serialize_world_state(entries, max_chars=max_chars)
     return estimate_tokens(world_state) >= CONTEXT_SUMMARY_THRESHOLD
+
+
+def generate_keywords(title: str, category: str, content: str) -> list:
+    """엔트리 내용에서 핵심 키워드 5개를 LLM으로 추출"""
+    client, model = get_llm_client()
+    prompt = (
+        f"세계관 엔트리에서 핵심 키워드 5개를 추출하세요.\n"
+        f"키워드는 다른 엔트리와의 관련성을 찾는 데 쓰입니다.\n\n"
+        f"제목: {title}\n분류: {category}\n내용: {content[:400]}\n\n"
+        f'JSON으로만 응답: {{"keywords": ["키워드1", "키워드2", "키워드3", "키워드4", "키워드5"]}}'
+    )
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=80,
+            temperature=0.2,
+        )
+        raw = response.choices[0].message.content.strip()
+        parsed = _parse_json_safe(raw, "generate_keywords")
+        kws = parsed.get("keywords", [])
+        return [str(k).strip() for k in kws if k][:5]
+    except Exception:
+        return []
+
+
+def _extract_context_words(text: str) -> set:
+    """텍스트에서 의미있는 단어 집합 추출 (한국어 2자+, 영어 3자+)"""
+    words = re.findall(r'[가-힣]{2,}|[a-zA-Z]{3,}', text)
+    return {w.lower() for w in words}
+
+
+def _score_entry_relevance(entry: dict, context_words: set) -> float:
+    """최근 컨텍스트와 엔트리의 관련도 점수 계산"""
+    score = 0.0
+    # 키워드 매칭: 엔트리 키워드가 컨텍스트 단어에 포함되면 가산
+    kw_str = entry.get("keywords") or ""
+    for kw in [k.strip().lower() for k in kw_str.split(",") if k.strip()]:
+        if kw in context_words or any(kw in cw for cw in context_words):
+            score += 2.0
+    # 제목 단어가 컨텍스트에 언급된 경우
+    title_words = _extract_context_words(entry.get("title", ""))
+    score += len(title_words & context_words) * 3.0
+    # 최신성 보너스 (최근 틱에 생성될수록 관련 가능성 높음)
+    score += (entry.get("tick_created") or 0) * 0.05
+    return score
+
+
+def select_entries_rag(
+    all_entries: list,
+    recent_context: str,
+    token_budget: int,
+    max_chars: int = 500,
+) -> tuple:
+    """
+    RAG 기반 컨텍스트 엔트리 선택.
+    - 유저 엔트리: 항상 포함 (세계관 코어)
+    - LLM 엔트리: 관련도 점수 순으로 토큰 예산 내에서 선택
+    Returns: (selected_entries, rag_stats)
+    """
+    context_words = _extract_context_words(recent_context)
+
+    user_entries = [e for e in all_entries if e.get("created_by") == "user"]
+    llm_entries = [e for e in all_entries if e.get("created_by") != "user"]
+
+    # 유저 엔트리 토큰 소비량 계산
+    used_tokens = estimate_tokens(serialize_world_state(user_entries, max_chars=max_chars))
+    remaining = token_budget - used_tokens
+
+    # LLM 엔트리를 관련도 순으로 정렬하여 예산 내에서 선택
+    scored = sorted(
+        [(e, _score_entry_relevance(e, context_words)) for e in llm_entries],
+        key=lambda x: x[1],
+        reverse=True,
+    )
+
+    selected_llm = []
+    for entry, _score in scored:
+        entry_text = f"  ID={entry['id']} | {entry.get('title', '')}\n    {(entry.get('content') or '')[:max_chars]}\n"
+        entry_tokens = estimate_tokens(entry_text)
+        if remaining >= entry_tokens:
+            selected_llm.append(entry)
+            remaining -= entry_tokens
+        if remaining <= 50:
+            break
+
+    selected = user_entries + selected_llm
+    return selected, {
+        "rag_applied": True,
+        "total": len(all_entries),
+        "selected": len(selected),
+        "skipped": len(all_entries) - len(selected),
+        "user_entries": len(user_entries),
+        "llm_selected": len(selected_llm),
+        "llm_total": len(llm_entries),
+    }
 
 
 def generate_entry(title: str, category: str, hint: str, ref_entries: list) -> dict:

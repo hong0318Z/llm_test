@@ -21,6 +21,7 @@ class WorldEntry(db.Model):
     tick_created = db.Column(db.Integer, default=0)
     is_active = db.Column(db.Boolean, default=True)
     is_summarized = db.Column(db.Boolean, default=False)  # 요약으로 대체된 항목
+    keywords = db.Column(db.Text, default="")  # 쉼표 구분 핵심 키워드 (최대 5개)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -46,6 +47,7 @@ class WorldEntry(db.Model):
             "tick_created": self.tick_created,
             "is_active": self.is_active,
             "is_summarized": self.is_summarized,
+            "keywords": self.keywords or "",
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -60,6 +62,8 @@ class AppSettings(db.Model):
     max_llm_entry_chars = db.Column(db.Integer, default=500)
     # 유저 입력 엔트리 1개당 최대 글자수 (UI 카운터용, 0 = 제한 없음)
     max_user_entry_chars = db.Column(db.Integer, default=1000)
+    # RAG 토큰 예산: 세계관이 이 값의 50%를 초과하면 관련 엔트리만 선택 (0 = RAG 비활성화)
+    rag_token_budget = db.Column(db.Integer, default=0)
 
     @staticmethod
     def get():
@@ -74,6 +78,7 @@ class AppSettings(db.Model):
         return {
             "max_llm_entry_chars": self.max_llm_entry_chars if self.max_llm_entry_chars is not None else 500,
             "max_user_entry_chars": self.max_user_entry_chars if self.max_user_entry_chars is not None else 1000,
+            "rag_token_budget": self.rag_token_budget if self.rag_token_budget is not None else 0,
         }
 
 

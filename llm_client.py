@@ -206,7 +206,8 @@ def serialize_world_state(entries: list, max_chars: int = 500) -> str:
             if max_chars and max_chars > 0 and len(content) > max_chars:
                 content = content[:max_chars] + f"…(+{len(item['content'])-max_chars}자 생략)"
             creator_tag = " [🔒유저]" if item.get("created_by") == "user" else ""
-            lines.append(f"  ID={item['id']} | {item['title']}{creator_tag}{ref_str}")
+            version_tag = f" [{item['version_note']}]" if item.get("version_note") else ""
+            lines.append(f"  ID={item['id']} | {item['title']}{creator_tag}{version_tag}{ref_str}")
             lines.append(f"    {content}")
 
     return "\n".join(lines)

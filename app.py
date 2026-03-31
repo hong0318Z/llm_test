@@ -37,6 +37,9 @@ with app.app_context():
         ("app_settings",     "rag_token_budget",        "INTEGER DEFAULT 0"),
         ("simulation_runs",  "timeline_id",             "INTEGER"),
         ("timelines",        "narrative_goal",          "TEXT DEFAULT ''"),
+        ("world_entries",    "parent_entry_id",         "INTEGER"),
+        ("world_entries",    "version_note",            "TEXT DEFAULT ''"),
+        ("world_entries",    "is_superseded",           "BOOLEAN DEFAULT 0"),
     ]
     with db.engine.connect() as conn:
         for table, col, col_def in _migrate_columns:
@@ -112,11 +115,16 @@ def serve_storage(filename):
 def list_entries():
     category = request.args.get("category")
     active_only = request.args.get("active", "true") == "true"
+    include_superseded = request.args.get("include_superseded", "false") == "true"
     q = WorldEntry.query
     if category:
         q = q.filter_by(category=category)
     if active_only:
         q = q.filter_by(is_active=True)
+    if not include_superseded:
+        q = q.filter(
+            db.or_(WorldEntry.is_superseded == False, WorldEntry.is_superseded == None)
+        )
     entries = q.order_by(WorldEntry.created_at.desc()).all()
     return jsonify([e.to_dict() for e in entries])
 
@@ -214,6 +222,56 @@ def refresh_entry_keywords(entry_id):
         return jsonify({"keywords": entry.keywords, "ok": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/entries/<int:entry_id>/versions", methods=["GET"])
+def get_entry_versions(entry_id):
+    """엔트리의 전체 버전 체인 반환 (부모 → 자식 순서)"""
+    entry = WorldEntry.query.get_or_404(entry_id)
+
+    # 루트(최상위 원본)까지 거슬러 올라가기
+    root = entry
+    while root.parent_entry_id:
+        parent = WorldEntry.query.get(root.parent_entry_id)
+        if not parent:
+            break
+        root = parent
+
+    # 루트부터 모든 자손을 BFS로 수집
+    chain = []
+    queue = [root]
+    visited = set()
+    while queue:
+        current = queue.pop(0)
+        if current.id in visited:
+            continue
+        visited.add(current.id)
+        chain.append(current.to_dict())
+        children = WorldEntry.query.filter_by(parent_entry_id=current.id).order_by(WorldEntry.tick_created).all()
+        queue.extend(children)
+
+    return jsonify(chain)
+
+
+@app.route("/api/entries/bulk-keywords", methods=["POST"])
+def bulk_generate_keywords():
+    """키워드 없는 엔트리들 일괄 키워드 생성"""
+    from llm_client import generate_keywords
+    entries = WorldEntry.query.filter(
+        db.or_(WorldEntry.keywords == None, WorldEntry.keywords == "")
+    ).filter(WorldEntry.is_active == True).all()
+
+    results = {"success": 0, "failed": 0, "total": len(entries)}
+    for entry in entries:
+        try:
+            kws = generate_keywords(entry.title, entry.category, entry.content)
+            entry.keywords = ", ".join(kws) if kws else ""
+            db.session.commit()
+            results["success"] += 1
+        except Exception:
+            results["failed"] += 1
+
+    return jsonify(results)
 
 
 @app.route("/api/entries/<int:entry_id>/image", methods=["POST"])

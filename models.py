@@ -23,6 +23,10 @@ class WorldEntry(db.Model):
     is_summarized = db.Column(db.Boolean, default=False)  # 요약으로 대체된 항목
     keywords = db.Column(db.Text, default="")  # 쉼표 구분 핵심 키워드 (최대 5개)
     image_filename = db.Column(db.String(300), nullable=True)  # 첨부 이미지 경로
+    # 버전 관리
+    parent_entry_id = db.Column(db.Integer, db.ForeignKey("world_entries.id"), nullable=True)
+    version_note = db.Column(db.String(100), default="")   # 예: "원본", "틱5 수정", "틱8 소멸"
+    is_superseded = db.Column(db.Boolean, default=False)   # True: 더 새 버전 존재 (컨텍스트/목록에서 제외)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -50,6 +54,9 @@ class WorldEntry(db.Model):
             "is_summarized": self.is_summarized,
             "keywords": self.keywords or "",
             "image_filename": self.image_filename or None,
+            "parent_entry_id": self.parent_entry_id,
+            "version_note": self.version_note or "",
+            "is_superseded": self.is_superseded or False,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }

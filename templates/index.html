@@ -34,6 +34,12 @@
       </label>
       <!-- 구분선 -->
       <div style="width:1px; height:22px; background:var(--border);"></div>
+      <!-- 키워드 일괄 생성 -->
+      <button class="btn btn-sm btn-outline-secondary" onclick="bulkGenerateKeywords()" id="bulkKwBtn" title="키워드 없는 엔트리 전체에 키워드 일괄 생성">
+        <i class="bi bi-tags me-1"></i>키워드 일괄 생성
+      </button>
+      <!-- 구분선 -->
+      <div style="width:1px; height:22px; background:var(--border);"></div>
       <!-- 초기화 -->
       <button class="btn btn-sm btn-outline-danger" onclick="resetWorld()">
         <i class="bi bi-trash3 me-1"></i>세계관 초기화
@@ -181,6 +187,18 @@
                 <label class="form-label small text-muted">등록일시</label>
                 <div id="detailCreatedAt" class="small text-muted"></div>
               </div>
+            </div>
+
+            <!-- 버전 히스토리 -->
+            <div id="entryVersionsSection" class="mt-3" style="display:none;">
+              <hr style="border-color:var(--border);">
+              <div class="d-flex align-items-center gap-2 mb-2">
+                <label class="form-label small text-muted mb-0">
+                  <i class="bi bi-arrow-left-right me-1" style="color:#ffb86c;"></i>버전 히스토리
+                </label>
+                <span id="versionCount" class="badge" style="background:rgba(255,184,108,0.2);color:#ffb86c;font-size:0.68rem;"></span>
+              </div>
+              <div id="entryVersionsList"></div>
             </div>
 
             <!-- 관련 타임라인 에피소드 -->
@@ -609,12 +627,18 @@ function showDetail() {
     `<span class="${e.created_by === 'llm' ? 'creator-badge-llm' : 'creator-badge-user'}">${e.created_by === 'llm' ? 'LLM 생성' : '유저 작성'}</span>`;
   document.getElementById('detailContentText').textContent = e.content;
   document.getElementById('detailTick').textContent = e.tick_created === 0 ? '초기 설정' : `틱 ${e.tick_created}`;
-  document.getElementById('detailStatus').innerHTML = e.is_active
+  // 버전 노트 배지
+  const vNote = e.version_note || '';
+  const vNoteHtml = vNote
+    ? `<span style="margin-left:6px;font-size:0.68rem;background:rgba(255,184,108,0.15);color:#ffb86c;border:1px solid rgba(255,184,108,0.3);border-radius:8px;padding:1px 7px;">${escHtml(vNote)}</span>`
+    : '';
+  document.getElementById('detailStatus').innerHTML = (e.is_active
     ? '<span style="color:#6eeab0;">● 활성</span>'
-    : '<span style="color:#ff7070;">● 비활성</span>';
+    : '<span style="color:#ff7070;">● 비활성</span>') + vNoteHtml;
   document.getElementById('detailCreatedAt').textContent = new Date(e.created_at).toLocaleString('ko-KR');
 
-  // 관련 타임라인 에피소드 비동기 로드
+  // 버전 히스토리 + 타임라인 에피소드 비동기 로드
+  loadEntryVersions(e.id);
   loadEntryEpisodes(e.id);
 
   // 비활성화/활성화 버튼 텍스트 갱신
@@ -728,6 +752,75 @@ async function loadEntryEpisodes(entryId) {
       </div>
     `).join('');
   } catch(e) {}
+}
+
+async function loadEntryVersions(entryId) {
+  const section = document.getElementById('entryVersionsSection');
+  const list = document.getElementById('entryVersionsList');
+  section.style.display = 'none';
+  try {
+    const res = await fetch(`/api/entries/${entryId}/versions`);
+    if (!res.ok) return;
+    const versions = await res.json();
+    if (versions.length <= 1) return;  // 버전이 1개뿐이면 숨김
+    section.style.display = 'block';
+    document.getElementById('versionCount').textContent = versions.length + '개';
+    list.innerHTML = versions.map((v, idx) => {
+      const isCurrent = v.id === entryId;
+      const vNote = v.version_note || (idx === 0 ? '원본' : `버전 ${idx + 1}`);
+      const endStyle = v.version_note && v.version_note.includes('소멸') ? 'color:#ff7070;' : '';
+      return `
+        <div class="mb-1 p-2 rounded d-flex align-items-start gap-2"
+          style="background:${isCurrent ? 'rgba(255,184,108,0.1)' : 'rgba(255,255,255,0.02)'};
+                 border:1px solid ${isCurrent ? 'rgba(255,184,108,0.35)' : 'var(--border)'};">
+          <div style="min-width:60px;">
+            <span style="font-size:0.65rem;background:rgba(255,184,108,0.18);color:#ffb86c;border-radius:6px;padding:1px 6px;${endStyle}">
+              ${escHtml(vNote)}
+            </span>
+          </div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:0.8rem;font-weight:${isCurrent ? '700' : '400'};color:${isCurrent ? 'var(--text-primary)' : 'var(--text-secondary)'};">
+              ${isCurrent ? '▶ ' : ''}${escHtml(v.title)}
+              <span style="font-size:0.7rem;color:var(--text-muted);margin-left:4px;">틱${v.tick_created || 0}</span>
+            </div>
+            <div style="font-size:0.72rem;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;">
+              ${escHtml((v.content || '').slice(0, 80))}${(v.content || '').length > 80 ? '…' : ''}
+            </div>
+          </div>
+          ${!isCurrent ? `<button onclick="jumpToEntry(${v.id})" class="btn btn-sm"
+            style="font-size:0.65rem;padding:1px 6px;border:1px solid var(--border);color:var(--text-muted);white-space:nowrap;">보기</button>` : ''}
+        </div>`;
+    }).join('');
+  } catch(e) {}
+}
+
+async function jumpToEntry(entryId) {
+  const res = await fetch(`/api/entries/${entryId}`);
+  if (!res.ok) return;
+  currentEntry = await res.json();
+  showDetail();
+}
+
+async function bulkGenerateKeywords() {
+  const btn = document.getElementById('bulkKwBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>생성 중...';
+  try {
+    const res = await fetch('/api/entries/bulk-keywords', { method: 'POST' });
+    const data = await res.json();
+    if (res.ok) {
+      alert(`키워드 일괄 생성 완료\n성공: ${data.success}개 / 실패: ${data.failed}개 / 전체 대상: ${data.total}개`);
+      if (currentEntry) { const r = await fetch(`/api/entries/${currentEntry.id}`); if (r.ok) { currentEntry = await r.json(); showDetail(); } }
+      loadEntries();
+    } else {
+      alert('일괄 생성 실패');
+    }
+  } catch(e) {
+    alert('오류: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-tags me-1"></i>키워드 일괄 생성';
+  }
 }
 
 async function refreshKeywords() {

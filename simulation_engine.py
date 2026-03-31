@@ -28,7 +28,9 @@ def run_simulation(run_id: int, app):
         exclude_llm = bool(run.exclude_llm_entries)
 
         def _query_entries(extra_ids=None):
-            q = WorldEntry.query.filter_by(is_active=True, is_summarized=False)
+            q = WorldEntry.query.filter_by(is_active=True, is_summarized=False).filter(
+                db.or_(WorldEntry.is_superseded.is_(False), WorldEntry.is_superseded.is_(None))
+            )
             ids = extra_ids or selected_ids
             if ids:
                 q = q.filter(WorldEntry.id.in_(ids))
@@ -206,52 +208,66 @@ def _apply_tick_result(run: SimulationRun, tick: int, result: dict):
         )
         db.session.add(log)
 
-    # 2. 기존 엔트리 업데이트
+    # 2. 기존 엔트리 업데이트 → 새 버전 엔트리 생성 (원본 불변)
     for update in result.get("entry_updates", []):
         entry = WorldEntry.query.get(update.get("id"))
-        if not entry:
+        if not entry or entry.is_superseded:
             continue
 
-        # 유저 엔트리는 직접 수정 금지 → 새 LLM 엔트리로 대체
         if entry.created_by == CREATOR_USER:
-            derived = WorldEntry(
-                title=f"{entry.title} (변화 - 틱 {tick})",
+            # 유저 엔트리: 직접 수정 금지 → 파생 버전 생성 (원본 is_superseded 유지)
+            new_ver = WorldEntry(
+                title=entry.title,
                 category=entry.category,
                 content=update.get("new_content", ""),
                 created_by=CREATOR_LLM,
                 tick_created=tick,
                 is_active=True,
+                parent_entry_id=entry.id,
+                version_note=f"틱{tick} 파생",
             )
-            derived.references = [entry.id]
-            db.session.add(derived)
+            new_ver.references = list(entry.references or []) + [entry.id]
+            db.session.add(new_ver)
             db.session.flush()
             log = SimulationLog(
                 run_id=run.id,
                 tick_number=tick,
-                event_type="entry_created",
-                description=f"[{entry.category}] '{entry.title}' 파생 엔트리 생성 (유저 원본 보호): {update.get('reason', '')}",
-                affected_entries_json=f"[{derived.id}]",
+                event_type="entry_versioned",
+                description=f"[{entry.category}] '{entry.title}' 파생 버전 생성 (유저 원본 보호): {update.get('reason', '')}",
+                affected_entries_json=f"[{entry.id}, {new_ver.id}]",
                 llm_reasoning=reasoning,
                 raw_llm_output=raw,
                 tokens_in=0, tokens_out=0, tokens_total=0,
             )
             db.session.add(log)
-            continue
-
-        old_content = entry.content
-        entry.content = update.get("new_content", entry.content)
-        entry.updated_at = datetime.utcnow()
-        log = SimulationLog(
-            run_id=run.id,
-            tick_number=tick,
-            event_type="entry_updated",
-            description=f"[{entry.category}] {entry.title}: {update.get('reason', '')}",
-            affected_entries_json=f"[{entry.id}]",
-            llm_reasoning=reasoning,
-            raw_llm_output=f"이전: {old_content[:200]}",
-            tokens_in=0, tokens_out=0, tokens_total=0,
-        )
-        db.session.add(log)
+        else:
+            # LLM 엔트리: 구버전을 superseded 처리 → 새 버전 생성
+            entry.is_superseded = True
+            entry.updated_at = datetime.utcnow()
+            new_ver = WorldEntry(
+                title=entry.title,
+                category=entry.category,
+                content=update.get("new_content", ""),
+                created_by=CREATOR_LLM,
+                tick_created=tick,
+                is_active=True,
+                parent_entry_id=entry.id,
+                version_note=f"틱{tick} 수정",
+            )
+            new_ver.references = list(entry.references or [])
+            db.session.add(new_ver)
+            db.session.flush()
+            log = SimulationLog(
+                run_id=run.id,
+                tick_number=tick,
+                event_type="entry_versioned",
+                description=f"[{entry.category}] '{entry.title}' 새 버전 생성 (틱{tick}): {update.get('reason', '')}",
+                affected_entries_json=f"[{entry.id}, {new_ver.id}]",
+                llm_reasoning=reasoning,
+                raw_llm_output=raw,
+                tokens_in=0, tokens_out=0, tokens_total=0,
+            )
+            db.session.add(log)
 
     # 3. 새 엔트리 생성
     for new in result.get("new_entries", []):
@@ -278,40 +294,68 @@ def _apply_tick_result(run: SimulationRun, tick: int, result: dict):
         )
         db.session.add(log)
 
-    # 4. 엔트리 소멸
+    # 4. 엔트리 소멸 → 소멸 버전 엔트리 생성 (원본 삭제/비활성화 없음)
     for deact in result.get("deactivated_entries", []):
         entry = WorldEntry.query.get(deact.get("id"))
-        if not entry:
+        if not entry or entry.is_superseded:
             continue
 
-        # 유저 엔트리는 비활성화 금지 → 로그만 기록하고 무시
+        reason = deact.get("reason", "")
+
         if entry.created_by == CREATOR_USER:
+            # 유저 엔트리: 원본 유지, 소멸 기록만 파생 생성
+            end_entry = WorldEntry(
+                title=entry.title,
+                category=entry.category,
+                content=f"[소멸 기록] {reason}",
+                created_by=CREATOR_LLM,
+                tick_created=tick,
+                is_active=True,
+                parent_entry_id=entry.id,
+                version_note=f"틱{tick} 소멸",
+            )
+            end_entry.references = [entry.id]
+            db.session.add(end_entry)
+            db.session.flush()
             log = SimulationLog(
                 run_id=run.id,
                 tick_number=tick,
-                event_type="entry_protected",
-                description=f"[{entry.category}] '{entry.title}' 비활성화 시도 차단 (유저 원본 보호): {deact.get('reason', '')}",
-                affected_entries_json=f"[{entry.id}]",
+                event_type="entry_versioned",
+                description=f"[{entry.category}] '{entry.title}' 소멸 기록 생성 (유저 원본 보호): {reason}",
+                affected_entries_json=f"[{entry.id}, {end_entry.id}]",
                 llm_reasoning=reasoning,
                 raw_llm_output=raw,
                 tokens_in=0, tokens_out=0, tokens_total=0,
             )
             db.session.add(log)
-            continue
-
-        entry.is_active = False
-        entry.updated_at = datetime.utcnow()
-        log = SimulationLog(
-            run_id=run.id,
-            tick_number=tick,
-            event_type="entry_deactivated",
-            description=f"[{entry.category}] '{entry.title}' 소멸: {deact.get('reason', '')}",
-            affected_entries_json=f"[{entry.id}]",
-            llm_reasoning=reasoning,
-            raw_llm_output=raw,
-            tokens_in=0, tokens_out=0, tokens_total=0,
-        )
-        db.session.add(log)
+        else:
+            # LLM 엔트리: 구버전 superseded 처리 → 소멸 버전 생성
+            entry.is_superseded = True
+            entry.updated_at = datetime.utcnow()
+            end_entry = WorldEntry(
+                title=entry.title,
+                category=entry.category,
+                content=f"[소멸] {reason}",
+                created_by=CREATOR_LLM,
+                tick_created=tick,
+                is_active=True,
+                parent_entry_id=entry.id,
+                version_note=f"틱{tick} 소멸",
+            )
+            end_entry.references = list(entry.references or [])
+            db.session.add(end_entry)
+            db.session.flush()
+            log = SimulationLog(
+                run_id=run.id,
+                tick_number=tick,
+                event_type="entry_versioned",
+                description=f"[{entry.category}] '{entry.title}' 소멸 (틱{tick}): {reason}",
+                affected_entries_json=f"[{entry.id}, {end_entry.id}]",
+                llm_reasoning=reasoning,
+                raw_llm_output=raw,
+                tokens_in=0, tokens_out=0, tokens_total=0,
+            )
+            db.session.add(log)
 
 
 def _record_timeline_event(run: SimulationRun, tick: int, result: dict):

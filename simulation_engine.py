@@ -3,7 +3,7 @@
 토큰 사용량 추적 및 컨텍스트 한계 시 자동 요약 포함
 """
 from datetime import datetime
-from models import db, WorldEntry, SimulationRun, SimulationLog, TimelineEvent, AppSettings, CREATOR_LLM, CREATOR_USER
+from models import db, WorldEntry, SimulationRun, SimulationLog, TimelineEvent, StoryBeat, Timeline, AppSettings, CREATOR_LLM, CREATOR_USER
 import llm_client
 
 
@@ -35,6 +35,19 @@ def run_simulation(run_id: int, app):
             if exclude_llm:
                 q = q.filter_by(created_by="user")
             return [e.to_dict() for e in q.all()]
+
+        # 연결된 타임라인의 스토리 비트 로드
+        story_beats = []
+        narrative_goal = ""
+        if run.timeline_id:
+            tl = Timeline.query.get(run.timeline_id)
+            if tl:
+                narrative_goal = tl.narrative_goal or ""
+                beats_raw = StoryBeat.query.filter_by(timeline_id=run.timeline_id).order_by(StoryBeat.tick_number).all()
+                for b in beats_raw:
+                    d = b.to_dict()
+                    d["_narrative_goal"] = narrative_goal  # 전체 서사 목표도 주입
+                    story_beats.append(d)
 
         try:
             for tick in range(1, run.total_ticks + 1):
@@ -70,8 +83,12 @@ def run_simulation(run_id: int, app):
                     l.description for l in reversed(recent_logs) if l.description
                 )
 
-                # 일반 틱 실행
-                result = llm_client.run_tick(cfg_dict, tick, entries, recent_context=recent_context)
+                # 일반 틱 실행 (스토리 비트 가이드 포함)
+                result = llm_client.run_tick(
+                    cfg_dict, tick, entries,
+                    recent_context=recent_context,
+                    story_beats=story_beats if story_beats else None,
+                )
                 # RAG가 적용됐으면 로그 기록
                 rag_info = result.get("_rag_info")
                 if rag_info and rag_info.get("rag_applied"):

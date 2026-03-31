@@ -227,6 +227,7 @@ class Timeline(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(200), nullable=False)
     description = db.Column(db.Text, default="")
+    narrative_goal = db.Column(db.Text, default="")  # 이 타임라인의 큰 서사 목표
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     events = db.relationship(
@@ -235,13 +236,21 @@ class Timeline(db.Model):
         order_by="TimelineEvent.tick_number, TimelineEvent.order_index",
         cascade="all, delete-orphan",
     )
+    beats = db.relationship(
+        "StoryBeat",
+        backref="timeline",
+        order_by="StoryBeat.tick_number",
+        cascade="all, delete-orphan",
+    )
 
     def to_dict(self, include_events=False):
         d = {
             "id": self.id,
             "name": self.name,
             "description": self.description,
+            "narrative_goal": self.narrative_goal or "",
             "event_count": len(self.events),
+            "beat_count": len(self.beats),
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
         if include_events:
@@ -286,5 +295,31 @@ class TimelineEvent(db.Model):
             "description": self.description,
             "event_type": self.event_type,
             "affected_entry_ids": self.affected_entry_ids,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class StoryBeat(db.Model):
+    """스토리 아크의 핵심 비트 (기-승-전-결 가이드라인)"""
+    __tablename__ = "story_beats"
+
+    id = db.Column(db.Integer, primary_key=True)
+    timeline_id = db.Column(db.Integer, db.ForeignKey("timelines.id", ondelete="CASCADE"), nullable=False)
+    tick_number = db.Column(db.Integer, nullable=False)       # 이 비트가 발생할 틱
+    beat_label = db.Column(db.String(20), default="")         # 기/승/전/결/커스텀
+    title = db.Column(db.String(300), nullable=False)          # 이 시점의 사건/목표
+    description = db.Column(db.Text, default="")              # 상세 설명
+    is_fixed = db.Column(db.Boolean, default=True)            # True: 유저 작성(고정), False: AI 채움
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "timeline_id": self.timeline_id,
+            "tick_number": self.tick_number,
+            "beat_label": self.beat_label,
+            "title": self.title,
+            "description": self.description,
+            "is_fixed": self.is_fixed,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }

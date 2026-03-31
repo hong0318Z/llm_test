@@ -81,6 +81,48 @@
     color:var(--text-muted); margin-bottom:0.5rem; margin-top:0.25rem;
   }
 
+  /* 스토리 아크 패널 */
+  #arcPanel {
+    border-radius:12px; border:1px solid rgba(255,184,108,0.3);
+    background:rgba(255,184,108,0.04); padding:14px 18px; margin-bottom:1rem;
+  }
+  #arcPanel.collapsed #arcBody { display:none; }
+  .arc-toggle-btn {
+    background:none; border:none; color:var(--accent); font-size:0.78rem;
+    cursor:pointer; padding:0; text-decoration:underline;
+  }
+  .beat-row {
+    display:flex; align-items:center; gap:8px; padding:6px 8px; border-radius:8px;
+    border:1px solid var(--border); background:var(--bg-card); margin-bottom:6px;
+    transition:border-color 0.15s;
+  }
+  .beat-row:hover { border-color:rgba(255,184,108,0.5); }
+  .beat-label-badge {
+    padding:2px 8px; border-radius:8px; font-size:0.68rem; font-weight:700;
+    white-space:nowrap; min-width:28px; text-align:center;
+  }
+  .beat-tick-num {
+    font-size:0.72rem; color:var(--text-muted); white-space:nowrap; min-width:40px;
+  }
+  .beat-title { font-size:0.83rem; flex:1; }
+  .beat-fixed-icon { font-size:0.75rem; }
+  .beat-act-btn {
+    background:none; border:1px solid var(--border); border-radius:5px;
+    padding:2px 6px; font-size:0.68rem; color:var(--text-muted); cursor:pointer;
+  }
+  .beat-act-btn:hover { border-color:var(--accent); color:var(--accent); }
+  .beat-act-btn.danger:hover { border-color:#ff7070; color:#ff7070; }
+
+  /* 타임라인 위 비트 오버레이 마커 */
+  .tl-beat-marker {
+    position:absolute; left:-43px; top:12px;
+    width:38px; height:28px; border-radius:6px;
+    display:flex; align-items:center; justify-content:center;
+    font-size:0.6rem; font-weight:700; border:1.5px solid;
+    background:rgba(255,184,108,0.12); border-color:#ffb86c; color:#ffb86c;
+    z-index:2; flex-direction:column; gap:1px;
+  }
+
   /* 새 에피소드 추가 폼 */
   #addEventForm {
     border-radius:10px; border:1px solid var(--border); background:var(--bg-card);
@@ -153,6 +195,29 @@
         </div>
       </div>
 
+      <!-- 스토리 아크 패널 -->
+      <div id="arcPanel" class="collapsed">
+        <div class="d-flex align-items-center gap-2 mb-2">
+          <span style="font-size:0.82rem; font-weight:700; color:#ffb86c;">
+            <i class="bi bi-map me-1"></i>스토리 아크
+          </span>
+          <span id="arcBeatCount" class="badge" style="background:rgba(255,184,108,0.2);color:#ffb86c;font-size:0.7rem;"></span>
+          <button class="arc-toggle-btn ms-1" onclick="toggleArcPanel()" id="arcToggleBtn">펼치기</button>
+          <button class="btn btn-sm ms-auto" onclick="openArcGoalEdit()"
+            style="border:1px solid rgba(255,184,108,0.4);color:#ffb86c;font-size:0.75rem;padding:2px 8px;">
+            <i class="bi bi-pencil me-1"></i>서사 목표 편집
+          </button>
+          <button class="btn btn-sm" onclick="openAddBeat()"
+            style="border:1px solid rgba(255,184,108,0.4);color:#ffb86c;font-size:0.75rem;padding:2px 8px;">
+            <i class="bi bi-plus-lg me-1"></i>비트 추가
+          </button>
+        </div>
+        <div id="arcGoalPreview" style="font-size:0.78rem;color:var(--text-secondary);margin-bottom:6px;display:none;"></div>
+        <div id="arcBody">
+          <div id="beatList"></div>
+        </div>
+      </div>
+
       <!-- 에피소드 추가 폼 -->
       <div id="addEventForm">
         <div class="row g-2 mb-2">
@@ -203,9 +268,17 @@
           <label class="form-label small">이름 <span style="color:#ff7070;">*</span></label>
           <input type="text" class="form-control" id="tlModalName" placeholder="타임라인 이름">
         </div>
-        <div class="mb-1">
+        <div class="mb-3">
           <label class="form-label small">설명</label>
-          <textarea class="form-control" id="tlModalDesc" rows="3" placeholder="이 타임라인에 대한 설명..."></textarea>
+          <textarea class="form-control" id="tlModalDesc" rows="2" placeholder="이 타임라인에 대한 설명..."></textarea>
+        </div>
+        <div class="mb-1">
+          <label class="form-label small" style="color:#ffb86c;">
+            <i class="bi bi-map me-1"></i>서사 목표 (큰 이슈)
+          </label>
+          <textarea class="form-control" id="tlModalGoal" rows="3"
+            placeholder="예: 대륙 통일 전쟁의 발발과 종결, 마왕의 부활과 영웅의 대항...&#10;이 목표를 달성하는 방향으로 시뮬레이션이 진행됩니다."></textarea>
+          <div class="form-text" style="color:var(--text-muted);">시뮬레이션 실행 시 LLM에게 제공되는 전체 서사 방향입니다.</div>
         </div>
       </div>
       <div class="modal-footer">
@@ -249,6 +322,89 @@
   </div>
 </div>
 
+<!-- ── 비트 추가/편집 모달 ── -->
+<div class="modal fade" id="beatModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="beatModalTitle" style="color:#ffb86c;">
+          <i class="bi bi-map me-2"></i>스토리 비트 추가
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="beatEditId">
+        <div class="row g-2 mb-3">
+          <div class="col-4">
+            <label class="form-label small">틱 번호 <span style="color:#ff7070;">*</span></label>
+            <input type="number" class="form-control form-control-sm" id="beatTick" min="1" value="1">
+          </div>
+          <div class="col-4">
+            <label class="form-label small">라벨</label>
+            <select class="form-select form-select-sm" id="beatLabel">
+              <option value="">직접 입력</option>
+              <option value="기">기 (시작)</option>
+              <option value="승">승 (전개)</option>
+              <option value="전">전 (전환)</option>
+              <option value="결">결 (결말)</option>
+              <option value="복선">복선</option>
+              <option value="위기">위기</option>
+              <option value="절정">절정</option>
+            </select>
+          </div>
+          <div class="col-4">
+            <label class="form-label small">유형</label>
+            <select class="form-select form-select-sm" id="beatFixed">
+              <option value="true">📌 고정 (유저 지정)</option>
+              <option value="false">✨ AI 자유 해석</option>
+            </select>
+          </div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label small">비트 제목 <span style="color:#ff7070;">*</span></label>
+          <input type="text" class="form-control form-control-sm" id="beatTitle"
+            placeholder="예: 왕국 간 전쟁 선포, 주인공의 각성, 최종 결전 시작...">
+        </div>
+        <div class="mb-1">
+          <label class="form-label small">상세 설명 (선택)</label>
+          <textarea class="form-control form-control-sm" id="beatDesc" rows="3"
+            placeholder="이 비트에서 반드시 일어나야 할 사건의 상세 내용...&#10;비워두면 LLM이 아크 방향에 맞춰 자유롭게 채웁니다."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">취소</button>
+        <button class="btn btn-primary" onclick="saveBeat()" style="background:#ffb86c;border-color:#ffb86c;color:#111;">
+          <i class="bi bi-check-lg me-1"></i>저장
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── 서사 목표 편집 모달 ── -->
+<div class="modal fade" id="arcGoalModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" style="color:#ffb86c;"><i class="bi bi-map me-2"></i>서사 목표 편집</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <label class="form-label small">큰 이슈 / 전체 서사 목표</label>
+        <textarea class="form-control" id="arcGoalText" rows="5"
+          placeholder="예: 대륙 통일 전쟁의 발발과 종결, 마왕의 부활과 영웅의 대항...&#10;이 목표를 달성하는 방향으로 시뮬레이션이 진행됩니다."></textarea>
+        <div class="form-text" style="color:var(--text-muted);">시뮬레이션 매 틱마다 LLM에게 전달되는 전체 서사 방향입니다.</div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">취소</button>
+        <button class="btn btn-primary" onclick="saveArcGoal()" style="background:#ffb86c;border-color:#ffb86c;color:#111;">
+          <i class="bi bi-check-lg me-1"></i>저장
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
 const CAT_COLORS = {
   '세력':'#ff7070','인물':'#6aadff','관념':'#b07aff',
@@ -257,11 +413,13 @@ const CAT_COLORS = {
 
 let timelines = [];
 let currentTl = null;
-let tlModal, editEventModal;
+let tlModal, editEventModal, beatModal, arcGoalModal;
 
 document.addEventListener('DOMContentLoaded', async () => {
   tlModal = new bootstrap.Modal(document.getElementById('tlModal'));
   editEventModal = new bootstrap.Modal(document.getElementById('editEventModal'));
+  beatModal = new bootstrap.Modal(document.getElementById('beatModal'));
+  arcGoalModal = new bootstrap.Modal(document.getElementById('arcGoalModal'));
   await loadTimelines();
 });
 
@@ -312,6 +470,8 @@ function renderTimeline() {
   document.getElementById('tlHeaderDesc').textContent = currentTl.description || '';
   document.getElementById('tlEventCount').textContent = `${currentTl.event_count}개 에피소드`;
 
+  renderArcPanel();
+
   const events = currentTl.events || [];
   const empty = document.getElementById('tlEmpty');
   const list = document.getElementById('tlEventsList');
@@ -331,18 +491,95 @@ function renderTimeline() {
     byTick[k].push(ev);
   });
 
+  // 비트맵: 틱 → 비트
+  const beatMap = {};
+  (currentTl.beats || []).forEach(b => {
+    if (!beatMap[b.tick_number]) beatMap[b.tick_number] = [];
+    beatMap[b.tick_number].push(b);
+  });
+
   const ticks = Object.keys(byTick).map(Number).sort((a,b) => a-b);
   list.innerHTML = ticks.map(tick => {
     const tickEvents = byTick[tick];
-    return tickEvents.map((ev, idx) => renderEvent(ev, tick, idx === 0)).join('');
+    const tickBeats = beatMap[tick] || [];
+    return tickEvents.map((ev, idx) => renderEvent(ev, tick, idx === 0, tickBeats)).join('');
   }).join('');
 }
 
-function renderEvent(ev, tick, showTick) {
+// ── 스토리 아크 패널 렌더 ────────────────────────────────
+function renderArcPanel() {
+  const beats = currentTl.beats || [];
+  const goal = currentTl.narrative_goal || '';
+  const countEl = document.getElementById('arcBeatCount');
+  countEl.textContent = beats.length > 0 ? `비트 ${beats.length}개` : '비트 없음';
+
+  const goalEl = document.getElementById('arcGoalPreview');
+  if (goal) {
+    goalEl.style.display = 'block';
+    goalEl.innerHTML = `<i class="bi bi-bullseye me-1" style="color:#ffb86c;"></i><strong>서사 목표:</strong> ${escHtml(goal)}`;
+  } else {
+    goalEl.style.display = 'none';
+  }
+
+  const BEAT_COLORS = {
+    '기': '#6eeab0', '승': '#6aadff', '전': '#ffb86c', '결': '#ff7070',
+    '복선': '#b07aff', '위기': '#ff9f7a', '절정': '#ffe96a',
+  };
+
+  const list = document.getElementById('beatList');
+  if (beats.length === 0) {
+    list.innerHTML = '<div style="font-size:0.78rem;color:var(--text-muted);text-align:center;padding:8px 0;">비트가 없습니다. [비트 추가]로 기-승-전-결을 설정하세요.</div>';
+    return;
+  }
+
+  list.innerHTML = beats.map(b => {
+    const col = BEAT_COLORS[b.beat_label] || '#8892a4';
+    const fixedIcon = b.is_fixed ? '📌' : '✨';
+    const fixedTitle = b.is_fixed ? '고정 비트 (유저 지정)' : 'AI 자유 해석 비트';
+    return `
+      <div class="beat-row" id="beat-${b.id}">
+        <span class="beat-tick-num">틱 ${b.tick_number}</span>
+        ${b.beat_label
+          ? `<span class="beat-label-badge" style="background:${col}18;color:${col};border:1px solid ${col}33;">${b.beat_label}</span>`
+          : '<span style="width:28px;"></span>'}
+        <span class="beat-title">${escHtml(b.title)}</span>
+        <span class="beat-fixed-icon" title="${fixedTitle}">${fixedIcon}</span>
+        ${b.description ? `<span title="${escHtml(b.description)}" style="font-size:0.72rem;color:var(--text-muted);cursor:help;"><i class="bi bi-info-circle"></i></span>` : ''}
+        <button class="beat-act-btn" onclick="openEditBeat(${b.id})"><i class="bi bi-pencil"></i></button>
+        <button class="beat-act-btn danger" onclick="deleteBeat(${b.id})"><i class="bi bi-trash"></i></button>
+      </div>`;
+  }).join('');
+}
+
+function toggleArcPanel() {
+  const panel = document.getElementById('arcPanel');
+  const btn = document.getElementById('arcToggleBtn');
+  const collapsed = panel.classList.toggle('collapsed');
+  btn.textContent = collapsed ? '펼치기' : '접기';
+}
+
+function renderEvent(ev, tick, showTick, tickBeats) {
   const isAuto = ev.event_type === 'auto';
   const markerClass = isAuto ? 'auto' : 'user';
   const markerLabel = tick === 0 ? '사용자' : `틱<br>${tick}`;
   const markerTitle = isAuto ? `자동 기록 (틱 ${tick})` : `수동 추가 (틱 ${tick})`;
+
+  // 비트 마커
+  const BEAT_COLORS = {
+    '기': '#6eeab0', '승': '#6aadff', '전': '#ffb86c', '결': '#ff7070',
+    '복선': '#b07aff', '위기': '#ff9f7a', '절정': '#ffe96a',
+  };
+  let beatMarkerHtml = '';
+  if (showTick && tickBeats && tickBeats.length > 0) {
+    const b = tickBeats[0];
+    const col = BEAT_COLORS[b.beat_label] || '#ffb86c';
+    const label = b.beat_label || '비트';
+    const fixedIcon = b.is_fixed ? '📌' : '✨';
+    beatMarkerHtml = `<div class="tl-beat-marker" style="background:${col}18;border-color:${col};color:${col};"
+      title="${escHtml(b.title)}\n(${b.is_fixed ? '고정' : 'AI 자유'})">
+      ${fixedIcon}<span>${escHtml(label)}</span>
+    </div>`;
+  }
 
   const entryBadges = (ev.affected_entries || []).map(e => {
     const col = CAT_COLORS[e.category] || '#8892a4';
@@ -358,7 +595,7 @@ function renderEvent(ev, tick, showTick) {
 
   return `
     <div class="tl-event" id="ev-${ev.id}">
-      ${showTick ? `<div class="tl-tick-marker ${markerClass}" title="${markerTitle}">
+      ${showTick ? `${beatMarkerHtml}<div class="tl-tick-marker ${markerClass}" title="${markerTitle}" style="${beatMarkerHtml ? 'margin-top:34px;' : ''}">
         ${markerLabel}
       </div>` : `<div class="tl-tick-marker ${markerClass}" style="opacity:0;pointer-events:none;">${markerLabel}</div>`}
       <div class="tl-event-card">
@@ -386,11 +623,100 @@ function toggleDesc(btn) {
   btn.innerHTML = visible ? '<i class="bi bi-chevron-down"></i>' : '<i class="bi bi-chevron-up"></i>';
 }
 
+// ── 서사 목표 편집 ────────────────────────────────────────
+function openArcGoalEdit() {
+  if (!currentTl) return;
+  document.getElementById('arcGoalText').value = currentTl.narrative_goal || '';
+  arcGoalModal.show();
+}
+
+async function saveArcGoal() {
+  if (!currentTl) return;
+  const goal = document.getElementById('arcGoalText').value.trim();
+  const res = await fetch(`/api/timelines/${currentTl.id}`, {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ narrative_goal: goal }),
+  });
+  if (res.ok) {
+    arcGoalModal.hide();
+    await selectTimeline(currentTl.id);
+  } else {
+    alert('저장 실패');
+  }
+}
+
+// ── 스토리 비트 CRUD ────────────────────────────────────
+function openAddBeat() {
+  if (!currentTl) return;
+  document.getElementById('beatModalTitle').textContent = '스토리 비트 추가';
+  document.getElementById('beatEditId').value = '';
+  document.getElementById('beatTick').value = 1;
+  document.getElementById('beatLabel').value = '';
+  document.getElementById('beatFixed').value = 'true';
+  document.getElementById('beatTitle').value = '';
+  document.getElementById('beatDesc').value = '';
+  beatModal.show();
+}
+
+function openEditBeat(beatId) {
+  if (!currentTl) return;
+  const beat = (currentTl.beats || []).find(b => b.id === beatId);
+  if (!beat) return;
+  document.getElementById('beatModalTitle').textContent = '스토리 비트 편집';
+  document.getElementById('beatEditId').value = beatId;
+  document.getElementById('beatTick').value = beat.tick_number;
+  document.getElementById('beatLabel').value = beat.beat_label || '';
+  document.getElementById('beatFixed').value = beat.is_fixed ? 'true' : 'false';
+  document.getElementById('beatTitle').value = beat.title;
+  document.getElementById('beatDesc').value = beat.description || '';
+  beatModal.show();
+}
+
+async function saveBeat() {
+  const title = document.getElementById('beatTitle').value.trim();
+  if (!title) { alert('비트 제목을 입력하세요.'); return; }
+  const editId = document.getElementById('beatEditId').value;
+  const body = {
+    tick_number: parseInt(document.getElementById('beatTick').value) || 1,
+    beat_label: document.getElementById('beatLabel').value,
+    is_fixed: document.getElementById('beatFixed').value === 'true',
+    title,
+    description: document.getElementById('beatDesc').value.trim(),
+  };
+  let res;
+  if (editId) {
+    res = await fetch(`/api/story-beats/${editId}`, {
+      method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
+    });
+  } else {
+    res = await fetch(`/api/timelines/${currentTl.id}/beats`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
+    });
+  }
+  if (res.ok) {
+    beatModal.hide();
+    await selectTimeline(currentTl.id);
+    // 패널 자동 펼치기
+    const panel = document.getElementById('arcPanel');
+    if (panel.classList.contains('collapsed')) toggleArcPanel();
+  } else {
+    alert('저장 실패');
+  }
+}
+
+async function deleteBeat(beatId) {
+  if (!confirm('이 비트를 삭제하시겠습니까?')) return;
+  const res = await fetch(`/api/story-beats/${beatId}`, { method: 'DELETE' });
+  if (res.ok) await selectTimeline(currentTl.id);
+}
+
 // ── CRUD ────────────────────────────────────────────────
 function openCreateTimeline() {
   document.getElementById('tlModalTitle').textContent = '새 타임라인';
   document.getElementById('tlModalName').value = '';
   document.getElementById('tlModalDesc').value = '';
+  document.getElementById('tlModalGoal').value = '';
   tlModal._editId = null;
   tlModal.show();
 }
@@ -400,6 +726,7 @@ function openEditTimeline() {
   document.getElementById('tlModalTitle').textContent = '타임라인 편집';
   document.getElementById('tlModalName').value = currentTl.name;
   document.getElementById('tlModalDesc').value = currentTl.description || '';
+  document.getElementById('tlModalGoal').value = currentTl.narrative_goal || '';
   tlModal._editId = currentTl.id;
   tlModal.show();
 }
@@ -407,7 +734,11 @@ function openEditTimeline() {
 async function saveTimeline() {
   const name = document.getElementById('tlModalName').value.trim();
   if (!name) { alert('이름을 입력하세요.'); return; }
-  const body = { name, description: document.getElementById('tlModalDesc').value.trim() };
+  const body = {
+    name,
+    description: document.getElementById('tlModalDesc').value.trim(),
+    narrative_goal: document.getElementById('tlModalGoal').value.trim(),
+  };
   const editId = tlModal._editId;
   const url = editId ? `/api/timelines/${editId}` : '/api/timelines';
   const method = editId ? 'PUT' : 'POST';

@@ -54,6 +54,15 @@
             </button>
           </div>
         </div>
+        <!-- 선택된 타임라인 아크 미리보기 -->
+        <div id="arcPreview" style="display:none; margin-bottom:0.75rem; padding:10px 14px; border-radius:10px;
+          border:1px solid rgba(255,184,108,0.3); background:rgba(255,184,108,0.04); font-size:0.8rem;">
+          <div style="color:#ffb86c; font-weight:600; margin-bottom:6px;">
+            <i class="bi bi-map me-1"></i>스토리 아크
+          </div>
+          <div id="arcPreviewGoal" style="color:var(--text-secondary); margin-bottom:6px;"></div>
+          <div id="arcPreviewBeats" style="display:flex; flex-wrap:wrap; gap:4px;"></div>
+        </div>
 
         <!-- DB 토큰 추정 -->
         <div id="tokenEstimate" class="mb-3 p-3 rounded" style="background:rgba(139,127,247,0.07); border:1px solid rgba(139,127,247,0.2); display:none;">
@@ -600,7 +609,7 @@ async function openTimelineModal() {
   timelineModal.show();
 }
 
-function applyTimelinePick() {
+async function applyTimelinePick() {
   const checked = document.querySelector('input[name="tlPick"]:checked');
   if (!checked) return;
   _selectedTimelineId = null;
@@ -622,6 +631,42 @@ function applyTimelinePick() {
   document.getElementById('timelinePickBtn').style.borderColor =
     (_selectedTimelineId || _newTimelineName) ? 'var(--accent)' : 'rgba(139,127,247,0.4)';
   timelineModal.hide();
+  // 스토리 아크 미리보기 업데이트
+  await updateArcPreview();
+}
+
+async function updateArcPreview() {
+  const preview = document.getElementById('arcPreview');
+  if (!_selectedTimelineId) { preview.style.display = 'none'; return; }
+  try {
+    const res = await fetch(`/api/timelines/${_selectedTimelineId}`);
+    const tl = await res.json();
+    const beats = tl.beats || [];
+    const goal = tl.narrative_goal || '';
+    if (!goal && beats.length === 0) { preview.style.display = 'none'; return; }
+    preview.style.display = 'block';
+    const goalEl = document.getElementById('arcPreviewGoal');
+    goalEl.innerHTML = goal ? `<strong>서사 목표:</strong> ${escHtml(goal)}` : '';
+    goalEl.style.display = goal ? 'block' : 'none';
+
+    const BEAT_COLORS = {
+      '기': '#6eeab0', '승': '#6aadff', '전': '#ffb86c', '결': '#ff7070',
+      '복선': '#b07aff', '위기': '#ff9f7a', '절정': '#ffe96a',
+    };
+    const beatsEl = document.getElementById('arcPreviewBeats');
+    beatsEl.innerHTML = beats.map(b => {
+      const col = BEAT_COLORS[b.beat_label] || '#8892a4';
+      const label = b.beat_label ? `[${b.beat_label}] ` : '';
+      const fixedIcon = b.is_fixed ? '📌' : '✨';
+      return `<span title="${escHtml(b.title)}" style="
+        padding:2px 8px; border-radius:8px; font-size:0.7rem; font-weight:500;
+        background:${col}18; color:${col}; border:1px solid ${col}33; white-space:nowrap;">
+        ${fixedIcon} 틱${b.tick_number} ${label}${escHtml(b.title.slice(0, 20))}${b.title.length > 20 ? '…' : ''}
+      </span>`;
+    }).join('');
+  } catch(e) {
+    document.getElementById('arcPreview').style.display = 'none';
+  }
 }
 </script>
 

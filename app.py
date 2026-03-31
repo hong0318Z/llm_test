@@ -8,7 +8,7 @@ import json as _json
 from collections import Counter
 from flask import Flask, jsonify, request, render_template, abort, Response, send_from_directory
 from werkzeug.utils import secure_filename
-from models import db, WorldEntry, SimulationConfig, SimulationRun, SimulationLog, WorldSnapshot, AppSettings, Timeline, TimelineEvent, CATEGORIES
+from models import db, WorldEntry, SimulationConfig, SimulationRun, SimulationLog, WorldSnapshot, AppSettings, Timeline, TimelineEvent, StoryBeat, CATEGORIES
 from datetime import datetime
 
 app = Flask(__name__)
@@ -36,6 +36,7 @@ with app.app_context():
         ("world_entries",    "image_filename",          "TEXT"),
         ("app_settings",     "rag_token_budget",        "INTEGER DEFAULT 0"),
         ("simulation_runs",  "timeline_id",             "INTEGER"),
+        ("timelines",        "narrative_goal",          "TEXT DEFAULT ''"),
     ]
     with db.engine.connect() as conn:
         for table, col, col_def in _migrate_columns:
@@ -442,6 +443,7 @@ def get_timeline(tl_id):
         events.append(d)
     result = tl.to_dict()
     result["events"] = events
+    result["beats"] = [b.to_dict() for b in tl.beats]
     return jsonify(result)
 
 
@@ -453,6 +455,8 @@ def update_timeline(tl_id):
         tl.name = data["name"]
     if "description" in data:
         tl.description = data["description"]
+    if "narrative_goal" in data:
+        tl.narrative_goal = data["narrative_goal"]
     db.session.commit()
     return jsonify(tl.to_dict())
 
@@ -511,6 +515,59 @@ def update_timeline_event(ev_id):
 def delete_timeline_event(ev_id):
     ev = TimelineEvent.query.get_or_404(ev_id)
     db.session.delete(ev)
+    db.session.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/timelines/<int:tl_id>/beats", methods=["GET"])
+def list_story_beats(tl_id):
+    Timeline.query.get_or_404(tl_id)
+    beats = StoryBeat.query.filter_by(timeline_id=tl_id).order_by(StoryBeat.tick_number).all()
+    return jsonify([b.to_dict() for b in beats])
+
+
+@app.route("/api/timelines/<int:tl_id>/beats", methods=["POST"])
+def create_story_beat(tl_id):
+    Timeline.query.get_or_404(tl_id)
+    data = request.json or {}
+    title = (data.get("title") or "").strip()
+    if not title:
+        return jsonify({"error": "title은 필수입니다."}), 400
+    beat = StoryBeat(
+        timeline_id=tl_id,
+        tick_number=int(data.get("tick_number", 1)),
+        beat_label=(data.get("beat_label") or "").strip(),
+        title=title,
+        description=data.get("description", ""),
+        is_fixed=bool(data.get("is_fixed", True)),
+    )
+    db.session.add(beat)
+    db.session.commit()
+    return jsonify(beat.to_dict()), 201
+
+
+@app.route("/api/story-beats/<int:beat_id>", methods=["PUT"])
+def update_story_beat(beat_id):
+    beat = StoryBeat.query.get_or_404(beat_id)
+    data = request.json or {}
+    if "tick_number" in data:
+        beat.tick_number = int(data["tick_number"])
+    if "beat_label" in data:
+        beat.beat_label = data["beat_label"]
+    if "title" in data:
+        beat.title = data["title"]
+    if "description" in data:
+        beat.description = data["description"]
+    if "is_fixed" in data:
+        beat.is_fixed = bool(data["is_fixed"])
+    db.session.commit()
+    return jsonify(beat.to_dict())
+
+
+@app.route("/api/story-beats/<int:beat_id>", methods=["DELETE"])
+def delete_story_beat(beat_id):
+    beat = StoryBeat.query.get_or_404(beat_id)
+    db.session.delete(beat)
     db.session.commit()
     return jsonify({"ok": True})
 

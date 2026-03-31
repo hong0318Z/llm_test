@@ -109,7 +109,7 @@ USER_PROMPT_TEMPLATE = """\
 === 현재 세계관 상태 ===
 {world_state}
 
-위 세계관에서 이번 틱에 발생할 사건과 변화를 JSON으로 생성하세요.
+위 세계관에서 이번 틱에 발생할 사건과 변화를 JSON으로 생성하세요.{story_beat_section}
 
 출력 JSON 스키마:
 {{
@@ -238,7 +238,53 @@ def estimate_world_tokens(entries: list, config: dict = None) -> dict:
     }
 
 
-def run_tick(config: dict, tick_number: int, entries: list, recent_context: str = "") -> dict:
+def build_story_beat_section(story_beats: list, tick_number: int) -> str:
+    """현재 틱의 스토리 비트 가이드 섹션을 생성"""
+    if not story_beats:
+        return ""
+
+    # 현재 틱 비트
+    current = [b for b in story_beats if b["tick_number"] == tick_number]
+    # 앞으로 남은 비트 (다음 3개까지)
+    future = sorted([b for b in story_beats if b["tick_number"] > tick_number], key=lambda x: x["tick_number"])[:3]
+    # 이미 지난 비트 (직전 1개)
+    past = sorted([b for b in story_beats if b["tick_number"] < tick_number], key=lambda x: x["tick_number"])
+    past = past[-1:] if past else []
+
+    lines = ["\n\n=== 스토리 아크 가이드 ==="]
+
+    narrative_goal = story_beats[0].get("_narrative_goal", "") if story_beats else ""
+    if narrative_goal:
+        lines.append(f"[전체 서사 목표] {narrative_goal}")
+
+    if past:
+        b = past[0]
+        label = f"[{b['beat_label']}] " if b.get("beat_label") else ""
+        lines.append(f"\n▶ 직전 비트 (틱 {b['tick_number']}): {label}{b['title']}")
+
+    if current:
+        lines.append("\n🎯 이번 틱 목표 (반드시 반영하세요):")
+        for b in current:
+            label = f"[{b['beat_label']}] " if b.get("beat_label") else ""
+            fixed_mark = "📌 " if b.get("is_fixed") else "✨ AI 자유 해석: "
+            lines.append(f"  {fixed_mark}{label}{b['title']}")
+            if b.get("description"):
+                lines.append(f"    → {b['description']}")
+    else:
+        lines.append("\n(이번 틱 지정 비트 없음 - 전체 서사 흐름에 맞게 자유롭게 진행)")
+
+    if future:
+        lines.append("\n⏭ 향후 예정 비트 (장기 복선 고려):")
+        for b in future:
+            label = f"[{b['beat_label']}] " if b.get("beat_label") else ""
+            lines.append(f"  틱 {b['tick_number']}: {label}{b['title']}")
+
+    lines.append("\n이번 틱의 사건은 위 아크 가이드를 따르거나 자연스럽게 연결되어야 합니다.")
+    return "\n".join(lines)
+
+
+def run_tick(config: dict, tick_number: int, entries: list, recent_context: str = "",
+             story_beats: list = None) -> dict:
     """단일 틱 실행. LLM을 호출해 세계관 변화를 반환."""
     client, model = get_llm_client()
     max_chars = config.get("max_content_chars") or 500
@@ -257,9 +303,11 @@ def run_tick(config: dict, tick_number: int, entries: list, recent_context: str 
         prompt_level_3=config.get("prompt_level_3") or "없음",
     )
     world_state = serialize_world_state(entries, max_chars=max_chars)
+    story_beat_section = build_story_beat_section(story_beats or [], tick_number)
     user_prompt = USER_PROMPT_TEMPLATE.format(
         tick_number=tick_number,
         world_state=world_state,
+        story_beat_section=story_beat_section,
     )
 
     response = client.chat.completions.create(

@@ -40,6 +40,7 @@ with app.app_context():
         ("world_entries",    "parent_entry_id",         "INTEGER"),
         ("world_entries",    "version_note",            "TEXT DEFAULT ''"),
         ("world_entries",    "is_superseded",           "BOOLEAN DEFAULT 0"),
+        ("timelines",        "main_entry_id",           "INTEGER"),
     ]
     with db.engine.connect() as conn:
         for table, col, col_def in _migrate_columns:
@@ -480,10 +481,76 @@ def create_timeline():
     name = (data.get("name") or "").strip()
     if not name:
         return jsonify({"error": "name은 필수입니다."}), 400
-    tl = Timeline(name=name, description=data.get("description", ""))
+    tl = Timeline(
+        name=name,
+        description=data.get("description", ""),
+        main_entry_id=data.get("main_entry_id") or None,
+    )
     db.session.add(tl)
     db.session.commit()
     return jsonify(tl.to_dict()), 201
+
+
+@app.route("/api/timelines/generate", methods=["POST"])
+def generate_timeline_llm():
+    """특정 엔트리 중심으로 LLM 1회 호출로 타임라인 자동 생성"""
+    from llm_client import generate_timeline
+    data = request.json or {}
+    entry_id = data.get("entry_id")
+    extra_prompt = (data.get("extra_prompt") or "").strip()
+    episode_count = int(data.get("episode_count") or 5)
+    timeline_name = (data.get("timeline_name") or "").strip()
+
+    if not entry_id:
+        return jsonify({"error": "entry_id는 필수입니다."}), 400
+
+    entry = WorldEntry.query.get_or_404(entry_id)
+    world_entries = [e.to_dict() for e in
+                     WorldEntry.query.filter_by(is_active=True, is_summarized=False)
+                     .filter(db.or_(WorldEntry.is_superseded.is_(False), WorldEntry.is_superseded.is_(None)))
+                     .all()]
+
+    try:
+        result = generate_timeline(entry.to_dict(), world_entries, extra_prompt, episode_count)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    if result.get("_parse_error"):
+        return jsonify({"error": "LLM 응답 파싱 실패", "raw": result.get("_raw", "")}), 500
+
+    name = timeline_name or result.get("timeline_name") or f"{entry.title} 타임라인"
+    desc = result.get("timeline_description", "")
+    tl = Timeline(name=name, description=desc, main_entry_id=entry_id)
+    db.session.add(tl)
+    db.session.flush()
+
+    for i, ep in enumerate(result.get("episodes", [])):
+        ev = TimelineEvent(
+            timeline_id=tl.id,
+            tick_number=int(ep.get("tick_number") or (i + 1)),
+            order_index=i,
+            title=(ep.get("title") or f"에피소드 {i+1}")[:300],
+            description=ep.get("description", ""),
+            event_type="auto",
+        )
+        ev.affected_entry_ids = [entry_id]
+        db.session.add(ev)
+
+    db.session.commit()
+    return jsonify({
+        "timeline": tl.to_dict(),
+        "episode_count": len(result.get("episodes", [])),
+        "tokens_in": result.get("_tokens_in", 0),
+        "tokens_out": result.get("_tokens_out", 0),
+    }), 201
+
+
+@app.route("/api/entries/<int:entry_id>/timelines", methods=["GET"])
+def get_entry_timelines(entry_id):
+    """특정 엔트리에 종속된 타임라인 목록"""
+    WorldEntry.query.get_or_404(entry_id)
+    tls = Timeline.query.filter_by(main_entry_id=entry_id).order_by(Timeline.created_at.desc()).all()
+    return jsonify([t.to_dict() for t in tls])
 
 
 @app.route("/api/timelines/<int:tl_id>", methods=["GET"])
@@ -515,6 +582,8 @@ def update_timeline(tl_id):
         tl.description = data["description"]
     if "narrative_goal" in data:
         tl.narrative_goal = data["narrative_goal"]
+    if "main_entry_id" in data:
+        tl.main_entry_id = data["main_entry_id"] or None
     db.session.commit()
     return jsonify(tl.to_dict())
 

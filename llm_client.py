@@ -536,3 +536,69 @@ def generate_entry(title: str, category: str, hint: str, ref_entries: list) -> d
         "_tokens_in": tokens_in,
         "_tokens_out": tokens_out,
     }
+
+
+TIMELINE_GEN_PROMPT = """\
+당신은 세계관 타임라인 작가입니다.
+주어진 엔트리를 중심으로 해당 엔트리의 서사 타임라인을 생성하세요.
+
+=== 대상 엔트리 ===
+[{category}] {title}
+{content}
+
+=== 세계관 컨텍스트 ===
+{world_state}
+
+=== 추가 지시 ===
+{extra_prompt}
+
+위 엔트리를 중심으로 흥미로운 타임라인(서사 흐름)을 생성하세요.
+에피소드는 시간 순서대로 작성하며, 각 에피소드는 구체적인 사건을 담으세요.
+
+출력 JSON 스키마:
+{{
+  "timeline_name": "타임라인 이름 (간결하게)",
+  "timeline_description": "이 타임라인의 전체적인 설명",
+  "episodes": [
+    {{
+      "tick_number": 1,
+      "title": "에피소드 제목",
+      "description": "에피소드 상세 내용 (2-4문장)"
+    }}
+  ]
+}}
+
+반드시 유효한 JSON만 출력하세요 (마크다운 없이).
+"""
+
+
+def generate_timeline(entry: dict, world_entries: list, extra_prompt: str = "", episode_count: int = 5) -> dict:
+    """특정 엔트리를 중심으로 타임라인을 1회 LLM 호출로 생성"""
+    client, model = get_llm_client()
+
+    world_state = serialize_world_state(
+        [e for e in world_entries if e["id"] != entry["id"]],
+        max_chars=300,
+    )
+
+    prompt = TIMELINE_GEN_PROMPT.format(
+        category=entry.get("category", ""),
+        title=entry.get("title", ""),
+        content=entry.get("content", ""),
+        world_state=world_state[:4000] if len(world_state) > 4000 else world_state,
+        extra_prompt=extra_prompt or f"이 엔트리의 주요 사건을 {episode_count}개의 에피소드로 구성하세요.",
+    )
+
+    response = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.85,
+        max_tokens=MAX_TOKENS,
+    )
+
+    raw = response.choices[0].message.content or ""
+    result = _parse_json_safe(raw, "generate_timeline")
+    result["_raw"] = raw
+    result["_tokens_in"] = getattr(response.usage, "prompt_tokens", 0)
+    result["_tokens_out"] = getattr(response.usage, "completion_tokens", 0)
+    return result

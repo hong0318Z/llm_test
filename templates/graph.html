@@ -160,6 +160,21 @@
             <div><span class="meta-label">상태</span><br><span id="sdStatus"></span></div>
             <div><span class="meta-label">등록일</span><br><span id="sdCreatedAt" class="meta-val"></span></div>
           </div>
+
+          <!-- 타임라인 섹션 -->
+          <div id="sdTimelineSection" style="display:none; margin-top:12px;">
+            <hr style="border-color:var(--border); margin:10px 0;">
+            <div class="d-flex align-items-center gap-2 mb-2">
+              <span class="meta-label mb-0" style="color:var(--accent);">
+                <i class="bi bi-clock-history me-1"></i>타임라인
+              </span>
+              <span id="sdTimelineCount" style="font-size:0.68rem;background:rgba(139,127,247,0.2);color:var(--accent);border-radius:8px;padding:1px 7px;"></span>
+            </div>
+            <div id="sdTimelineList"></div>
+            <a href="/timeline" style="font-size:0.72rem;color:var(--accent);text-decoration:none;">
+              <i class="bi bi-box-arrow-up-right me-1"></i>타임라인 페이지에서 보기
+            </a>
+          </div>
         </div>
 
         <!-- 편집 모드 -->
@@ -443,6 +458,36 @@ function showSidePanel(entry) {
   showViewMode();
   network && network.selectNodes([entry.id]);
   network && network.focus(entry.id, { scale: 1.1, animation: { duration: 350, easingFunction: 'easeInOutQuad' } });
+
+  // 타임라인 비동기 로드
+  loadNodeTimelines(entry.id);
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+async function loadNodeTimelines(entryId) {
+  const section = document.getElementById('sdTimelineSection');
+  const list = document.getElementById('sdTimelineList');
+  section.style.display = 'none';
+  try {
+    const res = await fetch(`/api/entries/${entryId}/timelines`);
+    if (!res.ok) return;
+    const tls = await res.json();
+    if (tls.length === 0) return;
+    section.style.display = 'block';
+    document.getElementById('sdTimelineCount').textContent = tls.length + '개';
+    list.innerHTML = tls.map(t => `
+      <div class="mb-2 p-2 rounded" style="background:rgba(139,127,247,0.05);border:1px solid rgba(139,127,247,0.15);cursor:pointer;"
+        onclick="window.location='/timeline?tl=${t.id}'">
+        <div style="font-size:0.8rem;font-weight:600;color:var(--text-primary);">
+          <i class="bi bi-clock-history me-1" style="color:var(--accent);"></i>${escHtml(t.name)}
+        </div>
+        <div style="font-size:0.72rem;color:var(--text-muted);">에피소드 ${t.event_count}개</div>
+        ${t.description ? `<div style="font-size:0.72rem;color:var(--text-secondary);margin-top:2px;">${escHtml(t.description.slice(0,60))}${t.description.length>60?'…':''}</div>` : ''}
+      </div>`).join('');
+  } catch(e) {}
 }
 
 // ── 이미지 ───────────────────────────────────────────────

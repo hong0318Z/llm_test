@@ -235,6 +235,7 @@ class Timeline(db.Model):
     name = db.Column(db.String(200), nullable=False)
     description = db.Column(db.Text, default="")
     narrative_goal = db.Column(db.Text, default="")  # 이 타임라인의 큰 서사 목표
+    main_entry_id = db.Column(db.Integer, db.ForeignKey("world_entries.id"), nullable=True)  # 종속 엔트리
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     events = db.relationship(
@@ -256,6 +257,7 @@ class Timeline(db.Model):
             "name": self.name,
             "description": self.description,
             "narrative_goal": self.narrative_goal or "",
+            "main_entry_id": self.main_entry_id,
             "event_count": len(self.events),
             "beat_count": len(self.beats),
             "created_at": self.created_at.isoformat() if self.created_at else None,

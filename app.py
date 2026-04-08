@@ -1090,7 +1090,12 @@ def list_logs():
     limit = int(request.args.get("limit", 100))
     offset = int(request.args.get("offset", 0))
 
+    wid = get_world_id()
     q = SimulationLog.query
+    if wid and not run_id:
+        # 현재 세계관의 런에 속한 로그만 조회
+        run_ids = [r.id for r in SimulationRun.query.filter_by(world_id=wid).with_entities(SimulationRun.id).all()]
+        q = q.filter(SimulationLog.run_id.in_(run_ids))
     if run_id:
         q = q.filter_by(run_id=int(run_id))
     if tick:
@@ -1101,6 +1106,32 @@ def list_logs():
     total = q.count()
     logs = q.order_by(SimulationLog.created_at.desc()).offset(offset).limit(limit).all()
     return jsonify({"total": total, "logs": [l.to_dict() for l in logs]})
+
+
+@app.route("/api/logs/<int:log_id>", methods=["DELETE"])
+def delete_log(log_id):
+    log = SimulationLog.query.get_or_404(log_id)
+    db.session.delete(log)
+    db.session.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/logs", methods=["DELETE"])
+def delete_all_logs():
+    """현재 세계관의 모든 로그 삭제 (또는 특정 run_id)"""
+    run_id = request.args.get("run_id")
+    wid = get_world_id()
+
+    if run_id:
+        SimulationLog.query.filter_by(run_id=int(run_id)).delete()
+    elif wid:
+        run_ids = [r.id for r in SimulationRun.query.filter_by(world_id=wid).with_entities(SimulationRun.id).all()]
+        if run_ids:
+            SimulationLog.query.filter(SimulationLog.run_id.in_(run_ids)).delete(synchronize_session=False)
+    else:
+        SimulationLog.query.delete()
+    db.session.commit()
+    return jsonify({"ok": True})
 
 
 # ─────────────────────────────────────────

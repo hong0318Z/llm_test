@@ -193,6 +193,14 @@
   <nav class="navbar navbar-expand-lg sticky-top">
     <div class="container-fluid px-4">
       <a class="navbar-brand" href="/"><i class="bi bi-globe2 me-2"></i>WorldLLM <small style="font-size:0.6rem;opacity:0.5;">by hongjun</small></a>
+      {% if current_world %}
+      <a href="/worlds" class="ms-3 d-flex align-items-center gap-1 text-decoration-none"
+         style="background:rgba(139,127,247,0.12); border:1px solid rgba(139,127,247,0.3); border-radius:20px; padding:3px 12px;">
+        <i class="bi bi-layers" style="color:var(--accent); font-size:0.78rem;"></i>
+        <span style="color:var(--accent); font-size:0.8rem; font-weight:600;">{{ current_world.name }}</span>
+        <i class="bi bi-chevron-down" style="color:var(--accent); font-size:0.65rem;"></i>
+      </a>
+      {% endif %}
       <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navMenu">
         <span class="navbar-toggler-icon"></span>
       </button>

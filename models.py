@@ -9,10 +9,38 @@ CREATOR_USER = "user"
 CREATOR_LLM = "llm"
 
 
+class World(db.Model):
+    """세계관 컨테이너 - 모든 데이터의 최상위 그룹"""
+    __tablename__ = "worlds"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    description = db.Column(db.Text, default="")
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self, with_counts=False):
+        d = {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description or "",
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+        if with_counts:
+            d["entry_count"] = WorldEntry.query.filter_by(world_id=self.id).filter(
+                db.or_(WorldEntry.is_superseded.is_(False), WorldEntry.is_superseded.is_(None))
+            ).count()
+            d["timeline_count"] = Timeline.query.filter_by(world_id=self.id).count()
+            d["run_count"] = SimulationRun.query.filter_by(world_id=self.id).count()
+        return d
+
+
 class WorldEntry(db.Model):
     __tablename__ = "world_entries"
 
     id = db.Column(db.Integer, primary_key=True)
+    world_id = db.Column(db.Integer, db.ForeignKey("worlds.id"), nullable=True)  # 소속 세계관
     title = db.Column(db.String(200), nullable=False)
     category = db.Column(db.String(50), nullable=False)
     content = db.Column(db.Text, nullable=False)
@@ -57,6 +85,7 @@ class WorldEntry(db.Model):
             "parent_entry_id": self.parent_entry_id,
             "version_note": self.version_note or "",
             "is_superseded": self.is_superseded or False,
+            "world_id": self.world_id,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -95,6 +124,7 @@ class SimulationConfig(db.Model):
     __tablename__ = "simulation_configs"
 
     id = db.Column(db.Integer, primary_key=True)
+    world_id = db.Column(db.Integer, db.ForeignKey("worlds.id"), nullable=True)
     name = db.Column(db.String(200), nullable=False)
     prompt_level_1 = db.Column(db.Text, default="")
     prompt_level_2 = db.Column(db.Text, default="")
@@ -120,6 +150,7 @@ class SimulationRun(db.Model):
     __tablename__ = "simulation_runs"
 
     id = db.Column(db.Integer, primary_key=True)
+    world_id = db.Column(db.Integer, db.ForeignKey("worlds.id"), nullable=True)
     config_id = db.Column(db.Integer, db.ForeignKey("simulation_configs.id"))
     status = db.Column(db.String(50), default="pending")
     current_tick = db.Column(db.Integer, default=0)
@@ -201,6 +232,7 @@ class WorldSnapshot(db.Model):
     __tablename__ = "world_snapshots"
 
     id = db.Column(db.Integer, primary_key=True)
+    world_id = db.Column(db.Integer, db.ForeignKey("worlds.id"), nullable=True)
     name = db.Column(db.String(200), nullable=False)   # "세계관 1", "초기 설정" 등
     description = db.Column(db.Text, default="")
     entries_json = db.Column(db.Text, nullable=False)  # WorldEntry 목록 전체 JSON
@@ -232,6 +264,7 @@ class Timeline(db.Model):
     __tablename__ = "timelines"
 
     id = db.Column(db.Integer, primary_key=True)
+    world_id = db.Column(db.Integer, db.ForeignKey("worlds.id"), nullable=True)
     name = db.Column(db.String(200), nullable=False)
     description = db.Column(db.Text, default="")
     narrative_goal = db.Column(db.Text, default="")  # 이 타임라인의 큰 서사 목표
@@ -254,6 +287,7 @@ class Timeline(db.Model):
     def to_dict(self, include_events=False):
         d = {
             "id": self.id,
+            "world_id": self.world_id,
             "name": self.name,
             "description": self.description,
             "narrative_goal": self.narrative_goal or "",

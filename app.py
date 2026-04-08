@@ -6,9 +6,9 @@ import csv
 import io
 import json as _json
 from collections import Counter
-from flask import Flask, jsonify, request, render_template, abort, Response, send_from_directory
+from flask import Flask, jsonify, request, render_template, abort, Response, send_from_directory, session, redirect, url_for
 from werkzeug.utils import secure_filename
-from models import db, WorldEntry, SimulationConfig, SimulationRun, SimulationLog, WorldSnapshot, AppSettings, Timeline, TimelineEvent, StoryBeat, CATEGORIES
+from models import db, World, WorldEntry, SimulationConfig, SimulationRun, SimulationLog, WorldSnapshot, AppSettings, Timeline, TimelineEvent, StoryBeat, CATEGORIES
 from datetime import datetime
 
 app = Flask(__name__)
@@ -22,25 +22,30 @@ with app.app_context():
     db.create_all()
     # 기존 DB에 누락된 컬럼 자동 추가 (마이그레이션)
     _migrate_columns = [
-        ("world_entries",    "is_summarized",           "BOOLEAN DEFAULT 0"),
-        ("simulation_runs",  "total_tokens_in",         "INTEGER DEFAULT 0"),
-        ("simulation_runs",  "total_tokens_out",        "INTEGER DEFAULT 0"),
-        ("simulation_runs",  "total_tokens",            "INTEGER DEFAULT 0"),
-        ("simulation_runs",  "selected_entry_ids_json",  "TEXT"),
-        ("simulation_runs",  "exclude_llm_entries",       "BOOLEAN DEFAULT 0"),
-
-        ("simulation_logs",  "tokens_in",               "INTEGER DEFAULT 0"),
-        ("simulation_logs",  "tokens_out",              "INTEGER DEFAULT 0"),
-        ("simulation_logs",  "tokens_total",            "INTEGER DEFAULT 0"),
-        ("world_entries",    "keywords",                "TEXT DEFAULT ''"),
-        ("world_entries",    "image_filename",          "TEXT"),
-        ("app_settings",     "rag_token_budget",        "INTEGER DEFAULT 0"),
-        ("simulation_runs",  "timeline_id",             "INTEGER"),
-        ("timelines",        "narrative_goal",          "TEXT DEFAULT ''"),
-        ("world_entries",    "parent_entry_id",         "INTEGER"),
-        ("world_entries",    "version_note",            "TEXT DEFAULT ''"),
-        ("world_entries",    "is_superseded",           "BOOLEAN DEFAULT 0"),
-        ("timelines",        "main_entry_id",           "INTEGER"),
+        ("world_entries",       "is_summarized",           "BOOLEAN DEFAULT 0"),
+        ("simulation_runs",     "total_tokens_in",         "INTEGER DEFAULT 0"),
+        ("simulation_runs",     "total_tokens_out",        "INTEGER DEFAULT 0"),
+        ("simulation_runs",     "total_tokens",            "INTEGER DEFAULT 0"),
+        ("simulation_runs",     "selected_entry_ids_json",  "TEXT"),
+        ("simulation_runs",     "exclude_llm_entries",      "BOOLEAN DEFAULT 0"),
+        ("simulation_logs",     "tokens_in",               "INTEGER DEFAULT 0"),
+        ("simulation_logs",     "tokens_out",              "INTEGER DEFAULT 0"),
+        ("simulation_logs",     "tokens_total",            "INTEGER DEFAULT 0"),
+        ("world_entries",       "keywords",                "TEXT DEFAULT ''"),
+        ("world_entries",       "image_filename",          "TEXT"),
+        ("app_settings",        "rag_token_budget",        "INTEGER DEFAULT 0"),
+        ("simulation_runs",     "timeline_id",             "INTEGER"),
+        ("timelines",           "narrative_goal",          "TEXT DEFAULT ''"),
+        ("world_entries",       "parent_entry_id",         "INTEGER"),
+        ("world_entries",       "version_note",            "TEXT DEFAULT ''"),
+        ("world_entries",       "is_superseded",           "BOOLEAN DEFAULT 0"),
+        ("timelines",           "main_entry_id",           "INTEGER"),
+        # 세계관 컨테이너 마이그레이션
+        ("world_entries",       "world_id",                "INTEGER"),
+        ("timelines",           "world_id",                "INTEGER"),
+        ("simulation_configs",  "world_id",                "INTEGER"),
+        ("simulation_runs",     "world_id",                "INTEGER"),
+        ("world_snapshots",     "world_id",                "INTEGER"),
     ]
     with db.engine.connect() as conn:
         for table, col, col_def in _migrate_columns:
@@ -49,6 +54,20 @@ with app.app_context():
                 conn.commit()
             except Exception:
                 pass  # 이미 존재하면 무시
+
+    # 기본 세계관 생성 및 기존 데이터 마이그레이션
+    if World.query.count() == 0:
+        default_world = World(name="기본 세계관", description="기존 데이터가 포함된 기본 세계관입니다.")
+        db.session.add(default_world)
+        db.session.commit()
+        wid = default_world.id
+        with db.engine.connect() as conn:
+            for tbl in ["world_entries", "timelines", "simulation_configs", "simulation_runs", "world_snapshots"]:
+                try:
+                    conn.execute(db.text(f"UPDATE {tbl} SET world_id = {wid} WHERE world_id IS NULL"))
+                    conn.commit()
+                except Exception:
+                    pass
 
     # 앱 재시작 시 고아 런(running/pending) 정리
     orphans = SimulationRun.query.filter(SimulationRun.status.in_(["running", "pending"])).all()
@@ -68,37 +87,80 @@ def _allowed_image(filename: str) -> bool:
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_IMAGE_EXT
 
 
+def get_world_id():
+    """현재 선택된 세계관 ID (세션에서)"""
+    return session.get("world_id")
+
+
+@app.context_processor
+def inject_world():
+    """모든 템플릿에 current_world 주입"""
+    wid = session.get("world_id")
+    world = World.query.get(wid) if wid else None
+    return {"current_world": world}
+
+
+def _require_world_redirect():
+    """세계관 미선택 시 /worlds로 리다이렉트 (페이지 라우트에서 사용)"""
+    if not session.get("world_id"):
+        return redirect(url_for("worlds_page"))
+    return None
+
+
 # ─────────────────────────────────────────
 #  페이지 라우트
 # ─────────────────────────────────────────
 
+@app.route("/worlds")
+def worlds_page():
+    return render_template("worlds.html")
+
+
 @app.route("/")
 def index():
+    redir = _require_world_redirect()
+    if redir:
+        return redir
     return render_template("index.html", categories=CATEGORIES)
 
 
 @app.route("/simulation")
 def simulation_page():
+    redir = _require_world_redirect()
+    if redir:
+        return redir
     return render_template("simulation.html")
 
 
 @app.route("/logs")
 def logs_page():
+    redir = _require_world_redirect()
+    if redir:
+        return redir
     return render_template("logs.html")
 
 
 @app.route("/graph")
 def graph_page():
+    redir = _require_world_redirect()
+    if redir:
+        return redir
     return render_template("graph.html", categories=CATEGORIES)
 
 
 @app.route("/stats")
 def stats_page():
+    redir = _require_world_redirect()
+    if redir:
+        return redir
     return render_template("stats.html")
 
 
 @app.route("/timeline")
 def timeline_page():
+    redir = _require_world_redirect()
+    if redir:
+        return redir
     return render_template("timeline.html")
 
 
@@ -106,6 +168,74 @@ def timeline_page():
 def serve_storage(filename):
     """엔트리 이미지 정적 파일 서빙"""
     return send_from_directory(STORAGE_DIR, filename)
+
+
+# ─────────────────────────────────────────
+#  세계관(World) 관리 API
+# ─────────────────────────────────────────
+
+@app.route("/api/worlds", methods=["GET"])
+def list_worlds():
+    worlds = World.query.order_by(World.created_at.asc()).all()
+    return jsonify([w.to_dict(with_counts=True) for w in worlds])
+
+
+@app.route("/api/worlds", methods=["POST"])
+def create_world():
+    data = request.json or {}
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "name은 필수입니다."}), 400
+    world = World(name=name, description=data.get("description", ""))
+    db.session.add(world)
+    db.session.commit()
+    return jsonify(world.to_dict()), 201
+
+
+@app.route("/api/worlds/<int:world_id>", methods=["PUT"])
+def update_world(world_id):
+    world = World.query.get_or_404(world_id)
+    data = request.json or {}
+    if "name" in data:
+        name = data["name"].strip()
+        if not name:
+            return jsonify({"error": "name은 필수입니다."}), 400
+        world.name = name
+    if "description" in data:
+        world.description = data["description"]
+    world.updated_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify(world.to_dict())
+
+
+@app.route("/api/worlds/<int:world_id>", methods=["DELETE"])
+def delete_world(world_id):
+    world = World.query.get_or_404(world_id)
+    # 소속 데이터 모두 삭제
+    WorldEntry.query.filter_by(world_id=world_id).delete()
+    Timeline.query.filter_by(world_id=world_id).delete()
+    SimulationConfig.query.filter_by(world_id=world_id).delete()
+    SimulationRun.query.filter_by(world_id=world_id).delete()
+    WorldSnapshot.query.filter_by(world_id=world_id).delete()
+    db.session.delete(world)
+    db.session.commit()
+    # 현재 선택된 세계관이었다면 세션 클리어
+    if session.get("world_id") == world_id:
+        session.pop("world_id", None)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/worlds/<int:world_id>/select", methods=["POST"])
+def select_world(world_id):
+    world = World.query.get_or_404(world_id)
+    session["world_id"] = world.id
+    return jsonify({"ok": True, "world": world.to_dict()})
+
+
+@app.route("/api/worlds/deselect", methods=["POST"])
+def deselect_world():
+    session.pop("world_id", None)
+    return jsonify({"ok": True})
 
 
 # ─────────────────────────────────────────
@@ -117,14 +247,17 @@ def list_entries():
     category = request.args.get("category")
     active_only = request.args.get("active", "true") == "true"
     include_superseded = request.args.get("include_superseded", "false") == "true"
+    wid = get_world_id()
     q = WorldEntry.query
+    if wid:
+        q = q.filter_by(world_id=wid)
     if category:
         q = q.filter_by(category=category)
     if active_only:
         q = q.filter_by(is_active=True)
     if not include_superseded:
         q = q.filter(
-            db.or_(WorldEntry.is_superseded == False, WorldEntry.is_superseded == None)
+            db.or_(WorldEntry.is_superseded.is_(False), WorldEntry.is_superseded.is_(None))
         )
     entries = q.order_by(WorldEntry.created_at.desc()).all()
     return jsonify([e.to_dict() for e in entries])
@@ -145,6 +278,7 @@ def create_entry():
         return jsonify({"error": f"category는 {CATEGORIES} 중 하나여야 합니다."}), 400
 
     entry = WorldEntry(
+        world_id=get_world_id(),
         title=data["title"],
         category=data["category"],
         content=data["content"],
@@ -258,9 +392,13 @@ def get_entry_versions(entry_id):
 def bulk_generate_keywords():
     """키워드 없는 엔트리들 일괄 키워드 생성"""
     from llm_client import generate_keywords
-    entries = WorldEntry.query.filter(
+    wid = get_world_id()
+    bq = WorldEntry.query.filter(
         db.or_(WorldEntry.keywords == None, WorldEntry.keywords == "")
-    ).filter(WorldEntry.is_active == True).all()
+    ).filter(WorldEntry.is_active == True)
+    if wid:
+        bq = bq.filter_by(world_id=wid)
+    entries = bq.all()
 
     results = {"success": 0, "failed": 0, "total": len(entries)}
     for entry in entries:
@@ -319,8 +457,12 @@ def delete_entry_image(entry_id):
 
 @app.route("/api/entries", methods=["DELETE"])
 def delete_all_entries():
-    """세계관 전체 초기화 (엔트리 전체 삭제)"""
-    WorldEntry.query.delete()
+    """현재 세계관 엔트리 전체 삭제"""
+    wid = get_world_id()
+    q = WorldEntry.query
+    if wid:
+        q = q.filter_by(world_id=wid)
+    q.delete()
     db.session.commit()
     return jsonify({"ok": True})
 
@@ -402,7 +544,11 @@ def restore_db():
 
 @app.route("/api/configs", methods=["GET"])
 def list_configs():
-    configs = SimulationConfig.query.order_by(SimulationConfig.created_at.desc()).all()
+    wid = get_world_id()
+    q = SimulationConfig.query
+    if wid:
+        q = q.filter_by(world_id=wid)
+    configs = q.order_by(SimulationConfig.created_at.desc()).all()
     return jsonify([c.to_dict() for c in configs])
 
 
@@ -412,6 +558,7 @@ def create_config():
     if not data.get("name"):
         return jsonify({"error": "name은 필수입니다."}), 400
     config = SimulationConfig(
+        world_id=get_world_id(),
         name=data["name"],
         prompt_level_1=data.get("prompt_level_1", ""),
         prompt_level_2=data.get("prompt_level_2", ""),
@@ -471,7 +618,11 @@ def update_settings():
 
 @app.route("/api/timelines", methods=["GET"])
 def list_timelines():
-    tls = Timeline.query.order_by(Timeline.created_at.desc()).all()
+    wid = get_world_id()
+    q = Timeline.query
+    if wid:
+        q = q.filter_by(world_id=wid)
+    tls = q.order_by(Timeline.created_at.desc()).all()
     return jsonify([t.to_dict() for t in tls])
 
 
@@ -482,6 +633,7 @@ def create_timeline():
     if not name:
         return jsonify({"error": "name은 필수입니다."}), 400
     tl = Timeline(
+        world_id=get_world_id(),
         name=name,
         description=data.get("description", ""),
         main_entry_id=data.get("main_entry_id") or None,
@@ -504,11 +656,14 @@ def generate_timeline_llm():
     if not entry_id:
         return jsonify({"error": "entry_id는 필수입니다."}), 400
 
+    wid = get_world_id()
     entry = WorldEntry.query.get_or_404(entry_id)
-    world_entries = [e.to_dict() for e in
-                     WorldEntry.query.filter_by(is_active=True, is_summarized=False)
-                     .filter(db.or_(WorldEntry.is_superseded.is_(False), WorldEntry.is_superseded.is_(None)))
-                     .all()]
+    eq = WorldEntry.query.filter_by(is_active=True, is_summarized=False).filter(
+        db.or_(WorldEntry.is_superseded.is_(False), WorldEntry.is_superseded.is_(None))
+    )
+    if wid:
+        eq = eq.filter_by(world_id=wid)
+    world_entries = [e.to_dict() for e in eq.all()]
 
     try:
         result = generate_timeline(entry.to_dict(), world_entries, extra_prompt, episode_count)
@@ -520,7 +675,7 @@ def generate_timeline_llm():
 
     name = timeline_name or result.get("timeline_name") or f"{entry.title} 타임라인"
     desc = result.get("timeline_description", "")
-    tl = Timeline(name=name, description=desc, main_entry_id=entry_id)
+    tl = Timeline(world_id=wid, name=name, description=desc, main_entry_id=entry_id)
     db.session.add(tl)
     db.session.flush()
 
@@ -723,9 +878,16 @@ def get_entry_timeline_events(entry_id):
 @app.route("/api/stats", methods=["GET"])
 def get_stats():
     """연구용 통계: 런별 작업시간/토큰/틱, 참조 Top10, 단어 Top10"""
-    runs = SimulationRun.query.order_by(SimulationRun.started_at.desc()).all()
-    logs = SimulationLog.query.all()
-    entries = WorldEntry.query.all()
+    wid = get_world_id()
+    rq = SimulationRun.query
+    eq = WorldEntry.query
+    if wid:
+        rq = rq.filter_by(world_id=wid)
+        eq = eq.filter_by(world_id=wid)
+    runs = rq.order_by(SimulationRun.started_at.desc()).all()
+    run_ids = [r.id for r in runs]
+    logs = SimulationLog.query.filter(SimulationLog.run_id.in_(run_ids)).all() if run_ids else []
+    entries = eq.all()
 
     # ── 런별 통계 ───────────────────────────────────────────────
     run_stats = []
@@ -834,7 +996,11 @@ def get_stats():
 
 @app.route("/api/runs", methods=["GET"])
 def list_runs():
-    runs = SimulationRun.query.order_by(SimulationRun.started_at.desc()).limit(50).all()
+    wid = get_world_id()
+    q = SimulationRun.query
+    if wid:
+        q = q.filter_by(world_id=wid)
+    runs = q.order_by(SimulationRun.started_at.desc()).limit(50).all()
     return jsonify([r.to_dict() for r in runs])
 
 
@@ -853,8 +1019,9 @@ def start_run():
     # 타임라인 연결 처리
     timeline_id = data.get("timeline_id")  # 기존 타임라인 ID
     new_timeline_name = (data.get("new_timeline_name") or "").strip()
+    wid = get_world_id()
     if new_timeline_name:
-        tl = Timeline(name=new_timeline_name, description=f"시뮬레이션 '{config.name}' 자동 생성")
+        tl = Timeline(world_id=wid, name=new_timeline_name, description=f"시뮬레이션 '{config.name}' 자동 생성")
         db.session.add(tl)
         db.session.flush()
         timeline_id = tl.id
@@ -863,6 +1030,7 @@ def start_run():
             timeline_id = None
 
     run = SimulationRun(
+        world_id=wid,
         config_id=config.id,
         status="pending",
         current_tick=0,
@@ -941,7 +1109,11 @@ def list_logs():
 
 @app.route("/api/snapshots", methods=["GET"])
 def list_snapshots():
-    snaps = WorldSnapshot.query.order_by(WorldSnapshot.created_at.desc()).all()
+    wid = get_world_id()
+    q = WorldSnapshot.query
+    if wid:
+        q = q.filter_by(world_id=wid)
+    snaps = q.order_by(WorldSnapshot.created_at.desc()).all()
     return jsonify([s.to_dict() for s in snaps])
 
 
@@ -953,11 +1125,16 @@ def save_snapshot():
     if not name:
         return jsonify({"error": "name은 필수입니다."}), 400
 
-    entries = WorldEntry.query.filter_by(is_active=True, is_summarized=False).all()
+    wid = get_world_id()
+    eq = WorldEntry.query.filter_by(is_active=True, is_summarized=False)
+    if wid:
+        eq = eq.filter_by(world_id=wid)
+    entries = eq.all()
     import json as _json
     entries_data = [e.to_dict() for e in entries]
 
     snap = WorldSnapshot(
+        world_id=wid,
         name=name,
         description=data.get("description", ""),
         entries_json=_json.dumps(entries_data, ensure_ascii=False),
@@ -980,8 +1157,12 @@ def restore_snapshot(snap_id):
     snap = WorldSnapshot.query.get_or_404(snap_id)
     import json as _json
 
-    # 기존 엔트리 전체 비활성화
-    WorldEntry.query.update({"is_active": False})
+    wid = get_world_id() or snap.world_id
+    # 현재 세계관 엔트리만 비활성화
+    eq = WorldEntry.query
+    if wid:
+        eq = eq.filter_by(world_id=wid)
+    eq.update({"is_active": False})
     db.session.flush()
 
     # 스냅샷 엔트리 복원
@@ -989,6 +1170,7 @@ def restore_snapshot(snap_id):
     id_map = {}  # 구 id → 새 id
     for e in entries_data:
         new_entry = WorldEntry(
+            world_id=wid,
             title=e["title"],
             category=e["category"],
             content=e["content"],
@@ -1200,6 +1382,9 @@ def export_run(run_id):
 
 @app.route("/export")
 def export_page():
+    redir = _require_world_redirect()
+    if redir:
+        return redir
     return render_template("export.html")
 
 
@@ -1220,7 +1405,10 @@ def token_estimate():
     config_id = request.args.get("config_id")
 
     exclude_llm = request.args.get("exclude_llm") == "true"
+    wid = get_world_id()
     q = WorldEntry.query.filter_by(is_active=True, is_summarized=False)
+    if wid:
+        q = q.filter_by(world_id=wid)
     if entry_ids:
         ids = [int(i) for i in entry_ids.split(",") if i.strip().isdigit()]
         q = q.filter(WorldEntry.id.in_(ids))

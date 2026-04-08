@@ -27,10 +27,14 @@ def run_simulation(run_id: int, app):
                 selected_ids = None
         exclude_llm = bool(run.exclude_llm_entries)
 
+        world_id = run.world_id  # 세계관 컨텍스트
+
         def _query_entries(extra_ids=None):
             q = WorldEntry.query.filter_by(is_active=True, is_summarized=False).filter(
                 db.or_(WorldEntry.is_superseded.is_(False), WorldEntry.is_superseded.is_(None))
             )
+            if world_id:
+                q = q.filter_by(world_id=world_id)
             ids = extra_ids or selected_ids
             if ids:
                 q = q.filter(WorldEntry.id.in_(ids))
@@ -140,6 +144,7 @@ def _run_auto_summary(run: SimulationRun, tick: int, entries: list, config: dict
     for summary in result.get("summaries", []):
         # 요약 엔트리 생성
         entry = WorldEntry(
+            world_id=run.world_id,
             title=summary.get("title", f"세계관 요약 - 틱 {tick}"),
             category=summary.get("category", "관념"),
             content=summary.get("content", ""),
@@ -217,6 +222,7 @@ def _apply_tick_result(run: SimulationRun, tick: int, result: dict):
         if entry.created_by == CREATOR_USER:
             # 유저 엔트리: 직접 수정 금지 → 파생 버전 생성 (원본 is_superseded 유지)
             new_ver = WorldEntry(
+                world_id=run.world_id,
                 title=entry.title,
                 category=entry.category,
                 content=update.get("new_content", ""),
@@ -245,6 +251,7 @@ def _apply_tick_result(run: SimulationRun, tick: int, result: dict):
             entry.is_superseded = True
             entry.updated_at = datetime.utcnow()
             new_ver = WorldEntry(
+                world_id=run.world_id,
                 title=entry.title,
                 category=entry.category,
                 content=update.get("new_content", ""),
@@ -272,6 +279,7 @@ def _apply_tick_result(run: SimulationRun, tick: int, result: dict):
     # 3. 새 엔트리 생성
     for new in result.get("new_entries", []):
         entry = WorldEntry(
+            world_id=run.world_id,
             title=new.get("title", "이름없음"),
             category=new.get("category", "관념"),
             content=new.get("content", ""),
@@ -305,6 +313,7 @@ def _apply_tick_result(run: SimulationRun, tick: int, result: dict):
         if entry.created_by == CREATOR_USER:
             # 유저 엔트리: 원본 유지, 소멸 기록만 파생 생성
             end_entry = WorldEntry(
+                world_id=run.world_id,
                 title=entry.title,
                 category=entry.category,
                 content=f"[소멸 기록] {reason}",
@@ -333,6 +342,7 @@ def _apply_tick_result(run: SimulationRun, tick: int, result: dict):
             entry.is_superseded = True
             entry.updated_at = datetime.utcnow()
             end_entry = WorldEntry(
+                world_id=run.world_id,
                 title=entry.title,
                 category=entry.category,
                 content=f"[소멸] {reason}",

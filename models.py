@@ -24,8 +24,8 @@ class World(db.Model):
             "id": self.id,
             "name": self.name,
             "description": self.description or "",
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "created_at": self.created_at.isoformat() + 'Z' if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() + 'Z' if self.updated_at else None,
         }
         if with_counts:
             d["entry_count"] = WorldEntry.query.filter_by(world_id=self.id).filter(
@@ -86,8 +86,8 @@ class WorldEntry(db.Model):
             "version_note": self.version_note or "",
             "is_superseded": self.is_superseded or False,
             "world_id": self.world_id,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "created_at": self.created_at.isoformat() + 'Z' if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() + 'Z' if self.updated_at else None,
         }
 
 
@@ -111,7 +111,7 @@ class LlmPromptConfig(db.Model):
             "description": self.description or "",
             "content": self.content,
             "is_modified": self.content != self.default_content,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "updated_at": self.updated_at.isoformat() + 'Z' if self.updated_at else None,
         }
         if include_default:
             d["default_content"] = self.default_content
@@ -169,7 +169,7 @@ class SimulationConfig(db.Model):
             "prompt_level_3": self.prompt_level_3,
             "tick_count": self.tick_count,
             "is_active": self.is_active,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "created_at": self.created_at.isoformat() + 'Z' if self.created_at else None,
         }
 
 
@@ -206,8 +206,8 @@ class SimulationRun(db.Model):
             "total_tokens": self.total_tokens,
             "exclude_llm_entries": self.exclude_llm_entries,
             "timeline_id": self.timeline_id,
-            "started_at": self.started_at.isoformat() if self.started_at else None,
-            "ended_at": self.ended_at.isoformat() if self.ended_at else None,
+            "started_at": self.started_at.isoformat() + 'Z' if self.started_at else None,
+            "ended_at": self.ended_at.isoformat() + 'Z' if self.ended_at else None,
         }
 
 
@@ -250,7 +250,7 @@ class SimulationLog(db.Model):
             "tokens_in": self.tokens_in,
             "tokens_out": self.tokens_out,
             "tokens_total": self.tokens_total,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "created_at": self.created_at.isoformat() + 'Z' if self.created_at else None,
         }
 
 
@@ -272,7 +272,7 @@ class WorldSnapshot(db.Model):
             "name": self.name,
             "description": self.description,
             "entry_count": self.entry_count,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "created_at": self.created_at.isoformat() + 'Z' if self.created_at else None,
         }
         if include_entries:
             try:
@@ -321,7 +321,7 @@ class Timeline(db.Model):
             "main_entry_id": self.main_entry_id,
             "event_count": len(self.events),
             "beat_count": len(self.beats),
-            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "created_at": self.created_at.isoformat() + 'Z' if self.created_at else None,
         }
         if include_events:
             d["events"] = [e.to_dict() for e in self.events]
@@ -365,7 +365,7 @@ class TimelineEvent(db.Model):
             "description": self.description,
             "event_type": self.event_type,
             "affected_entry_ids": self.affected_entry_ids,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "created_at": self.created_at.isoformat() + 'Z' if self.created_at else None,
         }
 
 
@@ -391,5 +391,5 @@ class StoryBeat(db.Model):
             "title": self.title,
             "description": self.description,
             "is_fixed": self.is_fixed,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "created_at": self.created_at.isoformat() + 'Z' if self.created_at else None,
         }

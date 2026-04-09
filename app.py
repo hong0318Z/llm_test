@@ -1000,8 +1000,8 @@ def get_stats():
             "duration_sec": round(duration, 1) if duration else None,
             "avg_tick_sec": avg_tick_sec,
             "rag_ticks": rag_ticks,
-            "started_at": run.started_at.isoformat() if run.started_at else None,
-            "ended_at": run.ended_at.isoformat() if run.ended_at else None,
+            "started_at": run.started_at.isoformat() + 'Z' if run.started_at else None,
+            "ended_at": run.ended_at.isoformat() + 'Z' if run.ended_at else None,
         })
 
     # ── 총계 ─────────────────────────────────────────────────────
@@ -1379,11 +1379,11 @@ def _build_export_data(run: SimulationRun) -> dict:
                 "tokens_out": 0,
                 "tokens_total": 0,
                 "llm_reasoning": "",
-                "first_log_at": log.created_at.isoformat() if log.created_at else None,
-                "last_log_at": log.created_at.isoformat() if log.created_at else None,
+                "first_log_at": log.created_at.isoformat() + 'Z' if log.created_at else None,
+                "last_log_at": log.created_at.isoformat() + 'Z' if log.created_at else None,
             }
         td = ticks_dict[t]
-        td["last_log_at"] = log.created_at.isoformat() if log.created_at else None
+        td["last_log_at"] = log.created_at.isoformat() + 'Z' if log.created_at else None
 
         # 이벤트 타입별 분류
         entry = {
@@ -1428,8 +1428,8 @@ def _build_export_data(run: SimulationRun) -> dict:
             "exported_at": datetime.utcnow().isoformat(),
             "run_id": run.id,
             "status": run.status,
-            "started_at": run.started_at.isoformat() if run.started_at else None,
-            "ended_at": run.ended_at.isoformat() if run.ended_at else None,
+            "started_at": run.started_at.isoformat() + 'Z' if run.started_at else None,
+            "ended_at": run.ended_at.isoformat() + 'Z' if run.ended_at else None,
             "total_duration_seconds": duration_sec,
             "total_ticks_planned": run.total_ticks,
             "total_ticks_completed": run.current_tick,

@@ -266,8 +266,11 @@ const PALETTE = {
   '신화/종교': { node: '#b08828', border: '#d4a844', glow: '#b0882844', font: '#fff8e4' },
   '역사/기록': { node: '#70904a', border: '#96b05a', glow: '#70904a44', font: '#f4ffe4' },
   '규칙/법':  { node: '#4878b0', border: '#6a9ad4', glow: '#4878b044', font: '#e4f0ff' },
+  '연도':     { node: '#c8980a', border: '#ffd840', glow: '#ffd84033', font: '#ffd840' },
 };
 const DEFAULT_PAL = { node: '#5a6080', border: '#8890b0', glow: '#5a608044', font: '#e4e8ff' };
+const YEAR_HULL_FILL   = 'rgba(255, 216, 50, 0.055)';
+const YEAR_HULL_STROKE = 'rgba(255, 216, 50, 0.50)';
 
 let network = null;
 let allEntries = [];
@@ -357,32 +360,38 @@ function buildGraph(entries) {
   const container = document.getElementById('networkCanvas');
   const idSet = new Set(entries.map(e => e.id));
 
+  // 연도 엔트리 ID 집합 (hull 및 edge 처리용)
+  const yearIdSet = new Set(entries.filter(e => e.category === '연도').map(e => e.id));
+
   const nodes = new vis.DataSet(entries.map(e => {
     const p = PALETTE[e.category] || DEFAULT_PAL;
     const inactive = !e.is_active;
+    const isYear = e.category === '연도';
     return {
       id: e.id,
       label: e.title.length > 15 ? e.title.slice(0, 14) + '…' : e.title,
       title: `[${e.category}] ${e.title}`,
       color: {
-        background: inactive ? '#282c3a' : p.node,
-        border: inactive ? '#44485a' : p.border,
-        highlight: { background: p.node, border: '#ffffff' },
-        hover:      { background: p.node, border: p.border },
+        background: inactive ? '#282c3a' : (isYear ? 'rgba(200,152,10,0.15)' : p.node),
+        border:     inactive ? '#44485a' : p.border,
+        highlight: { background: isYear ? 'rgba(200,152,10,0.30)' : p.node, border: '#ffffff' },
+        hover:      { background: isYear ? 'rgba(200,152,10,0.25)' : p.node, border: p.border },
       },
       font: {
         color: inactive ? '#5a6080' : p.font,
-        size: 12,
+        size:  isYear ? 13 : 12,
+        bold:  isYear,
         face: 'Segoe UI, system-ui, sans-serif',
         vadjust: 0,
       },
       shape: e.image_filename ? 'circularImage' : 'dot',
       image: e.image_filename ? `/storage/${e.image_filename}` : undefined,
       brokenImage: undefined,
-      size: e.image_filename ? 28 : (e.created_by === 'user' ? 18 : 13),
-      borderWidth: e.image_filename ? 3 : (e.created_by === 'user' ? 2.5 : 1.5),
-      shadow: { enabled: !inactive, color: p.glow, size: e.image_filename ? 18 : 12, x: 0, y: 0 },
-      opacity: inactive ? 0.45 : 1.0,
+      size: e.image_filename ? 28 : (isYear ? 14 : (e.created_by === 'user' ? 18 : 13)),
+      borderWidth: isYear ? 2 : (e.image_filename ? 3 : (e.created_by === 'user' ? 2.5 : 1.5)),
+      borderDashes: isYear ? [7, 5] : false,
+      shadow: { enabled: !inactive, color: p.glow, size: e.image_filename ? 18 : (isYear ? 20 : 12), x: 0, y: 0 },
+      opacity: inactive ? 0.45 : (isYear ? 0.92 : 1.0),
       _data: e,
     };
   }));
@@ -397,10 +406,15 @@ function buildGraph(entries) {
       const key = [Math.min(e.id, resolvedId), Math.max(e.id, resolvedId)].join('-');
       if (!edgeSet.has(key)) {
         edgeSet.add(key);
+        const isYearEdge = yearIdSet.has(e.id) || yearIdSet.has(resolvedId);
         edges.add({
           from: e.id, to: resolvedId,
-          color: { color: 'rgba(120,130,160,0.25)', highlight: 'rgba(180,190,255,0.7)', hover: 'rgba(160,170,220,0.5)' },
-          width: 1.2,
+          color: isYearEdge
+            ? { color: 'rgba(255,216,50,0.28)', highlight: 'rgba(255,224,80,0.8)', hover: 'rgba(255,220,60,0.55)' }
+            : { color: 'rgba(120,130,160,0.25)', highlight: 'rgba(180,190,255,0.7)', hover: 'rgba(160,170,220,0.5)' },
+          width:  isYearEdge ? 0.9 : 1.2,
+          dashes: isYearEdge ? [5, 5] : false,
+          length: isYearEdge ? 110 : undefined,
           smooth: { enabled: true, type: 'dynamic', roundness: 0.3 },
           arrows: { to: { enabled: true, scaleFactor: 0.5 } },
         });
@@ -416,11 +430,11 @@ function buildGraph(entries) {
         gravitationalConstant: -5000,
         centralGravity: 0.3,
         springLength: 160,
-        springConstant: 0.04,
+        springConstant: yearIdSet.size > 0 ? 0.06 : 0.04,
         damping: 0.18,
         avoidOverlap: 0.6,
       },
-      stabilization: { enabled: true, iterations: 200, fit: true },
+      stabilization: { enabled: true, iterations: yearIdSet.size > 0 ? 300 : 200, fit: true },
     },
     interaction: {
       hover: true,
@@ -437,8 +451,17 @@ function buildGraph(entries) {
   if (network) network.destroy();
   network = new vis.Network(container, { nodes, edges }, options);
 
+  // 연도 hull 드로잉 (stabilize 후 beforeDrawing에서 렌더)
+  let _hullReady = false;
   network.on('stabilizationIterationsDone', () => {
     network.setOptions({ physics: { enabled: false } });
+    _hullReady = true;
+    network.redraw();
+  });
+
+  network.on('beforeDrawing', ctx => {
+    if (!_hullReady) return;
+    _drawYearHulls(ctx, entries, yearIdSet);
   });
 
   network.on('click', params => {
@@ -455,6 +478,81 @@ function buildGraph(entries) {
     const still = entries.find(e => e.id === selectedEntry.id);
     if (still) showSidePanel(still);
   }
+}
+
+// ── 연도 Hull 드로잉 ──────────────────────────────────────
+function _drawYearHulls(ctx, entries, yearIdSet) {
+  if (!network || yearIdSet.size === 0) return;
+  try {
+    const allPos = network.getPositions();
+
+    // 연도 엔트리별로 연결된 이웃 노드 ID 수집
+    const refSet = {}; // yearId → Set<neighborId>
+    yearIdSet.forEach(yid => { refSet[yid] = new Set(); });
+
+    entries.forEach(e => {
+      const refs = (e.references || []).map(r => _idRemap[r] ?? r);
+      refs.forEach(rid => {
+        if (yearIdSet.has(rid) && e.id !== rid) refSet[rid].add(e.id);
+      });
+      if (yearIdSet.has(e.id)) {
+        refs.forEach(rid => { if (!yearIdSet.has(rid)) refSet[e.id].add(rid); });
+      }
+    });
+
+    yearIdSet.forEach(yid => {
+      const yPos = allPos[yid];
+      if (!yPos) return;
+      const yearEntry = entries.find(e => e.id === yid);
+      const label = yearEntry ? yearEntry.title : '';
+
+      const neighbors = refSet[yid];
+      let rx = 75, ry = 75; // minimum radius
+
+      if (neighbors.size > 0) {
+        neighbors.forEach(nid => {
+          const np = allPos[nid];
+          if (!np) return;
+          rx = Math.max(rx, Math.abs(np.x - yPos.x) + 68);
+          ry = Math.max(ry, Math.abs(np.y - yPos.y) + 68);
+        });
+      }
+
+      ctx.save();
+
+      // 반투명 채움
+      ctx.beginPath();
+      ctx.ellipse(yPos.x, yPos.y, rx, ry, 0, 0, Math.PI * 2);
+      ctx.fillStyle = YEAR_HULL_FILL;
+      ctx.fill();
+
+      // 점선 테두리
+      ctx.setLineDash([9, 6]);
+      ctx.strokeStyle = YEAR_HULL_STROKE;
+      ctx.lineWidth = 1.8;
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // 연도 라벨 (원 상단 바깥)
+      if (label) {
+        ctx.font = 'bold 13px "Segoe UI", system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'bottom';
+        // 배경 박스
+        const tw = ctx.measureText(label).width;
+        const tx = yPos.x, ty = yPos.y - ry - 6;
+        ctx.fillStyle = 'rgba(20,20,30,0.72)';
+        ctx.beginPath();
+        ctx.roundRect(tx - tw/2 - 8, ty - 18, tw + 16, 20, 6);
+        ctx.fill();
+        // 텍스트
+        ctx.fillStyle = 'rgba(255, 218, 50, 0.92)';
+        ctx.fillText(label, tx, ty);
+      }
+
+      ctx.restore();
+    });
+  } catch(e) { /* positions not ready */ }
 }
 
 // ── 사이드 패널 ───────────────────────────────────────────
@@ -819,6 +917,7 @@ function openNaiModal() {
     '신화/종교': 'divine, mythological, sacred',
     '역사/기록': 'historical, ancient, parchment style',
     '규칙/법': 'symbolic, concept art',
+    '연도': 'timeline, year marker, calendar, historical era',
   };
   const hint = catHints[selectedEntry.category] || 'fantasy art, detailed';
   document.getElementById('naiPrompt').value = `${selectedEntry.title}, ${hint}, masterpiece, best quality`;

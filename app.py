@@ -567,12 +567,11 @@ def generate_image_nai(entry_id):
         "parameters": {
             "width": width,
             "height": height,
-            "scale": 5,
+            "scale": 6,
             "sampler": "k_euler",
             "steps": 28,
             "n_samples": 1,
-            "ucPreset": 0,
-            "qualityToggle": True,
+            "seed": 0,
             "negative_prompt": negative_prompt,
         },
     }

@@ -237,7 +237,10 @@
           </div>
         </div>
         <div class="mb-2">
-          <label class="form-label" style="font-size:0.75rem;">설명</label>
+          <div class="d-flex justify-content-between align-items-center mb-1">
+            <label class="form-label mb-0" style="font-size:0.75rem;">설명</label>
+            <button type="button" class="fse-btn" onclick="openFse('addDesc','에피소드 설명')"><i class="bi bi-arrows-fullscreen"></i></button>
+          </div>
           <textarea class="form-control form-control-sm" id="addDesc" rows="3" placeholder="이 에피소드에 대한 설명..."></textarea>
         </div>
         <div class="d-flex gap-2 justify-content-end">
@@ -275,13 +278,19 @@
           <input type="text" class="form-control" id="tlModalName" placeholder="타임라인 이름">
         </div>
         <div class="mb-3">
-          <label class="form-label small">설명</label>
+          <div class="d-flex justify-content-between align-items-center mb-1">
+            <label class="form-label small mb-0">설명</label>
+            <button type="button" class="fse-btn" onclick="openFse('tlModalDesc','타임라인 설명')"><i class="bi bi-arrows-fullscreen"></i></button>
+          </div>
           <textarea class="form-control" id="tlModalDesc" rows="2" placeholder="이 타임라인에 대한 설명..."></textarea>
         </div>
         <div class="mb-1">
-          <label class="form-label small" style="color:#ffb86c;">
-            <i class="bi bi-map me-1"></i>서사 목표 (큰 이슈)
-          </label>
+          <div class="d-flex justify-content-between align-items-center mb-1">
+            <label class="form-label small mb-0" style="color:#ffb86c;">
+              <i class="bi bi-map me-1"></i>서사 목표 (큰 이슈)
+            </label>
+            <button type="button" class="fse-btn" onclick="openFse('tlModalGoal','서사 목표 / 큰 이슈')"><i class="bi bi-arrows-fullscreen"></i></button>
+          </div>
           <textarea class="form-control" id="tlModalGoal" rows="3"
             placeholder="예: 대륙 통일 전쟁의 발발과 종결, 마왕의 부활과 영웅의 대항...&#10;이 목표를 달성하는 방향으로 시뮬레이션이 진행됩니다."></textarea>
           <div class="form-text" style="color:var(--text-muted);">시뮬레이션 실행 시 LLM에게 제공되는 전체 서사 방향입니다.</div>
@@ -316,7 +325,10 @@
           <input type="text" class="form-control form-control-sm" id="editEvTitle">
         </div>
         <div class="mb-1">
-          <label class="form-label small">설명</label>
+          <div class="d-flex justify-content-between align-items-center mb-1">
+            <label class="form-label small mb-0">설명</label>
+            <button type="button" class="fse-btn" onclick="openFse('editEvDesc','에피소드 설명')"><i class="bi bi-arrows-fullscreen"></i></button>
+          </div>
           <textarea class="form-control form-control-sm" id="editEvDesc" rows="5"></textarea>
         </div>
       </div>
@@ -355,7 +367,10 @@
           <input type="text" class="form-control" id="llmGenName" placeholder="예: 아르곤 왕국의 흥망성쇠">
         </div>
         <div class="mb-1">
-          <label class="form-label small">추가 지시 프롬프트</label>
+          <div class="d-flex justify-content-between align-items-center mb-1">
+            <label class="form-label small mb-0">추가 지시 프롬프트</label>
+            <button type="button" class="fse-btn" onclick="openFse('llmGenPrompt','추가 지시 프롬프트')"><i class="bi bi-arrows-fullscreen"></i></button>
+          </div>
           <textarea class="form-control" id="llmGenPrompt" rows="3"
             placeholder="예: 이 인물의 성장 과정을 중심으로, 비극적인 결말로 끝나게 해줘&#10;예: 전쟁 전후 5단계로 구성하고 각 단계를 상세하게&#10;비워두면 LLM이 알아서 구성합니다."></textarea>
         </div>
@@ -415,7 +430,10 @@
             placeholder="예: 왕국 간 전쟁 선포, 주인공의 각성, 최종 결전 시작...">
         </div>
         <div class="mb-1">
-          <label class="form-label small">상세 설명 (선택)</label>
+          <div class="d-flex justify-content-between align-items-center mb-1">
+            <label class="form-label small mb-0">상세 설명 (선택)</label>
+            <button type="button" class="fse-btn" onclick="openFse('beatDesc','스토리 비트 상세 설명')"><i class="bi bi-arrows-fullscreen"></i></button>
+          </div>
           <textarea class="form-control form-control-sm" id="beatDesc" rows="3"
             placeholder="이 비트에서 반드시 일어나야 할 사건의 상세 내용...&#10;비워두면 LLM이 아크 방향에 맞춰 자유롭게 채웁니다."></textarea>
         </div>
@@ -439,7 +457,10 @@
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
-        <label class="form-label small">큰 이슈 / 전체 서사 목표</label>
+        <div class="d-flex justify-content-between align-items-center mb-1">
+          <label class="form-label small mb-0">큰 이슈 / 전체 서사 목표</label>
+          <button type="button" class="fse-btn" onclick="openFse('arcGoalText','서사 목표')"><i class="bi bi-arrows-fullscreen"></i></button>
+        </div>
         <textarea class="form-control" id="arcGoalText" rows="5"
           placeholder="예: 대륙 통일 전쟁의 발발과 종결, 마왕의 부활과 영웅의 대항...&#10;이 목표를 달성하는 방향으로 시뮬레이션이 진행됩니다."></textarea>
         <div class="form-text" style="color:var(--text-muted);">시뮬레이션 매 틱마다 LLM에게 전달되는 전체 서사 방향입니다.</div>

@@ -186,6 +186,20 @@
     ::-webkit-scrollbar { width: 6px; }
     ::-webkit-scrollbar-track { background: var(--bg-dark); }
     ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    /* 풀스크린 에디터 버튼 */
+    .fse-btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      border-radius: 5px;
+      padding: 1px 6px;
+      font-size: 0.75rem;
+      line-height: 1.6;
+      cursor: pointer;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .fse-btn:hover { color: var(--accent); border-color: var(--accent); }
   </style>
   {% block extra_head %}{% endblock %}
 </head>
@@ -447,5 +461,62 @@
   </script>
 
   {% block extra_scripts %}{% endblock %}
+
+  <!-- ─── 공통 풀스크린 텍스트 에디터 ─── -->
+  <div class="modal fade" id="fseModal" tabindex="-1">
+    <div class="modal-dialog" style="max-width:94vw; width:94vw; margin:3vh auto;">
+      <div class="modal-content" style="height:92vh; display:flex; flex-direction:column;">
+        <div class="modal-header py-2">
+          <h6 class="modal-title mb-0" id="fseTitle" style="color:var(--text-primary);"></h6>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body p-2" style="flex:1; overflow:hidden; display:flex; flex-direction:column;">
+          <textarea id="fseTextarea"
+            class="form-control"
+            style="flex:1; resize:none; font-size:0.92rem; line-height:1.7; font-family:'Segoe UI',system-ui,sans-serif;">
+          </textarea>
+        </div>
+        <div class="modal-footer py-2">
+          <span style="font-size:0.78rem; color:var(--text-muted);" id="fseCharCount"></span>
+          <div class="ms-auto d-flex gap-2">
+            <button class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">취소</button>
+            <button class="btn btn-primary btn-sm" onclick="applyFse()">
+              <i class="bi bi-check-lg me-1"></i>적용
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script>
+  let _fseModal, _fseTargetId;
+  document.addEventListener('DOMContentLoaded', () => {
+    _fseModal = new bootstrap.Modal(document.getElementById('fseModal'));
+    document.getElementById('fseTextarea').addEventListener('input', _fseCount);
+  });
+  function openFse(targetId, title) {
+    _fseTargetId = targetId;
+    const src = document.getElementById(targetId);
+    document.getElementById('fseTitle').innerHTML =
+      `<i class="bi bi-arrows-fullscreen me-2" style="color:var(--accent);"></i>${title || '텍스트 편집'}`;
+    const ta = document.getElementById('fseTextarea');
+    ta.value = src ? src.value : '';
+    _fseCount();
+    _fseModal.show();
+    setTimeout(() => { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }, 350);
+  }
+  function applyFse() {
+    const src = document.getElementById(_fseTargetId);
+    if (src) {
+      src.value = document.getElementById('fseTextarea').value;
+      src.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    _fseModal.hide();
+  }
+  function _fseCount() {
+    const len = document.getElementById('fseTextarea').value.length;
+    document.getElementById('fseCharCount').textContent = len.toLocaleString() + '자';
+  }
+  </script>
 </body>
 </html>

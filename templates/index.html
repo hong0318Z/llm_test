@@ -504,11 +504,30 @@ async function restoreWorldBackup(input) {
   }
 }
 
+let _allEntriesById = {};  // 전체 ID 맵 (참조 이름 조회용)
+
 async function loadEntries() {
   const activeOnly = !document.getElementById('showInactive').checked;
-  const url = `/api/entries?active=${activeOnly}&dedupe=true`;
-  const res = await fetch(url);
-  allEntries = await res.json();
+  const res = await fetch(`/api/entries?active=${activeOnly}`);
+  const fullList = await res.json();
+
+  // 전체 ID 맵 구성
+  _allEntriesById = {};
+  fullList.forEach(e => { _allEntriesById[e.id] = e; });
+
+  // JS dedup: tick 내림차순 정렬 후 (title|category) 최신 1개만
+  const sorted = [...fullList].sort(
+    (a, b) => (b.tick_created || 0) - (a.tick_created || 0) ||
+              new Date(b.created_at || 0) - new Date(a.created_at || 0)
+  );
+  const seen = {};
+  allEntries = sorted.filter(e => {
+    const k = e.title.trim().toLowerCase() + '|' + e.category;
+    if (seen[k]) return false;
+    seen[k] = true;
+    return true;
+  });
+
   renderList();
   updateStats();
 }
@@ -688,10 +707,16 @@ function showDetail() {
   const refs = e.references || [];
   if (refs.length > 0) {
     const refEntries = refs.map(id => {
-      const ref = allEntries.find(x => x.id === id);
-      return ref ? `<span class="badge bg-secondary me-1" style="cursor:pointer" onclick="selectEntry(${id})">${ref.title}</span>` : `#${id}`;
-    });
-    document.getElementById('detailReferences').innerHTML = refEntries.join('');
+      // 전체 ID 맵에서 조회 (dedup 필터에서 제거된 구버전도 이름 표시 가능)
+      const ref = allEntries.find(x => x.id === id) || _allEntriesById[id];
+      if (!ref) return '';
+      // 클릭 시 현재 활성(최신) 버전으로 이동
+      const activeRef = allEntries.find(x => x.title.trim().toLowerCase() === ref.title.trim().toLowerCase() && x.category === ref.category) || ref;
+      return `<span class="badge bg-secondary me-1" style="cursor:pointer" onclick="selectEntry(${activeRef.id})">${ref.title}</span>`;
+    }).filter(Boolean);
+    document.getElementById('detailReferences').innerHTML = refEntries.length
+      ? refEntries.join('')
+      : '<span class="text-muted small">없음</span>';
   } else {
     document.getElementById('detailReferences').innerHTML = '<span class="text-muted small">없음</span>';
   }

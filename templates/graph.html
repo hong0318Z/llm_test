@@ -289,10 +289,41 @@ function toggleCat(cat) {
 }
 
 // ── 그래프 로드 ──────────────────────────────────────────
+let _idToEntry = {};   // 전체 ID→엔트리 (참조 이름 조회용)
+let _idRemap   = {};   // 구버전ID → 최신ID 매핑
+
 async function reloadGraph() {
   const showInactive = document.getElementById('showInactiveGraph').checked;
-  const res = await fetch(`/api/entries?active=${!showInactive}&dedupe=true`);
-  allEntries = await res.json();
+  // 전체 로드 (dedupe API 사용 안 함 → JS에서 처리)
+  const res = await fetch(`/api/entries?active=${!showInactive}`);
+  const fullList = await res.json();
+
+  // 전체 ID 맵 구성 (참조 이름 조회용)
+  _idToEntry = {};
+  fullList.forEach(e => { _idToEntry[e.id] = e; });
+
+  // JS dedup: tick 내림차순 정렬 후 (title|category) 기준 최신 1개만
+  const sorted = [...fullList].sort(
+    (a, b) => (b.tick_created || 0) - (a.tick_created || 0) ||
+              new Date(b.created_at || 0) - new Date(a.created_at || 0)
+  );
+  const seen = {};
+  allEntries = sorted.filter(e => {
+    const k = e.title.trim().toLowerCase() + '|' + e.category;
+    if (seen[k]) return false;
+    seen[k] = true;
+    return true;
+  });
+
+  // 구버전ID → 최신ID 리맵 구성
+  const latestByKey = {};
+  allEntries.forEach(e => { latestByKey[e.title.trim().toLowerCase() + '|' + e.category] = e.id; });
+  _idRemap = {};
+  fullList.forEach(e => {
+    const k = e.title.trim().toLowerCase() + '|' + e.category;
+    const lid = latestByKey[k];
+    if (lid && lid !== e.id) _idRemap[e.id] = lid;
+  });
 
   const visible = allEntries.filter(e => !hiddenCats.has(e.category));
   document.getElementById('emptyHint').style.display = visible.length === 0 ? 'block' : 'none';
@@ -337,12 +368,14 @@ function buildGraph(entries) {
   const edges = new vis.DataSet();
   entries.forEach(e => {
     (e.references || []).forEach(refId => {
-      if (!idSet.has(refId)) return;
-      const key = [Math.min(e.id, refId), Math.max(e.id, refId)].join('-');
+      // 구버전 ID는 최신 ID로 리맵
+      const resolvedId = _idRemap[refId] ?? refId;
+      if (!idSet.has(resolvedId)) return;
+      const key = [Math.min(e.id, resolvedId), Math.max(e.id, resolvedId)].join('-');
       if (!edgeSet.has(key)) {
         edgeSet.add(key);
         edges.add({
-          from: e.id, to: refId,
+          from: e.id, to: resolvedId,
           color: { color: 'rgba(120,130,160,0.25)', highlight: 'rgba(180,190,255,0.7)', hover: 'rgba(160,170,220,0.5)' },
           width: 1.2,
           smooth: { enabled: true, type: 'dynamic', roundness: 0.3 },
@@ -443,13 +476,16 @@ function showSidePanel(entry) {
   const refsDiv = document.getElementById('sdRefs');
   if (entry.references && entry.references.length > 0) {
     refsDiv.innerHTML = entry.references.map(refId => {
-      const ref = allEntries.find(e => e.id === refId);
-      if (!ref) return `<span style="color:var(--text-muted);font-size:0.75rem;">#${refId}</span>`;
+      // 구버전 ID → 최신 ID 리맵 후 조회
+      const resolvedId = _idRemap[refId] ?? refId;
+      const ref = allEntries.find(e => e.id === resolvedId) || _idToEntry[refId];
+      if (!ref) return '';
       const rp = PALETTE[ref.category] || DEFAULT_PAL;
-      return `<span onclick="jumpToNode(${refId})" style="background:${rp.node}22;color:${rp.border};
+      const nodeId = resolvedId;
+      return `<span onclick="jumpToNode(${nodeId})" style="background:${rp.node}22;color:${rp.border};
         border:1px solid ${rp.node}44;border-radius:12px;padding:2px 9px;font-size:0.72rem;
         cursor:pointer;display:inline-block;">${ref.title}</span>`;
-    }).join(' ');
+    }).filter(Boolean).join(' ') || '<span style="font-size:0.75rem;color:var(--text-muted);">없음</span>';
   } else {
     refsDiv.innerHTML = '<span style="font-size:0.75rem;color:var(--text-muted);">없음</span>';
   }

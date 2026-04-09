@@ -120,6 +120,22 @@ with app.app_context():
     if orphans:
         db.session.commit()
 
+    # 기존 데이터 is_superseded 정리 (1회성 마이그레이션)
+    # 자식 엔트리(parent_entry_id)가 있는 부모를 is_superseded=True 로 일괄 처리
+    _parents_with_children = db.session.query(WorldEntry.parent_entry_id).filter(
+        WorldEntry.parent_entry_id.isnot(None)
+    ).distinct().all()
+    _parent_ids = [row[0] for row in _parents_with_children]
+    if _parent_ids:
+        _fixed = WorldEntry.query.filter(
+            WorldEntry.id.in_(_parent_ids),
+            db.or_(WorldEntry.is_superseded.is_(False), WorldEntry.is_superseded.is_(None))
+        ).all()
+        for e in _fixed:
+            e.is_superseded = True
+        if _fixed:
+            db.session.commit()
+
 
 STORAGE_DIR = os.path.join(os.path.dirname(__file__), "storage")
 ALLOWED_IMAGE_EXT = {"jpg", "jpeg", "png", "gif", "webp"}

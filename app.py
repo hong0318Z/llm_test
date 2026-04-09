@@ -512,16 +512,18 @@ def delete_all_entries():
 
 @app.route("/api/backup", methods=["GET"])
 def backup_db():
-    """전체 DB를 JSON으로 다운로드"""
+    """전체 DB (모든 세계관) JSON 백업"""
     data = {
-        "version": 2,
-        "exported_at": datetime.utcnow().isoformat(),
+        "version": 3,
+        "type": "full",
+        "exported_at": datetime.utcnow().isoformat() + 'Z',
+        "worlds": [w.to_dict() for w in World.query.order_by(World.id).all()],
         "entries": [e.to_dict() for e in WorldEntry.query.order_by(WorldEntry.id).all()],
         "configs": [c.to_dict() for c in SimulationConfig.query.order_by(SimulationConfig.id).all()],
         "snapshots": [s.to_dict(include_entries=True) for s in WorldSnapshot.query.order_by(WorldSnapshot.id).all()],
         "settings": AppSettings.get().to_dict(),
     }
-    filename = f"worldllm_backup_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
+    filename = f"worldllm_full_backup_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
     return Response(
         _json.dumps(data, ensure_ascii=False, indent=2),
         mimetype="application/json",
@@ -531,18 +533,32 @@ def backup_db():
 
 @app.route("/api/restore", methods=["POST"])
 def restore_db():
-    """JSON 백업 파일로 DB 복원 (엔트리 + 설정 덮어쓰기)"""
+    """전체 DB 복원 (모든 세계관 포함)"""
     data = request.json or {}
+    worlds_data = data.get("worlds", [])
     entries_data = data.get("entries", [])
     configs_data = data.get("configs", [])
     settings_data = data.get("settings", {})
 
-    # 엔트리 복원 (기존 전체 삭제 후 ID 유지 재삽입)
+    # 세계관 복원
+    if worlds_data:
+        World.query.delete()
+        db.session.flush()
+        for w in worlds_data:
+            world = World(
+                id=w.get("id"),
+                name=w.get("name", "복원된 세계관"),
+                description=w.get("description", ""),
+            )
+            db.session.add(world)
+
+    # 엔트리 복원
     WorldEntry.query.delete()
     db.session.flush()
     for e in entries_data:
         entry = WorldEntry(
             id=e.get("id"),
+            world_id=e.get("world_id"),
             title=e.get("title", ""),
             category=e.get("category", "세력"),
             content=e.get("content", ""),
@@ -551,16 +567,21 @@ def restore_db():
             tick_created=e.get("tick_created", 0),
             is_active=e.get("is_active", True),
             is_summarized=e.get("is_summarized", False),
+            keywords=e.get("keywords", ""),
+            parent_entry_id=e.get("parent_entry_id"),
+            version_note=e.get("version_note", ""),
+            is_superseded=e.get("is_superseded", False),
         )
         db.session.add(entry)
 
-    # 시뮬레이션 설정 복원 (선택적)
+    # 시뮬레이션 설정 복원
     if configs_data:
         SimulationConfig.query.delete()
         db.session.flush()
         for c in configs_data:
             cfg = SimulationConfig(
                 id=c.get("id"),
+                world_id=c.get("world_id"),
                 name=c.get("name", "복원된 설정"),
                 prompt_level_1=c.get("prompt_level_1", ""),
                 prompt_level_2=c.get("prompt_level_2", ""),
@@ -576,9 +597,117 @@ def restore_db():
             s.max_llm_entry_chars = settings_data["max_llm_entry_chars"]
         if "max_user_entry_chars" in settings_data:
             s.max_user_entry_chars = settings_data["max_user_entry_chars"]
+        if "rag_token_budget" in settings_data:
+            s.rag_token_budget = settings_data["rag_token_budget"]
 
     db.session.commit()
-    return jsonify({"ok": True, "entries_restored": len(entries_data), "configs_restored": len(configs_data)})
+    # 세션의 world_id 초기화 (복원 후 재선택 유도)
+    session.pop("world_id", None)
+    return jsonify({"ok": True, "worlds_restored": len(worlds_data),
+                    "entries_restored": len(entries_data), "configs_restored": len(configs_data)})
+
+
+# ─── 세계관별 백업 / 복원 ────────────────────────────────────────
+
+@app.route("/api/worlds/<int:world_id>/backup", methods=["GET"])
+def backup_world(world_id):
+    """특정 세계관 데이터만 JSON 백업"""
+    world = World.query.get_or_404(world_id)
+    entries = WorldEntry.query.filter_by(world_id=world_id).order_by(WorldEntry.id).all()
+    configs = SimulationConfig.query.filter_by(world_id=world_id).order_by(SimulationConfig.id).all()
+    snapshots = WorldSnapshot.query.filter_by(world_id=world_id).order_by(WorldSnapshot.id).all()
+    timelines = Timeline.query.filter_by(world_id=world_id).order_by(Timeline.id).all()
+    data = {
+        "version": 3,
+        "type": "world",
+        "exported_at": datetime.utcnow().isoformat() + 'Z',
+        "world": world.to_dict(),
+        "entries": [e.to_dict() for e in entries],
+        "configs": [c.to_dict() for c in configs],
+        "snapshots": [s.to_dict(include_entries=True) for s in snapshots],
+        "timelines": [t.to_dict(include_events=True) for t in timelines],
+    }
+    safe_name = world.name.replace(" ", "_")[:20]
+    filename = f"world_{safe_name}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
+    return Response(
+        _json.dumps(data, ensure_ascii=False, indent=2),
+        mimetype="application/json",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@app.route("/api/worlds/<int:world_id>/restore", methods=["POST"])
+def restore_world(world_id):
+    """특정 세계관 데이터 복원 (해당 세계관 데이터만 교체)"""
+    world = World.query.get_or_404(world_id)
+    data = request.json or {}
+
+    # 기존 세계관 데이터 삭제
+    WorldEntry.query.filter_by(world_id=world_id).delete()
+    SimulationConfig.query.filter_by(world_id=world_id).delete()
+    WorldSnapshot.query.filter_by(world_id=world_id).delete()
+    Timeline.query.filter_by(world_id=world_id).delete()
+    db.session.flush()
+
+    entries_data = data.get("entries", [])
+    configs_data = data.get("configs", [])
+    snapshots_data = data.get("snapshots", [])
+
+    # 엔트리 복원 (ID는 새로 할당, world_id 강제 설정)
+    id_map = {}  # old_id → new_entry (for parent_entry_id remapping)
+    first_pass = []
+    for e in entries_data:
+        entry = WorldEntry(
+            world_id=world_id,
+            title=e.get("title", ""),
+            category=e.get("category", "세력"),
+            content=e.get("content", ""),
+            references_json=_json.dumps(e.get("references", [])),
+            created_by=e.get("created_by", "user"),
+            tick_created=e.get("tick_created", 0),
+            is_active=e.get("is_active", True),
+            is_summarized=e.get("is_summarized", False),
+            keywords=e.get("keywords", ""),
+            version_note=e.get("version_note", ""),
+            is_superseded=e.get("is_superseded", False),
+        )
+        db.session.add(entry)
+        db.session.flush()
+        id_map[e.get("id")] = entry
+        first_pass.append((e, entry))
+
+    # parent_entry_id 재매핑
+    for e, entry in first_pass:
+        old_parent = e.get("parent_entry_id")
+        if old_parent and old_parent in id_map:
+            entry.parent_entry_id = id_map[old_parent].id
+
+    # 시뮬레이션 설정 복원
+    for c in configs_data:
+        cfg = SimulationConfig(
+            world_id=world_id,
+            name=c.get("name", "복원된 설정"),
+            prompt_level_1=c.get("prompt_level_1", ""),
+            prompt_level_2=c.get("prompt_level_2", ""),
+            prompt_level_3=c.get("prompt_level_3", ""),
+            tick_count=c.get("tick_count", 10),
+        )
+        db.session.add(cfg)
+
+    # 스냅샷 복원
+    for s in snapshots_data:
+        snap = WorldSnapshot(
+            world_id=world_id,
+            name=s.get("name", "복원된 스냅샷"),
+            description=s.get("description", ""),
+            entries_json=_json.dumps(s.get("entries", [])),
+            entry_count=s.get("entry_count", 0),
+        )
+        db.session.add(snap)
+
+    db.session.commit()
+    return jsonify({"ok": True, "entries_restored": len(entries_data),
+                    "configs_restored": len(configs_data)})
 
 
 # ─────────────────────────────────────────

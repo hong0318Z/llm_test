@@ -24,13 +24,13 @@
       </button>
       <!-- 구분선 -->
       <div style="width:1px; height:22px; background:var(--border);"></div>
-      <!-- DB 백업/복원 -->
-      <button class="btn btn-sm btn-outline-secondary" onclick="downloadBackup()" title="전체 DB를 JSON으로 다운로드">
-        <i class="bi bi-download me-1"></i>DB 백업
+      <!-- 세계관 백업/복원 -->
+      <button class="btn btn-sm btn-outline-secondary" onclick="downloadWorldBackup()" title="현재 세계관 데이터를 JSON으로 다운로드">
+        <i class="bi bi-download me-1"></i>세계관 백업
       </button>
-      <label class="btn btn-sm btn-outline-secondary mb-0" title="JSON 백업 파일로 복원" style="cursor:pointer;">
-        <i class="bi bi-upload me-1"></i>DB 복원
-        <input type="file" id="restoreFileInput" accept=".json" style="display:none;" onchange="restoreBackup(this)">
+      <label class="btn btn-sm btn-outline-secondary mb-0" title="JSON 백업으로 현재 세계관 복원" style="cursor:pointer;">
+        <i class="bi bi-upload me-1"></i>세계관 복원
+        <input type="file" id="restoreFileInput" accept=".json" style="display:none;" onchange="restoreWorldBackup(this)">
       </label>
       <!-- 구분선 -->
       <div style="width:1px; height:22px; background:var(--border);"></div>
@@ -453,15 +453,18 @@ async function resetWorld() {
   }
 }
 
-// ── DB 백업 / 복원 ────────────────────────────────
-function downloadBackup() {
-  window.location.href = '/api/backup';
+// ── 세계관 백업 / 복원 ─────────────────────────────
+function downloadWorldBackup() {
+  // 현재 세계관 ID는 Jinja로 주입
+  const wid = {{ current_world.id if current_world else 'null' }};
+  if (!wid) { alert('세계관이 선택되지 않았습니다.'); return; }
+  window.location.href = `/api/worlds/${wid}/backup`;
 }
 
-async function restoreBackup(input) {
+async function restoreWorldBackup(input) {
   const file = input.files[0];
   if (!file) return;
-  input.value = '';  // 같은 파일 재업로드 허용
+  input.value = '';
 
   const text = await file.text();
   let data;
@@ -472,11 +475,19 @@ async function restoreBackup(input) {
     return;
   }
 
-  const entryCount = (data.entries || []).length;
-  const configCount = (data.configs || []).length;
-  if (!confirm(`백업 파일 정보:\n· 엔트리: ${entryCount}개\n· 시뮬레이션 설정: ${configCount}개\n· 내보낸 시각: ${data.exported_at || '알 수 없음'}\n\n현재 DB를 덮어쓰고 복원합니다. 계속하시겠습니까?`)) return;
+  if (data.type !== 'world') {
+    alert('이 파일은 세계관 백업 파일이 아닙니다.\n전체 DB 복원은 세계관 선택 페이지(/worlds)에서 하세요.');
+    return;
+  }
 
-  const res = await fetch('/api/restore', {
+  const wid = {{ current_world.id if current_world else 'null' }};
+  if (!wid) { alert('세계관이 선택되지 않았습니다.'); return; }
+
+  const entryCount = (data.entries || []).length;
+  const worldName = (data.world || {}).name || '알 수 없음';
+  if (!confirm(`백업 파일 정보:\n· 세계관: ${worldName}\n· 엔트리: ${entryCount}개\n· 내보낸 시각: ${data.exported_at || '알 수 없음'}\n\n현재 세계관의 데이터를 이 백업으로 교체합니다. 계속하시겠습니까?`)) return;
+
+  const res = await fetch(`/api/worlds/${wid}/restore`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),

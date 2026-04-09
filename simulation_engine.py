@@ -224,7 +224,9 @@ def _apply_tick_result(run: SimulationRun, tick: int, result: dict):
             continue
 
         if entry.created_by == CREATOR_USER:
-            # 유저 엔트리: 직접 수정 금지 → 파생 버전 생성 (원본 is_superseded 유지)
+            # 유저 엔트리: 파생 버전 생성 + 원본을 superseded 처리 (목록에서 숨김, 히스토리로 유지)
+            entry.is_superseded = True
+            entry.updated_at = datetime.utcnow()
             new_ver = WorldEntry(
                 world_id=run.world_id,
                 title=entry.title,

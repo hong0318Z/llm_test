@@ -565,11 +565,43 @@ def generate_image_nai(entry_id):
     scale = float(data.get("scale", 6))
     steps = int(data.get("steps", 28))
 
-    payload = {
-        "input": prompt,
-        "model": model,
-        "action": "generate",
-        "parameters": {
+    # v4/v4.5 모델은 구조화된 프롬프트 포맷이 필요
+    _is_v4 = "4" in model  # nai-diffusion-4-*, nai-diffusion-4-5-* 등
+
+    if _is_v4:
+        params = {
+            "params_version": 3,
+            "width": width,
+            "height": height,
+            "scale": scale,
+            "sampler": sampler,
+            "steps": steps,
+            "n_samples": 1,
+            "seed": 0,
+            "qualityToggle": True,
+            "dynamic_thresholding": False,
+            "legacy": False,
+            "add_original_image": True,
+            "cfg_rescale": 0,
+            "noise_schedule": "karras",
+            "negative_prompt": negative_prompt,
+            "v4_prompt": {
+                "caption": {
+                    "base_caption": prompt,
+                    "char_captions": [],
+                },
+                "use_coords": False,
+                "use_order": True,
+            },
+            "v4_negative_prompt": {
+                "caption": {
+                    "base_caption": negative_prompt,
+                    "char_captions": [],
+                }
+            },
+        }
+    else:
+        params = {
             "width": width,
             "height": height,
             "scale": scale,
@@ -578,7 +610,13 @@ def generate_image_nai(entry_id):
             "n_samples": 1,
             "seed": 0,
             "negative_prompt": negative_prompt,
-        },
+        }
+
+    payload = {
+        "input": prompt,
+        "model": model,
+        "action": "generate",
+        "parameters": params,
     }
 
     try:

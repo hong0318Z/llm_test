@@ -93,6 +93,10 @@ GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 # 사용할 LLM 모델 (기본값: claude-sonnet-4.5)
 # LLM_MODEL=claude-sonnet-4.5
 
+# NovelAI API 키 (이미지 생성 기능 사용 시 필요)
+# https://novelai.net/ 에서 API 키 발급
+# NOVELAI_API_KEY=pst-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
 # 서버 포트 (기본값: 5001)
 # PORT=5001
 

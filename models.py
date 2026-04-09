@@ -4,7 +4,7 @@ import json
 
 db = SQLAlchemy()
 
-CATEGORIES = ["세력", "인물", "관념", "물건", "종족", "사건"]
+CATEGORIES = ["세력", "인물", "관념", "물건", "종족", "사건", "장소", "마법/기술", "신화/종교", "역사/기록", "규칙/법"]
 CREATOR_USER = "user"
 CREATOR_LLM = "llm"
 

@@ -519,6 +519,90 @@ def delete_entry_image(entry_id):
     return jsonify({"ok": True})
 
 
+@app.route("/api/entries/<int:entry_id>/generate-image-nai", methods=["POST"])
+def generate_image_nai(entry_id):
+    """NovelAI API로 엔트리 이미지 생성"""
+    import requests
+    import zipfile
+    import io
+
+    NAI_TOKEN = os.environ.get("NOVELAI_API_KEY", "")
+    if not NAI_TOKEN:
+        return jsonify({"error": "NOVELAI_API_KEY 환경변수가 설정되지 않았습니다."}), 400
+
+    entry = WorldEntry.query.get_or_404(entry_id)
+    data = request.json or {}
+    prompt = data.get("prompt", entry.title)
+    negative_prompt = data.get("negative_prompt", "lowres, bad anatomy, bad hands, worst quality, blurry")
+    model = data.get("model", "nai-diffusion-3")
+    width = int(data.get("width", 832))
+    height = int(data.get("height", 1216))
+
+    payload = {
+        "input": prompt,
+        "model": model,
+        "action": "generate",
+        "parameters": {
+            "width": width,
+            "height": height,
+            "scale": 5,
+            "sampler": "k_euler",
+            "steps": 28,
+            "n_samples": 1,
+            "ucPreset": 0,
+            "qualityToggle": True,
+            "negative_prompt": negative_prompt,
+        },
+    }
+
+    try:
+        resp = requests.post(
+            "https://image.novelai.net/ai/generate-image",
+            headers={
+                "Authorization": f"Bearer {NAI_TOKEN}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=90,
+        )
+    except requests.RequestException as e:
+        return jsonify({"error": f"NovelAI 연결 실패: {str(e)}"}), 502
+
+    if resp.status_code != 200:
+        try:
+            err = resp.json()
+        except Exception:
+            err = {"message": resp.text[:200]}
+        return jsonify({"error": f"NovelAI 오류 {resp.status_code}: {err.get('message', resp.text[:200])}"}), 502
+
+    # 응답은 zip — image(s) 추출
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(resp.content))
+        img_name = next((n for n in zf.namelist() if n.lower().endswith(('.png', '.jpg', '.webp'))), None)
+        if not img_name:
+            return jsonify({"error": "생성된 이미지를 찾을 수 없습니다."}), 500
+        img_data = zf.read(img_name)
+    except Exception as e:
+        return jsonify({"error": f"이미지 추출 실패: {str(e)}"}), 500
+
+    # 기존 이미지 삭제
+    if entry.image_filename:
+        old_path = os.path.join(STORAGE_DIR, entry.image_filename)
+        if os.path.exists(old_path):
+            os.remove(old_path)
+
+    # 저장
+    os.makedirs(STORAGE_DIR, exist_ok=True)
+    filename = f"nai_{entry_id}_{uuid.uuid4().hex[:8]}.png"
+    save_path = os.path.join(STORAGE_DIR, filename)
+    with open(save_path, "wb") as f:
+        f.write(img_data)
+
+    entry.image_filename = filename
+    db.session.commit()
+    return jsonify({"ok": True, "image_filename": filename})
+
+
 @app.route("/api/entries", methods=["DELETE"])
 def delete_all_entries():
     """현재 세계관 엔트리 전체 삭제"""

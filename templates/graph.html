@@ -86,6 +86,16 @@
   </span>
   <div id="legendBar" class="d-flex flex-wrap gap-1 ms-2"></div>
   <div class="ms-auto d-flex gap-2 align-items-center">
+    <!-- 포커스 모드 배너 -->
+    <div id="focusBanner" style="display:none; background:rgba(139,127,247,0.15); border:1px solid rgba(139,127,247,0.4);
+         border-radius:20px; padding:3px 12px; font-size:0.78rem; color:var(--accent); display:none; align-items:center; gap:8px;">
+      <i class="bi bi-bullseye me-1"></i>
+      <span id="focusBannerTitle"></span>
+      <span id="focusBannerDepth" style="font-size:0.7rem; opacity:0.7;"></span>
+      <button onclick="exitFocusMode()" style="background:none;border:none;color:var(--accent);padding:0 0 0 4px;font-size:0.8rem;cursor:pointer;" title="전체 보기로 돌아가기">
+        <i class="bi bi-x-lg"></i>
+      </button>
+    </div>
     <div class="form-check form-switch mb-0 d-flex align-items-center gap-1">
       <input class="form-check-input" type="checkbox" id="showInactiveGraph" onchange="reloadGraph()">
       <label class="form-check-label small" for="showInactiveGraph" style="font-size:0.78rem;">비활성 포함</label>
@@ -125,6 +135,14 @@
         <span id="sdCategoryBadge"></span>
         <span id="sdTitle" class="fw-semibold" style="font-size:0.9rem; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></span>
         <div class="d-flex gap-1 ms-2">
+          <button class="btn btn-sm" onclick="enterFocusMode(1)" title="1단계 연결만 보기"
+            style="padding:3px 8px;font-size:0.75rem;border:1px solid rgba(139,127,247,0.4);color:var(--accent);">
+            <i class="bi bi-bullseye"></i>
+          </button>
+          <button class="btn btn-sm" onclick="enterFocusMode(2)" title="2단계 연결까지 보기"
+            style="padding:3px 8px;font-size:0.75rem;border:1px solid rgba(139,127,247,0.25);color:var(--accent);opacity:0.7;">
+            <i class="bi bi-diagram-2"></i>
+          </button>
           <button class="btn btn-sm" id="editToggleBtn" onclick="toggleEditMode()"
             style="padding:3px 8px;font-size:0.75rem;border:1px solid var(--border);color:var(--text-secondary);">
             <i class="bi bi-pencil"></i>
@@ -237,12 +255,17 @@
 // ── 팔레트 ─────────────────────────────────────────────────
 // 조용하고 세련된 색상 (배경 어두운 tone-on-tone)
 const PALETTE = {
-  '세력': { node: '#e05252', border: '#ff8080', glow: '#ff404044', font: '#fff0f0' },
-  '인물': { node: '#4a90d9', border: '#72b0f0', glow: '#4a90d944', font: '#e8f4ff' },
-  '관념': { node: '#8a65d4', border: '#b090f0', glow: '#8a65d444', font: '#f0eaff' },
-  '물건': { node: '#c8823a', border: '#e8a860', glow: '#c8823a44', font: '#fff4e4' },
-  '종족': { node: '#3aaa7a', border: '#60d0a0', glow: '#3aaa7a44', font: '#e4fff4' },
-  '사건': { node: '#c8b040', border: '#e8d060', glow: '#c8b04044', font: '#fffce4' },
+  '세력':    { node: '#e05252', border: '#ff8080', glow: '#ff404044', font: '#fff0f0' },
+  '인물':    { node: '#4a90d9', border: '#72b0f0', glow: '#4a90d944', font: '#e8f4ff' },
+  '관념':    { node: '#8a65d4', border: '#b090f0', glow: '#8a65d444', font: '#f0eaff' },
+  '물건':    { node: '#c8823a', border: '#e8a860', glow: '#c8823a44', font: '#fff4e4' },
+  '종족':    { node: '#3aaa7a', border: '#60d0a0', glow: '#3aaa7a44', font: '#e4fff4' },
+  '사건':    { node: '#c8b040', border: '#e8d060', glow: '#c8b04044', font: '#fffce4' },
+  '장소':    { node: '#2cb8b8', border: '#3dd9d9', glow: '#2cb8b844', font: '#e4ffff' },
+  '마법/기술': { node: '#c84a8a', border: '#e86aaa', glow: '#c84a8a44', font: '#ffe4f4' },
+  '신화/종교': { node: '#b08828', border: '#d4a844', glow: '#b0882844', font: '#fff8e4' },
+  '역사/기록': { node: '#70904a', border: '#96b05a', glow: '#70904a44', font: '#f4ffe4' },
+  '규칙/법':  { node: '#4878b0', border: '#6a9ad4', glow: '#4878b044', font: '#e4f0ff' },
 };
 const DEFAULT_PAL = { node: '#5a6080', border: '#8890b0', glow: '#5a608044', font: '#e4e8ff' };
 
@@ -547,13 +570,22 @@ function renderImageArea(entry) {
       </div>`;
   } else {
     area.innerHTML = `
-      <label style="display:flex;align-items:center;justify-content:center;gap:8px;
-        border:1px dashed var(--border);border-radius:8px;padding:14px;cursor:pointer;
-        color:var(--text-muted);font-size:0.78rem;transition:border-color 0.15s;width:100%;"
-        onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
-        <i class="bi bi-image" style="font-size:1.1rem;"></i>이미지 추가
-        <input type="file" accept="image/*" style="display:none;" onchange="uploadImageGraph(this)">
-      </label>`;
+      <div class="d-flex gap-2">
+        <label style="display:flex;align-items:center;justify-content:center;gap:6px;flex:1;
+          border:1px dashed var(--border);border-radius:8px;padding:10px;cursor:pointer;
+          color:var(--text-muted);font-size:0.78rem;transition:border-color 0.15s;"
+          onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
+          <i class="bi bi-image" style="font-size:1rem;"></i>업로드
+          <input type="file" accept="image/*" style="display:none;" onchange="uploadImageGraph(this)">
+        </label>
+        <button onclick="openNaiModal()"
+          style="display:flex;align-items:center;justify-content:center;gap:6px;flex:1;
+          border:1px dashed rgba(232,106,170,0.5);border-radius:8px;padding:10px;cursor:pointer;
+          background:none;color:#e86aaa;font-size:0.78rem;transition:border-color 0.15s;"
+          onmouseover="this.style.borderColor='#e86aaa'" onmouseout="this.style.borderColor='rgba(232,106,170,0.5)'">
+          <i class="bi bi-stars" style="font-size:1rem;"></i>NAI 생성
+        </button>
+      </div>`;
   }
 }
 
@@ -706,5 +738,213 @@ function stripMdSide() {
   ta.value = stripMarkdown(ta.value);
   updateSideCharCount();
 }
+
+// ── 포커스 모드 ────────────────────────────────────────────
+let _focusMode = false;
+
+function enterFocusMode(depth) {
+  if (!selectedEntry) return;
+  _focusMode = true;
+
+  // depth 홉 이내 연결 엔트리 수집
+  const idSet = new Set(allEntries.map(e => e.id));
+  const include = new Set([selectedEntry.id]);
+
+  // BFS로 depth 홉까지 탐색
+  let frontier = [selectedEntry.id];
+  for (let d = 0; d < depth; d++) {
+    const next = [];
+    frontier.forEach(fid => {
+      const fEntry = allEntries.find(e => e.id === fid);
+      if (!fEntry) return;
+      // 이 엔트리가 참조하는 것들
+      (fEntry.references || []).forEach(refId => {
+        const rid = _idRemap[refId] ?? refId;
+        if (idSet.has(rid) && !include.has(rid)) { include.add(rid); next.push(rid); }
+      });
+      // 이 엔트리를 참조하는 것들
+      allEntries.forEach(e => {
+        if (include.has(e.id)) return;
+        const refs = (e.references || []).map(r => _idRemap[r] ?? r);
+        if (refs.includes(fid)) { include.add(e.id); next.push(e.id); }
+      });
+    });
+    frontier = next;
+    if (frontier.length === 0) break;
+  }
+
+  const filtered = allEntries.filter(e => include.has(e.id) && !hiddenCats.has(e.category));
+  buildGraph(filtered);
+
+  // 배너 표시
+  const banner = document.getElementById('focusBanner');
+  banner.style.display = 'flex';
+  document.getElementById('focusBannerTitle').textContent = selectedEntry.title;
+  document.getElementById('focusBannerDepth').textContent = depth === 1 ? '(1단계)' : '(2단계)';
+
+  // 선택 노드로 포커스
+  setTimeout(() => {
+    network && network.focus(selectedEntry.id, { scale: 1.2, animation: { duration: 400 } });
+  }, 100);
+}
+
+function exitFocusMode() {
+  _focusMode = false;
+  document.getElementById('focusBanner').style.display = 'none';
+  const visible = allEntries.filter(e => !hiddenCats.has(e.category));
+  buildGraph(visible);
+  setTimeout(() => {
+    if (selectedEntry) network && network.focus(selectedEntry.id, { scale: 1.0, animation: { duration: 400 } });
+    else network && network.fit({ animation: { duration: 400 } });
+  }, 100);
+}
+
+// ── NovelAI 이미지 생성 ───────────────────────────────────
+let _naiModal;
+document.addEventListener('DOMContentLoaded', () => {
+  _naiModal = new bootstrap.Modal(document.getElementById('naiModal'));
+});
+
+function openNaiModal() {
+  if (!selectedEntry) return;
+  // 기본 프롬프트: 엔트리 제목 + 카테고리 자동 생성
+  const catHints = {
+    '인물': 'portrait, character, 1person',
+    '세력': 'emblem, faction symbol, fantasy art',
+    '장소': 'landscape, scenery, location, environment',
+    '물건': 'item, artifact, object, detailed illustration',
+    '종족': 'creature, race, fantasy being',
+    '사건': 'epic scene, dramatic moment',
+    '마법/기술': 'magical effect, technology, arcane',
+    '신화/종교': 'divine, mythological, sacred',
+    '역사/기록': 'historical, ancient, parchment style',
+    '규칙/법': 'symbolic, concept art',
+  };
+  const hint = catHints[selectedEntry.category] || 'fantasy art, detailed';
+  document.getElementById('naiPrompt').value = `${selectedEntry.title}, ${hint}, masterpiece, best quality`;
+  document.getElementById('naiNegPrompt').value = 'lowres, bad anatomy, bad hands, error, worst quality, blurry';
+  document.getElementById('naiStatus').innerHTML = '';
+  _naiModal.show();
+}
+
+async function runNaiGenerate() {
+  if (!selectedEntry) return;
+  const btn = document.getElementById('naiGenBtn');
+  const prompt = document.getElementById('naiPrompt').value.trim();
+  if (!prompt) { alert('프롬프트를 입력하세요.'); return; }
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>생성 중...';
+  document.getElementById('naiStatus').innerHTML = '';
+  document.getElementById('naiPreview').style.display = 'none';
+
+  try {
+    const res = await fetch(`/api/entries/${selectedEntry.id}/generate-image-nai`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt,
+        negative_prompt: document.getElementById('naiNegPrompt').value,
+        model: document.getElementById('naiModel').value,
+        width: parseInt(document.getElementById('naiWidth').value),
+        height: parseInt(document.getElementById('naiHeight').value),
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      document.getElementById('naiStatus').innerHTML =
+        `<div style="color:#ff7070;font-size:0.82rem;"><i class="bi bi-x-circle me-1"></i>${data.error || '생성 실패'}</div>`;
+      return;
+    }
+    // 미리보기 표시
+    const preview = document.getElementById('naiPreview');
+    preview.src = `/storage/${data.image_filename}`;
+    preview.style.display = 'block';
+    // 엔트리 업데이트
+    selectedEntry.image_filename = data.image_filename;
+    const idx = allEntries.findIndex(e => e.id === selectedEntry.id);
+    if (idx >= 0) allEntries[idx].image_filename = data.image_filename;
+    renderImageArea(selectedEntry);
+    reloadGraph();
+    document.getElementById('naiStatus').innerHTML =
+      `<div style="color:#6eeab0;font-size:0.82rem;"><i class="bi bi-check-circle me-1"></i>생성 완료 — 엔트리에 저장됨</div>`;
+  } catch(e) {
+    document.getElementById('naiStatus').innerHTML =
+      `<div style="color:#ff7070;font-size:0.82rem;">${e.message}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-stars me-1"></i>생성';
+  }
+}
 </script>
+
+<!-- NovelAI 이미지 생성 모달 -->
+<div class="modal fade" id="naiModal" tabindex="-1">
+  <div class="modal-dialog modal-md">
+    <div class="modal-content">
+      <div class="modal-header py-2">
+        <h6 class="modal-title mb-0">
+          <i class="bi bi-stars me-2" style="color:#e86aaa;"></i>NovelAI 이미지 생성
+        </h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label" style="font-size:0.78rem;">모델</label>
+          <select class="form-select form-select-sm" id="naiModel">
+            <option value="nai-diffusion-4-full">NAI Diffusion 4 Full (최신)</option>
+            <option value="nai-diffusion-4-curated-preview">NAI Diffusion 4 Curated</option>
+            <option value="nai-diffusion-3" selected>NAI Diffusion 3</option>
+          </select>
+        </div>
+        <div class="mb-3">
+          <div class="d-flex justify-content-between align-items-center mb-1">
+            <label class="form-label mb-0" style="font-size:0.78rem;">프롬프트</label>
+            <button type="button" class="fse-btn" onclick="openFse('naiPrompt','NAI 프롬프트')"><i class="bi bi-arrows-fullscreen"></i></button>
+          </div>
+          <textarea class="form-control form-control-sm" id="naiPrompt" rows="3"
+            placeholder="masterpiece, best quality, 1girl..."></textarea>
+        </div>
+        <div class="mb-3">
+          <label class="form-label" style="font-size:0.78rem;">네거티브 프롬프트</label>
+          <textarea class="form-control form-control-sm" id="naiNegPrompt" rows="2"
+            placeholder="lowres, bad anatomy..."></textarea>
+        </div>
+        <div class="row g-2 mb-3">
+          <div class="col-6">
+            <label class="form-label" style="font-size:0.78rem;">가로 (px)</label>
+            <select class="form-select form-select-sm" id="naiWidth">
+              <option value="512">512</option>
+              <option value="768">768</option>
+              <option value="832" selected>832</option>
+              <option value="1024">1024</option>
+            </select>
+          </div>
+          <div class="col-6">
+            <label class="form-label" style="font-size:0.78rem;">세로 (px)</label>
+            <select class="form-select form-select-sm" id="naiHeight">
+              <option value="512">512</option>
+              <option value="768">768</option>
+              <option value="1024">1024</option>
+              <option value="1216" selected>1216</option>
+            </select>
+          </div>
+        </div>
+        <img id="naiPreview" style="display:none;width:100%;border-radius:8px;border:1px solid var(--border);">
+        <div id="naiStatus" class="mt-2"></div>
+      </div>
+      <div class="modal-footer py-2">
+        <div style="font-size:0.72rem;color:var(--text-muted);margin-right:auto;">
+          <i class="bi bi-key me-1"></i>NOVELAI_API_KEY 환경변수 필요
+        </div>
+        <button class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">닫기</button>
+        <button class="btn btn-sm" id="naiGenBtn" onclick="runNaiGenerate()"
+          style="background:linear-gradient(135deg,#c84a8a,#8a65d4);border:none;color:#fff;">
+          <i class="bi bi-stars me-1"></i>생성
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
 {% endblock %}

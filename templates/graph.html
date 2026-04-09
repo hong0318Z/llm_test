@@ -291,7 +291,7 @@ function toggleCat(cat) {
 // ── 그래프 로드 ──────────────────────────────────────────
 async function reloadGraph() {
   const showInactive = document.getElementById('showInactiveGraph').checked;
-  const res = await fetch(`/api/entries?active=${!showInactive}`);
+  const res = await fetch(`/api/entries?active=${!showInactive}&dedupe=true`);
   allEntries = await res.json();
 
   const visible = allEntries.filter(e => !hiddenCats.has(e.category));

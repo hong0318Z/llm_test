@@ -506,7 +506,7 @@ async function restoreWorldBackup(input) {
 
 async function loadEntries() {
   const activeOnly = !document.getElementById('showInactive').checked;
-  const url = `/api/entries?active=${activeOnly}`;
+  const url = `/api/entries?active=${activeOnly}&dedupe=true`;
   const res = await fetch(url);
   allEntries = await res.json();
   renderList();

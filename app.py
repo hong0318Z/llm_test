@@ -120,21 +120,15 @@ with app.app_context():
     if orphans:
         db.session.commit()
 
-    # 기존 데이터 is_superseded 정리 (1회성 마이그레이션)
-    # 자식 엔트리(parent_entry_id)가 있는 부모를 is_superseded=True 로 일괄 처리
-    _parents_with_children = db.session.query(WorldEntry.parent_entry_id).filter(
-        WorldEntry.parent_entry_id.isnot(None)
-    ).distinct().all()
-    _parent_ids = [row[0] for row in _parents_with_children]
-    if _parent_ids:
-        _fixed = WorldEntry.query.filter(
-            WorldEntry.id.in_(_parent_ids),
-            db.or_(WorldEntry.is_superseded.is_(False), WorldEntry.is_superseded.is_(None))
-        ).all()
-        for e in _fixed:
-            e.is_superseded = True
-        if _fixed:
-            db.session.commit()
+    # 복구: 이전 마이그레이션이 잘못 표시한 유저 엔트리의 is_superseded 원복
+    # (유저 엔트리는 is_superseded=True로 설정하지 않는 것이 원칙)
+    _wrongly_superseded = WorldEntry.query.filter_by(
+        created_by="user", is_superseded=True
+    ).all()
+    if _wrongly_superseded:
+        for e in _wrongly_superseded:
+            e.is_superseded = False
+        db.session.commit()
 
 
 STORAGE_DIR = os.path.join(os.path.dirname(__file__), "storage")
@@ -306,6 +300,8 @@ def list_entries():
     category = request.args.get("category")
     active_only = request.args.get("active", "true") == "true"
     include_superseded = request.args.get("include_superseded", "false") == "true"
+    # dedupe=true: 같은 (title, category)에서 최신 1개만 반환 (표시용)
+    dedupe = request.args.get("dedupe", "false") == "true"
     wid = get_world_id()
     q = WorldEntry.query
     if wid:
@@ -318,7 +314,16 @@ def list_entries():
         q = q.filter(
             db.or_(WorldEntry.is_superseded.is_(False), WorldEntry.is_superseded.is_(None))
         )
-    entries = q.order_by(WorldEntry.created_at.desc()).all()
+    entries = q.order_by(WorldEntry.tick_created.desc(), WorldEntry.created_at.desc()).all()
+    if dedupe:
+        seen = {}
+        deduped = []
+        for e in entries:
+            key = (e.title.strip().lower(), e.category)
+            if key not in seen:
+                seen[key] = True
+                deduped.append(e)
+        entries = deduped
     return jsonify([e.to_dict() for e in entries])
 
 

@@ -369,7 +369,7 @@ def create_entry():
         category=data["category"],
         content=data["content"],
         created_by="user",
-        tick_created=0,
+        tick_created=int(data.get("tick_created", 0)),
         is_active=True,
     )
     entry.references = data.get("references", [])
@@ -406,6 +406,8 @@ def update_entry(entry_id):
         entry.references = data["references"]
     if "is_active" in data:
         entry.is_active = data["is_active"]
+    if "tick_created" in data:
+        entry.tick_created = int(data["tick_created"])
     entry.updated_at = datetime.utcnow()
     db.session.commit()
 
@@ -559,6 +561,9 @@ def generate_image_nai(entry_id):
     model = data.get("model", "nai-diffusion-3")
     width = int(data.get("width", 832))
     height = int(data.get("height", 1216))
+    sampler = data.get("sampler", "k_euler_ancestral")
+    scale = float(data.get("scale", 6))
+    steps = int(data.get("steps", 28))
 
     payload = {
         "input": prompt,
@@ -567,9 +572,9 @@ def generate_image_nai(entry_id):
         "parameters": {
             "width": width,
             "height": height,
-            "scale": 6,
-            "sampler": "k_euler",
-            "steps": 28,
+            "scale": scale,
+            "sampler": sampler,
+            "steps": steps,
             "n_samples": 1,
             "seed": 0,
             "negative_prompt": negative_prompt,

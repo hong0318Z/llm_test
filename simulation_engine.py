@@ -60,10 +60,10 @@ def run_simulation(run_id: int, app):
 
         try:
             # 시뮬레이션 모델 설정 로드 (최초 1회)
-        _sim_settings = AppSettings.get()
-        _model_sim = _sim_settings.llm_model_simulation or None
+            _sim_settings = AppSettings.get()
+            _model_sim = _sim_settings.llm_model_simulation or None
 
-        for tick in range(1, run.total_ticks + 1):
+            for tick in range(1, run.total_ticks + 1):
                 # 매 틱 시작 전 취소 여부 확인
                 db.session.refresh(run)
                 if run.status == "cancelled":

@@ -285,11 +285,12 @@ def build_story_beat_section(story_beats: list, tick_number: int) -> str:
 
 
 def run_tick(config: dict, tick_number: int, entries: list, recent_context: str = "",
-             story_beats: list = None) -> dict:
+             story_beats: list = None, prompt_overrides: dict = None) -> dict:
     """단일 틱 실행. LLM을 호출해 세계관 변화를 반환."""
     client, model = get_llm_client()
     max_chars = config.get("max_content_chars") or 500
     rag_budget = config.get("rag_token_budget") or 0
+    overrides = prompt_overrides or {}
 
     # RAG: 세계관이 예산의 50%를 초과하면 관련 엔트리만 선택
     rag_info = None
@@ -298,14 +299,17 @@ def run_tick(config: dict, tick_number: int, entries: list, recent_context: str 
         if estimate_tokens(full_state) > rag_budget // 2:
             entries, rag_info = select_entries_rag(entries, recent_context, rag_budget, max_chars)
 
-    system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
+    sys_tmpl = overrides.get("simulation_system", SYSTEM_PROMPT_TEMPLATE)
+    user_tmpl = overrides.get("simulation_user", USER_PROMPT_TEMPLATE)
+
+    system_prompt = sys_tmpl.format(
         prompt_level_1=config.get("prompt_level_1") or "없음",
         prompt_level_2=config.get("prompt_level_2") or "없음",
         prompt_level_3=config.get("prompt_level_3") or "없음",
     )
     world_state = serialize_world_state(entries, max_chars=max_chars)
     story_beat_section = build_story_beat_section(story_beats or [], tick_number)
-    user_prompt = USER_PROMPT_TEMPLATE.format(
+    user_prompt = user_tmpl.format(
         tick_number=tick_number,
         world_state=world_state,
         story_beat_section=story_beat_section,
@@ -338,13 +342,15 @@ def run_tick(config: dict, tick_number: int, entries: list, recent_context: str 
     return result
 
 
-def run_summary(config: dict, tick_number: int, entries: list) -> dict:
+def run_summary(config: dict, tick_number: int, entries: list, prompt_overrides: dict = None) -> dict:
     """컨텍스트 한계 근접 시 전체 세계관을 압축 요약."""
     client, model = get_llm_client()
     max_chars = config.get("max_content_chars") or 500
+    overrides = prompt_overrides or {}
 
     world_state = serialize_world_state(entries, max_chars=max_chars)
-    user_prompt = SUMMARY_PROMPT_TEMPLATE.format(
+    tmpl = overrides.get("summary", SUMMARY_PROMPT_TEMPLATE)
+    user_prompt = tmpl.format(
         world_state=world_state,
         tick_number=tick_number,
     )
@@ -572,16 +578,19 @@ TIMELINE_GEN_PROMPT = """\
 """
 
 
-def generate_timeline(entry: dict, world_entries: list, extra_prompt: str = "", episode_count: int = 5) -> dict:
+def generate_timeline(entry: dict, world_entries: list, extra_prompt: str = "",
+                      episode_count: int = 5, prompt_overrides: dict = None) -> dict:
     """특정 엔트리를 중심으로 타임라인을 1회 LLM 호출로 생성"""
     client, model = get_llm_client()
+    overrides = prompt_overrides or {}
 
     world_state = serialize_world_state(
         [e for e in world_entries if e["id"] != entry["id"]],
         max_chars=300,
     )
 
-    prompt = TIMELINE_GEN_PROMPT.format(
+    tmpl = overrides.get("timeline_generate", TIMELINE_GEN_PROMPT)
+    prompt = tmpl.format(
         category=entry.get("category", ""),
         title=entry.get("title", ""),
         content=entry.get("content", ""),

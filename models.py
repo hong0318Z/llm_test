@@ -91,6 +91,33 @@ class WorldEntry(db.Model):
         }
 
 
+class LlmPromptConfig(db.Model):
+    """LLM 프롬프트 템플릿 설정 — Web UI에서 편집 가능"""
+    __tablename__ = "llm_prompt_configs"
+
+    id = db.Column(db.Integer, primary_key=True)
+    key = db.Column(db.String(100), unique=True, nullable=False)   # 식별자 (예: simulation_system)
+    label = db.Column(db.String(200), nullable=False)              # 표시 이름
+    description = db.Column(db.Text, default="")                   # 용도 설명
+    content = db.Column(db.Text, nullable=False)                   # 현재 내용 (편집 가능)
+    default_content = db.Column(db.Text, nullable=False)           # 원본 기본값 (리셋용)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self, include_default=False):
+        d = {
+            "id": self.id,
+            "key": self.key,
+            "label": self.label,
+            "description": self.description or "",
+            "content": self.content,
+            "is_modified": self.content != self.default_content,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+        if include_default:
+            d["default_content"] = self.default_content
+        return d
+
+
 class AppSettings(db.Model):
     """전역 마스터 설정 (싱글톤)"""
     __tablename__ = "app_settings"

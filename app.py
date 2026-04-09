@@ -8,7 +8,7 @@ import json as _json
 from collections import Counter
 from flask import Flask, jsonify, request, render_template, abort, Response, send_from_directory, session, redirect, url_for
 from werkzeug.utils import secure_filename
-from models import db, World, WorldEntry, SimulationConfig, SimulationRun, SimulationLog, WorldSnapshot, AppSettings, Timeline, TimelineEvent, StoryBeat, CATEGORIES
+from models import db, World, WorldEntry, SimulationConfig, SimulationRun, SimulationLog, WorldSnapshot, AppSettings, LlmPromptConfig, Timeline, TimelineEvent, StoryBeat, CATEGORIES
 from datetime import datetime
 
 app = Flask(__name__)
@@ -54,6 +54,49 @@ with app.app_context():
                 conn.commit()
             except Exception:
                 pass  # 이미 존재하면 무시
+
+    # LLM 프롬프트 기본값 시드 (최초 1회)
+    from llm_client import (
+        SYSTEM_PROMPT_TEMPLATE, USER_PROMPT_TEMPLATE,
+        SUMMARY_PROMPT_TEMPLATE, TIMELINE_GEN_PROMPT,
+    )
+    _default_prompts = [
+        {
+            "key": "simulation_system",
+            "label": "시뮬레이션 시스템 프롬프트",
+            "description": "틱 시뮬레이션 시 LLM에게 전달되는 시스템 역할 지침. {prompt_level_1}, {prompt_level_2}, {prompt_level_3} 플레이스홀더 유지 필요.",
+            "content": SYSTEM_PROMPT_TEMPLATE,
+        },
+        {
+            "key": "simulation_user",
+            "label": "시뮬레이션 유저 프롬프트",
+            "description": "각 틱마다 LLM에게 전달되는 실제 요청 메시지. {tick_number}, {world_state}, {story_beat_section} 플레이스홀더 유지 필요.",
+            "content": USER_PROMPT_TEMPLATE,
+        },
+        {
+            "key": "summary",
+            "label": "컨텍스트 요약 프롬프트",
+            "description": "세계관이 컨텍스트 한계에 근접했을 때 압축 요약을 위해 사용. {world_state}, {tick_number} 플레이스홀더 유지 필요.",
+            "content": SUMMARY_PROMPT_TEMPLATE,
+        },
+        {
+            "key": "timeline_generate",
+            "label": "타임라인 LLM 생성 프롬프트",
+            "description": "타임라인 LLM 생성 기능에서 사용. {category}, {title}, {content}, {world_state}, {extra_prompt} 플레이스홀더 유지 필요.",
+            "content": TIMELINE_GEN_PROMPT,
+        },
+    ]
+    for p in _default_prompts:
+        if not LlmPromptConfig.query.filter_by(key=p["key"]).first():
+            row = LlmPromptConfig(
+                key=p["key"],
+                label=p["label"],
+                description=p["description"],
+                content=p["content"],
+                default_content=p["content"],
+            )
+            db.session.add(row)
+    db.session.commit()
 
     # 기본 세계관 생성 및 기존 데이터 마이그레이션
     if World.query.count() == 0:
@@ -613,6 +656,51 @@ def update_settings():
 
 
 # ─────────────────────────────────────────
+#  LLM 프롬프트 설정 API
+# ─────────────────────────────────────────
+
+@app.route("/api/prompts", methods=["GET"])
+def list_prompts():
+    prompts = LlmPromptConfig.query.order_by(LlmPromptConfig.id).all()
+    include_default = request.args.get("defaults") == "true"
+    return jsonify([p.to_dict(include_default=include_default) for p in prompts])
+
+
+@app.route("/api/prompts/<string:key>", methods=["GET"])
+def get_prompt(key):
+    p = LlmPromptConfig.query.filter_by(key=key).first_or_404()
+    return jsonify(p.to_dict(include_default=True))
+
+
+@app.route("/api/prompts/<string:key>", methods=["PUT"])
+def update_prompt(key):
+    p = LlmPromptConfig.query.filter_by(key=key).first_or_404()
+    data = request.json or {}
+    if "content" in data:
+        p.content = data["content"]
+    p.updated_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify(p.to_dict())
+
+
+@app.route("/api/prompts/<string:key>/reset", methods=["POST"])
+def reset_prompt(key):
+    p = LlmPromptConfig.query.filter_by(key=key).first_or_404()
+    p.content = p.default_content
+    p.updated_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify(p.to_dict())
+
+
+def _load_prompt_overrides() -> dict:
+    """DB에서 커스텀 프롬프트를 로드해 key→content 딕셔너리로 반환"""
+    try:
+        return {p.key: p.content for p in LlmPromptConfig.query.all()}
+    except Exception:
+        return {}
+
+
+# ─────────────────────────────────────────
 #  타임라인 API
 # ─────────────────────────────────────────
 
@@ -666,7 +754,9 @@ def generate_timeline_llm():
     world_entries = [e.to_dict() for e in eq.all()]
 
     try:
-        result = generate_timeline(entry.to_dict(), world_entries, extra_prompt, episode_count)
+        prompt_overrides = _load_prompt_overrides()
+        result = generate_timeline(entry.to_dict(), world_entries, extra_prompt, episode_count,
+                                   prompt_overrides=prompt_overrides)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1417,6 +1507,11 @@ def export_page():
     if redir:
         return redir
     return render_template("export.html")
+
+
+@app.route("/prompts")
+def prompts_page():
+    return render_template("prompts.html")
 
 
 # ─────────────────────────────────────────

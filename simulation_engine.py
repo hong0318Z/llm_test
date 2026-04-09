@@ -3,7 +3,7 @@
 토큰 사용량 추적 및 컨텍스트 한계 시 자동 요약 포함
 """
 from datetime import datetime
-from models import db, WorldEntry, SimulationRun, SimulationLog, TimelineEvent, StoryBeat, Timeline, AppSettings, CREATOR_LLM, CREATOR_USER
+from models import db, WorldEntry, SimulationRun, SimulationLog, TimelineEvent, StoryBeat, Timeline, AppSettings, LlmPromptConfig, CREATOR_LLM, CREATOR_USER
 import llm_client
 
 
@@ -17,6 +17,9 @@ def run_simulation(run_id: int, app):
         config = run.config
         run.status = "running"
         db.session.commit()
+
+        # DB에서 커스텀 프롬프트 로드
+        prompt_overrides = {p.key: p.content for p in LlmPromptConfig.query.all()}
 
         import json as _json
         selected_ids = None
@@ -73,7 +76,7 @@ def run_simulation(run_id: int, app):
                 rag_budget = settings.rag_token_budget or 0
                 cfg_dict = {**config.to_dict(), "max_content_chars": max_chars, "rag_token_budget": rag_budget}
                 if llm_client.needs_summary(entries, max_chars=max_chars):
-                    _run_auto_summary(run, tick, entries, cfg_dict)
+                    _run_auto_summary(run, tick, entries, cfg_dict, prompt_overrides)
                     db.session.commit()
                     entries = _query_entries()
 
@@ -94,6 +97,7 @@ def run_simulation(run_id: int, app):
                     cfg_dict, tick, entries,
                     recent_context=recent_context,
                     story_beats=story_beats if story_beats else None,
+                    prompt_overrides=prompt_overrides,
                 )
                 # RAG가 적용됐으면 로그 기록
                 rag_info = result.get("_rag_info")
@@ -131,9 +135,9 @@ def run_simulation(run_id: int, app):
             _log_error(run, str(e))
 
 
-def _run_auto_summary(run: SimulationRun, tick: int, entries: list, config: dict):
+def _run_auto_summary(run: SimulationRun, tick: int, entries: list, config: dict, prompt_overrides: dict = None):
     """컨텍스트 한계 근접 시 전체 세계관 자동 요약"""
-    result = llm_client.run_summary(config, tick, entries)
+    result = llm_client.run_summary(config, tick, entries, prompt_overrides=prompt_overrides)
     reasoning = result.get("reasoning", "")
     raw = result.get("_raw", "")
     tokens_in = result.get("_tokens_in", 0)

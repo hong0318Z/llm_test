@@ -46,6 +46,9 @@ with app.app_context():
         ("simulation_configs",  "world_id",                "INTEGER"),
         ("simulation_runs",     "world_id",                "INTEGER"),
         ("world_snapshots",     "world_id",                "INTEGER"),
+        # 모델 선택 컬럼
+        ("app_settings",        "llm_model_simulation",    "TEXT DEFAULT 'claude-sonnet-4.5'"),
+        ("app_settings",        "llm_model_nai",           "TEXT DEFAULT 'claude-sonnet-4.5'"),
     ]
     with db.engine.connect() as conn:
         for table, col, col_def in _migrate_columns:
@@ -59,6 +62,7 @@ with app.app_context():
     from llm_client import (
         SYSTEM_PROMPT_TEMPLATE, USER_PROMPT_TEMPLATE,
         SUMMARY_PROMPT_TEMPLATE, TIMELINE_GEN_PROMPT,
+        NAI_PROMPT_GENERATOR_TEMPLATE,
     )
     _default_prompts = [
         {
@@ -84,6 +88,24 @@ with app.app_context():
             "label": "타임라인 LLM 생성 프롬프트",
             "description": "타임라인 LLM 생성 기능에서 사용. {category}, {title}, {content}, {world_state}, {extra_prompt} 플레이스홀더 유지 필요.",
             "content": TIMELINE_GEN_PROMPT,
+        },
+        {
+            "key": "nai_base_positive",
+            "label": "NAI 기본 긍정 태그",
+            "description": "NovelAI 이미지 생성 시 모든 프롬프트 앞에 자동으로 추가되는 기본 긍정 태그. (예: masterpiece, best quality)",
+            "content": "{{masterpiece}}, {{best quality}}, {{ultra-detailed}}",
+        },
+        {
+            "key": "nai_base_negative",
+            "label": "NAI 기본 부정 태그",
+            "description": "NovelAI 이미지 생성 시 기본으로 사용되는 네거티브 프롬프트 태그.",
+            "content": "lowres, bad anatomy, bad hands, worst quality, blurry, text, error, missing fingers, extra digit, fewer digits, cropped, jpeg artifacts, signature, watermark, username",
+        },
+        {
+            "key": "nai_auto_generator",
+            "label": "NAI 프롬프트 자동생성 지침",
+            "description": "엔트리 정보로 NAI 프롬프트를 자동생성할 때 LLM에게 전달되는 지침. {category}, {title}, {content}, {keywords} 플레이스홀더 유지 필요.",
+            "content": NAI_PROMPT_GENERATOR_TEMPLATE,
         },
     ]
     for p in _default_prompts:
@@ -603,6 +625,38 @@ def generate_image_nai(entry_id):
     return jsonify({"ok": True, "image_filename": filename})
 
 
+@app.route("/api/entries/<int:entry_id>/generate-nai-prompt", methods=["POST"])
+def generate_nai_prompt_api(entry_id):
+    """LLM으로 NAI 이미지 프롬프트 자동생성"""
+    from llm_client import generate_nai_prompt
+    entry = WorldEntry.query.get_or_404(entry_id)
+    settings = AppSettings.get()
+
+    # 프롬프트 설정 로드
+    prompt_overrides = {p.key: p.content for p in LlmPromptConfig.query.all()}
+    nai_tmpl = prompt_overrides.get("nai_auto_generator")
+    base_positive = prompt_overrides.get("nai_base_positive", "")
+
+    wid = entry.world_id
+    world_entries = [e.to_dict() for e in WorldEntry.query.filter_by(
+        world_id=wid, is_active=True
+    ).filter(
+        db.or_(WorldEntry.is_superseded.is_(False), WorldEntry.is_superseded.is_(None))
+    ).limit(30).all()]
+
+    try:
+        tags = generate_nai_prompt(
+            entry=entry.to_dict(),
+            world_entries=world_entries,
+            prompt_template=nai_tmpl,
+            base_positive=base_positive,
+            model_override=settings.llm_model_nai or None,
+        )
+        return jsonify({"ok": True, "prompt": tags})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/entries", methods=["DELETE"])
 def delete_all_entries():
     """현재 세계관 엔트리 전체 삭제"""
@@ -885,6 +939,14 @@ def update_settings():
         s.max_user_entry_chars = int(data["max_user_entry_chars"])
     if "rag_token_budget" in data:
         s.rag_token_budget = int(data["rag_token_budget"])
+    _ALLOWED_MODELS = {
+        "gemini-3.1-pro-preview", "claude-opus-4.6", "claude-sonnet-4.6",
+        "claude-opus-4.5", "claude-sonnet-4.5",
+    }
+    if "llm_model_simulation" in data and data["llm_model_simulation"] in _ALLOWED_MODELS:
+        s.llm_model_simulation = data["llm_model_simulation"]
+    if "llm_model_nai" in data and data["llm_model_nai"] in _ALLOWED_MODELS:
+        s.llm_model_nai = data["llm_model_nai"]
     db.session.commit()
     return jsonify(s.to_dict())
 

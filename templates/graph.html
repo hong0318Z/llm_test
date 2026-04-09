@@ -827,6 +827,30 @@ function openNaiModal() {
   _naiModal.show();
 }
 
+async function autoGenerateNaiPrompt() {
+  if (!selectedEntry) return;
+  const btn = document.getElementById('naiAutoGenBtn');
+  const statusEl = document.getElementById('naiStatus');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" style="width:.7rem;height:.7rem;"></span>생성 중...';
+  statusEl.innerHTML = '<span style="color:var(--text-secondary);font-size:0.78rem;">LLM으로 프롬프트 생성 중...</span>';
+  try {
+    const res = await fetch(`/api/entries/${selectedEntry.id}/generate-nai-prompt`, { method: 'POST' });
+    const data = await res.json();
+    if (data.error) {
+      statusEl.innerHTML = `<span style="color:#ff6b6b;font-size:0.78rem;">오류: ${data.error}</span>`;
+    } else {
+      document.getElementById('naiPrompt').value = data.prompt || '';
+      statusEl.innerHTML = '<span style="color:#6aff9a;font-size:0.78rem;"><i class="bi bi-check-circle me-1"></i>AI 프롬프트 생성 완료</span>';
+    }
+  } catch(e) {
+    statusEl.innerHTML = `<span style="color:#ff6b6b;font-size:0.78rem;">연결 오류: ${e.message}</span>`;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-magic me-1"></i>AI 자동생성';
+  }
+}
+
 async function runNaiGenerate() {
   if (!selectedEntry) return;
   const btn = document.getElementById('naiGenBtn');
@@ -900,7 +924,15 @@ async function runNaiGenerate() {
         <div class="mb-3">
           <div class="d-flex justify-content-between align-items-center mb-1">
             <label class="form-label mb-0" style="font-size:0.78rem;">프롬프트</label>
-            <button type="button" class="fse-btn" onclick="openFse('naiPrompt','NAI 프롬프트')"><i class="bi bi-arrows-fullscreen"></i></button>
+            <div class="d-flex gap-1">
+              <button type="button" id="naiAutoGenBtn" onclick="autoGenerateNaiPrompt()"
+                style="background:none;border:1px solid rgba(232,106,170,0.5);border-radius:4px;padding:2px 8px;
+                color:#e86aaa;font-size:0.72rem;cursor:pointer;transition:border-color 0.15s;"
+                onmouseover="this.style.borderColor='#e86aaa'" onmouseout="this.style.borderColor='rgba(232,106,170,0.5)'">
+                <i class="bi bi-magic me-1"></i>AI 자동생성
+              </button>
+              <button type="button" class="fse-btn" onclick="openFse('naiPrompt','NAI 프롬프트')"><i class="bi bi-arrows-fullscreen"></i></button>
+            </div>
           </div>
           <textarea class="form-control form-control-sm" id="naiPrompt" rows="3"
             placeholder="masterpiece, best quality, 1girl..."></textarea>

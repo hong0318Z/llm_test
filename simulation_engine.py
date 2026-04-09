@@ -59,7 +59,11 @@ def run_simulation(run_id: int, app):
                     story_beats.append(d)
 
         try:
-            for tick in range(1, run.total_ticks + 1):
+            # 시뮬레이션 모델 설정 로드 (최초 1회)
+        _sim_settings = AppSettings.get()
+        _model_sim = _sim_settings.llm_model_simulation or None
+
+        for tick in range(1, run.total_ticks + 1):
                 # 매 틱 시작 전 취소 여부 확인
                 db.session.refresh(run)
                 if run.status == "cancelled":
@@ -76,7 +80,7 @@ def run_simulation(run_id: int, app):
                 rag_budget = settings.rag_token_budget or 0
                 cfg_dict = {**config.to_dict(), "max_content_chars": max_chars, "rag_token_budget": rag_budget}
                 if llm_client.needs_summary(entries, max_chars=max_chars):
-                    _run_auto_summary(run, tick, entries, cfg_dict, prompt_overrides)
+                    _run_auto_summary(run, tick, entries, cfg_dict, prompt_overrides, model_override=_model_sim)
                     db.session.commit()
                     entries = _query_entries()
 
@@ -98,6 +102,7 @@ def run_simulation(run_id: int, app):
                     recent_context=recent_context,
                     story_beats=story_beats if story_beats else None,
                     prompt_overrides=prompt_overrides,
+                    model_override=_model_sim,
                 )
                 # RAG가 적용됐으면 로그 기록
                 rag_info = result.get("_rag_info")
@@ -135,9 +140,9 @@ def run_simulation(run_id: int, app):
             _log_error(run, str(e))
 
 
-def _run_auto_summary(run: SimulationRun, tick: int, entries: list, config: dict, prompt_overrides: dict = None):
+def _run_auto_summary(run: SimulationRun, tick: int, entries: list, config: dict, prompt_overrides: dict = None, model_override: str = None):
     """컨텍스트 한계 근접 시 전체 세계관 자동 요약"""
-    result = llm_client.run_summary(config, tick, entries, prompt_overrides=prompt_overrides)
+    result = llm_client.run_summary(config, tick, entries, prompt_overrides=prompt_overrides, model_override=model_override)
     reasoning = result.get("reasoning", "")
     raw = result.get("_raw", "")
     tokens_in = result.get("_tokens_in", 0)

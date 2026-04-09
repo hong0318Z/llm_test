@@ -17,15 +17,15 @@ MAX_TOKENS = 16000  # Copilot API 최대값
 CONTEXT_SUMMARY_THRESHOLD = 120_000
 
 
-def get_llm_client():
-    """GitHub Copilot API 클라이언트 반환"""
+def get_llm_client(model_override: str = None):
+    """GitHub Copilot API 클라이언트 반환. model_override가 있으면 해당 모델 사용."""
     github_token = os.environ.get("GITHUB_TOKEN")
     if not github_token:
         raise EnvironmentError(
             "GITHUB_TOKEN 환경변수가 필요합니다.\n"
             ".env 파일에 GITHUB_TOKEN=your_token 을 추가하세요."
         )
-    model = os.environ.get("LLM_MODEL", DEFAULT_MODEL)
+    model = model_override or os.environ.get("LLM_MODEL", DEFAULT_MODEL)
     client = OpenAI(
         base_url=COPILOT_BASE_URL,
         api_key=github_token,
@@ -285,9 +285,10 @@ def build_story_beat_section(story_beats: list, tick_number: int) -> str:
 
 
 def run_tick(config: dict, tick_number: int, entries: list, recent_context: str = "",
-             story_beats: list = None, prompt_overrides: dict = None) -> dict:
+             story_beats: list = None, prompt_overrides: dict = None,
+             model_override: str = None) -> dict:
     """단일 틱 실행. LLM을 호출해 세계관 변화를 반환."""
-    client, model = get_llm_client()
+    client, model = get_llm_client(model_override)
     max_chars = config.get("max_content_chars") or 500
     rag_budget = config.get("rag_token_budget") or 0
     overrides = prompt_overrides or {}
@@ -342,9 +343,10 @@ def run_tick(config: dict, tick_number: int, entries: list, recent_context: str 
     return result
 
 
-def run_summary(config: dict, tick_number: int, entries: list, prompt_overrides: dict = None) -> dict:
+def run_summary(config: dict, tick_number: int, entries: list, prompt_overrides: dict = None,
+                model_override: str = None) -> dict:
     """컨텍스트 한계 근접 시 전체 세계관을 압축 요약."""
-    client, model = get_llm_client()
+    client, model = get_llm_client(model_override)
     max_chars = config.get("max_content_chars") or 500
     overrides = prompt_overrides or {}
 
@@ -579,9 +581,10 @@ TIMELINE_GEN_PROMPT = """\
 
 
 def generate_timeline(entry: dict, world_entries: list, extra_prompt: str = "",
-                      episode_count: int = 5, prompt_overrides: dict = None) -> dict:
+                      episode_count: int = 5, prompt_overrides: dict = None,
+                      model_override: str = None) -> dict:
     """특정 엔트리를 중심으로 타임라인을 1회 LLM 호출로 생성"""
-    client, model = get_llm_client()
+    client, model = get_llm_client(model_override)
     overrides = prompt_overrides or {}
 
     world_state = serialize_world_state(
@@ -611,3 +614,60 @@ def generate_timeline(entry: dict, world_entries: list, extra_prompt: str = "",
     result["_tokens_in"] = getattr(response.usage, "prompt_tokens", 0)
     result["_tokens_out"] = getattr(response.usage, "completion_tokens", 0)
     return result
+
+
+# ── NAI 프롬프트 자동생성 ────────────────────────────────────
+
+NAI_PROMPT_GENERATOR_TEMPLATE = """당신은 NovelAI(NAI) Diffusion 이미지 생성 전문 프롬프터입니다.
+아래 세계관 엔트리 정보를 분석하여 NAI 이미지 생성 프롬프트를 작성하세요.
+
+[엔트리 정보]
+분류: {category}
+이름: {title}
+내용: {content}
+키워드: {keywords}
+
+[프롬프트 생성 절대 규칙]
+1. 단부루(Danbooru) 및 노벨AI(NAI) 태그 규격을 따른다
+2. 불필요한 감성적 묘사나 중복 태그는 철저히 배제하고 명시적인 키워드만 쉼표(,)로 구분하여 나열한다
+3. 태그 그룹은 중괄호 {{ }}로 묶어 우선순위와 속성을 분리한다 (예: {{{{masterpiece}}}}, {{{{1girl}}}})
+4. {{{{masterpiece}}}}, {{{{best quality}}}}는 반드시 포함
+5. 영어 태그만 사용
+6. 50개 이내로 간결하게
+
+[결과 형식]
+프롬프트 태그 문자열만 출력. 설명이나 주석 없이 순수 태그 목록만."""
+
+
+def generate_nai_prompt(entry: dict, world_entries: list = None,
+                        prompt_template: str = None, base_positive: str = "",
+                        model_override: str = None) -> str:
+    """엔트리 정보로 NAI 이미지 프롬프트 자동생성"""
+    client, model = get_llm_client(model_override)
+    tmpl = prompt_template or NAI_PROMPT_GENERATOR_TEMPLATE
+
+    content = entry.get("content", "")
+    if len(content) > 600:
+        content = content[:600] + "..."
+
+    user_prompt = tmpl.format(
+        category=entry.get("category", ""),
+        title=entry.get("title", ""),
+        content=content,
+        keywords=entry.get("keywords", ""),
+    )
+
+    response = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "user", "content": user_prompt}],
+        temperature=0.7,
+        max_tokens=512,
+    )
+
+    tags = (response.choices[0].message.content or "").strip()
+
+    # 기본 긍정 태그가 있으면 앞에 붙임
+    if base_positive:
+        tags = base_positive.rstrip(", ") + ", " + tags
+
+    return tags

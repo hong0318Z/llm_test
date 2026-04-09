@@ -129,6 +129,9 @@ class AppSettings(db.Model):
     max_user_entry_chars = db.Column(db.Integer, default=1000)
     # RAG 토큰 예산: 세계관이 이 값의 50%를 초과하면 관련 엔트리만 선택 (0 = RAG 비활성화)
     rag_token_budget = db.Column(db.Integer, default=0)
+    # 모델 선택: 세계관 시뮬레이션용 / NAI 프롬프트 생성용
+    llm_model_simulation = db.Column(db.String(100), default="claude-sonnet-4.5")
+    llm_model_nai = db.Column(db.String(100), default="claude-sonnet-4.5")
 
     @staticmethod
     def get():
@@ -144,6 +147,8 @@ class AppSettings(db.Model):
             "max_llm_entry_chars": self.max_llm_entry_chars if self.max_llm_entry_chars is not None else 500,
             "max_user_entry_chars": self.max_user_entry_chars if self.max_user_entry_chars is not None else 1000,
             "rag_token_budget": self.rag_token_budget if self.rag_token_budget is not None else 0,
+            "llm_model_simulation": self.llm_model_simulation or "claude-sonnet-4.5",
+            "llm_model_nai": self.llm_model_nai or "claude-sonnet-4.5",
         }
 
 

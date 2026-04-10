@@ -536,6 +536,30 @@
       </div>
     </div>
   </div>
+
+  <!-- ─── 이미지 팝업 (라이트박스) ─── -->
+  <div id="imgLightbox"
+    onclick="this.style.display='none'"
+    style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.88);z-index:9999;
+           cursor:zoom-out;align-items:center;justify-content:center;">
+    <img id="imgLightboxImg" src="" alt="이미지 팝업"
+      style="max-width:95vw;max-height:95vh;object-fit:contain;border-radius:8px;
+             box-shadow:0 8px 48px rgba(0,0,0,0.8);pointer-events:none;">
+  </div>
+  <script>
+  function openImagePopup(src) {
+    const lb = document.getElementById('imgLightbox');
+    document.getElementById('imgLightboxImg').src = src;
+    lb.style.display = 'flex';
+  }
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') {
+      const lb = document.getElementById('imgLightbox');
+      if (lb) lb.style.display = 'none';
+    }
+  });
+  </script>
+
   <script>
   let _fseModal, _fseTargetId;
   document.addEventListener('DOMContentLoaded', () => {

@@ -653,7 +653,8 @@ function renderImageArea(entry) {
   if (entry.image_filename) {
     area.innerHTML = `
       <img src="/storage/${entry.image_filename}" alt="이미지"
-        style="width:100%;max-height:180px;object-fit:cover;border-radius:8px;border:1px solid var(--border);display:block;">
+        onclick="openImagePopup(this.src)"
+        style="width:100%;max-height:320px;object-fit:contain;background:var(--bg-input);border-radius:8px;border:1px solid var(--border);display:block;cursor:zoom-in;">
       <div class="d-flex gap-2 mt-2">
         <label style="background:none;border:1px solid var(--border);color:var(--text-muted);border-radius:6px;
           padding:3px 10px;font-size:0.75rem;cursor:pointer;flex:1;text-align:center;">

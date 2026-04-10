@@ -133,7 +133,8 @@
             <!-- 이미지 영역 -->
             <div id="entryImageArea" class="mb-3" style="display:none;">
               <img id="entryImageEl" src="" alt="엔트리 이미지"
-                style="width:100%;max-height:220px;object-fit:cover;border-radius:8px;border:1px solid var(--border);">
+                onclick="openImagePopup(this.src)"
+                style="width:100%;object-fit:contain;border-radius:8px;border:1px solid var(--border);cursor:zoom-in;display:block;">
               <div class="mt-1 d-flex gap-2">
                 <label class="btn btn-sm" style="border:1px solid var(--border);color:var(--text-muted);font-size:0.75rem;padding:2px 8px;cursor:pointer;margin:0;">
                   <i class="bi bi-arrow-repeat me-1"></i>교체
@@ -630,7 +631,7 @@ function renderList() {
     <div class="entry-card mb-2 ${e.is_active ? '' : 'inactive'} ${selectedIds.has(e.id) ? 'selected' : ''}"
       onclick="selectEntry(${e.id})" style="position:relative;overflow:hidden;">
       ${e.image_filename ? `<img src="/storage/${e.image_filename}" alt=""
-        style="width:100%;height:80px;object-fit:cover;border-radius:8px 8px 0 0;margin:-0px;display:block;margin-bottom:8px;opacity:${e.is_active?1:0.4};">` : ''}
+        style="width:100%;height:80px;object-fit:contain;background:var(--bg-input);border-radius:8px 8px 0 0;display:block;margin-bottom:8px;opacity:${e.is_active?1:0.4};">` : ''}
       <input type="checkbox" class="entry-checkbox"
         data-id="${e.id}" ${selectedIds.has(e.id) ? 'checked' : ''}
         onclick="toggleSelect(${e.id}, event)"

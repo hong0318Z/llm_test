@@ -1,0 +1,307 @@
+{% extends "base.html" %}
+{% block title %}세계관 선택 - WorldLLM{% endblock %}
+
+{% block extra_head %}
+<style>
+  .world-card {
+    background: var(--bg-card);
+    border: 2px solid var(--border);
+    border-radius: 16px;
+    padding: 24px;
+    cursor: pointer;
+    transition: border-color 0.18s, box-shadow 0.18s, transform 0.12s;
+    position: relative;
+  }
+  .world-card:hover {
+    border-color: var(--accent);
+    box-shadow: 0 4px 24px rgba(139,127,247,0.18);
+    transform: translateY(-2px);
+  }
+  .world-card.selected {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(139,127,247,0.22);
+  }
+  .world-name { font-size: 1.15rem; font-weight: 700; color: var(--text-primary); }
+  .world-desc { font-size: 0.85rem; color: var(--text-secondary); margin-top: 6px; min-height: 18px; }
+  .world-meta { font-size: 0.76rem; color: var(--text-muted); margin-top: 12px; }
+  .world-stat { display: inline-flex; align-items: center; gap: 4px; margin-right: 14px; }
+  .world-stat i { color: var(--accent); }
+  .world-actions { position: absolute; top: 12px; right: 14px; display: flex; gap: 6px; opacity: 0; transition: opacity 0.15s; }
+  .world-card:hover .world-actions { opacity: 1; }
+  .new-world-card {
+    background: transparent;
+    border: 2px dashed var(--border);
+    border-radius: 16px;
+    padding: 24px;
+    cursor: pointer;
+    transition: border-color 0.18s, background 0.18s;
+    display: flex; align-items: center; justify-content: center;
+    flex-direction: column; gap: 8px;
+    min-height: 140px;
+    color: var(--text-muted);
+  }
+  .new-world-card:hover {
+    border-color: var(--accent);
+    background: rgba(139,127,247,0.05);
+    color: var(--accent);
+  }
+  .page-hero {
+    text-align: center;
+    padding: 48px 0 32px;
+  }
+  .page-hero h1 { font-size: 2rem; font-weight: 800; color: var(--text-primary); }
+  .page-hero p  { color: var(--text-secondary); font-size: 1rem; margin-top: 8px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-hero">
+  <div style="font-size:2.8rem; margin-bottom:12px;">🌍</div>
+  <h1>세계관 선택</h1>
+  <p>작업할 세계관을 선택하거나 새로 만드세요.</p>
+  <div class="d-flex justify-content-center gap-2 mt-3">
+    <button class="btn btn-sm btn-outline-secondary" onclick="downloadFullBackup()" title="모든 세계관 데이터를 JSON으로 백업">
+      <i class="bi bi-download me-1"></i>전체 DB 백업
+    </button>
+    <label class="btn btn-sm btn-outline-secondary mb-0" title="전체 DB 백업 파일로 복원" style="cursor:pointer;">
+      <i class="bi bi-upload me-1"></i>전체 DB 복원
+      <input type="file" id="fullRestoreInput" accept=".json" style="display:none;" onchange="restoreFullBackup(this)">
+    </label>
+  </div>
+</div>
+
+<div class="row g-3" id="worldGrid" style="max-width:960px; margin:0 auto;">
+  <!-- 세계관 카드들 동적 생성 -->
+</div>
+
+<!-- 세계관 생성/편집 모달 -->
+<div class="modal fade" id="worldModal" tabindex="-1">
+  <div class="modal-dialog modal-md">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="worldModalTitle"><i class="bi bi-globe2 me-2"></i>새 세계관</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label">세계관 이름 <span style="color:#ff7070;">*</span></label>
+          <input type="text" class="form-control" id="worldName" placeholder="예: 중세 판타지, 사이버펑크 2089..." maxlength="100">
+        </div>
+        <div class="mb-1">
+          <label class="form-label">설명 <span style="color:var(--text-muted);">(선택)</span></label>
+          <textarea class="form-control" id="worldDesc" rows="3" placeholder="이 세계관에 대한 간단한 설명..."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">취소</button>
+        <button class="btn btn-primary" onclick="saveWorld()">
+          <i class="bi bi-check-lg me-1"></i>저장
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 삭제 확인 모달 -->
+<div class="modal fade" id="deleteModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" style="color:#ff7070;"><i class="bi bi-exclamation-triangle me-2"></i>세계관 삭제</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p style="color:var(--text-secondary);">
+          <strong id="deleteWorldName" style="color:var(--text-primary);"></strong> 세계관과 모든 소속 데이터(엔트리, 타임라인, 시뮬레이션 기록 등)가 영구 삭제됩니다.
+        </p>
+        <p style="color:#ff7070; font-size:0.85rem;">이 작업은 되돌릴 수 없습니다.</p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">취소</button>
+        <button class="btn btn-danger" onclick="confirmDelete()">
+          <i class="bi bi-trash me-1"></i>삭제
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let _worlds = [];
+let _editId = null;
+let _deleteId = null;
+let worldModal, deleteModal;
+
+document.addEventListener('DOMContentLoaded', () => {
+  worldModal  = new bootstrap.Modal(document.getElementById('worldModal'));
+  deleteModal = new bootstrap.Modal(document.getElementById('deleteModal'));
+  loadWorlds();
+});
+
+async function loadWorlds() {
+  const res = await fetch('/api/worlds');
+  _worlds = await res.json();
+  renderWorlds();
+}
+
+function renderWorlds() {
+  const grid = document.getElementById('worldGrid');
+  grid.innerHTML = '';
+
+  _worlds.forEach(w => {
+    const col = document.createElement('div');
+    col.className = 'col-md-4 col-sm-6';
+    const currentWorldId = {{ current_world.id if current_world else 'null' }};
+    const isSelected = (w.id === currentWorldId);
+    col.innerHTML = `
+      <div class="world-card ${isSelected ? 'selected' : ''}" onclick="selectWorld(${w.id})">
+        <div class="world-actions" onclick="event.stopPropagation()">
+          <button class="btn btn-sm btn-outline-secondary" style="padding:2px 8px;" onclick="openEdit(${w.id})">
+            <i class="bi bi-pencil"></i>
+          </button>
+          <button class="btn btn-sm btn-outline-danger" style="padding:2px 8px;" onclick="openDelete(${w.id}, '${escH(w.name)}')">
+            <i class="bi bi-trash"></i>
+          </button>
+        </div>
+        ${isSelected ? '<div style="position:absolute;top:12px;left:14px;font-size:0.7rem;background:rgba(139,127,247,0.2);color:var(--accent);padding:2px 8px;border-radius:10px;font-weight:700;">현재 선택</div>' : ''}
+        <div class="world-name" style="margin-top:${isSelected ? '18px' : '0'};">${escH(w.name)}</div>
+        <div class="world-desc">${escH(w.description || '')}</div>
+        <div class="world-meta">
+          <span class="world-stat"><i class="bi bi-database"></i>${w.entry_count ?? 0}개 엔트리</span>
+          <span class="world-stat"><i class="bi bi-clock-history"></i>${w.timeline_count ?? 0}개 타임라인</span>
+          <span class="world-stat"><i class="bi bi-play-circle"></i>${w.run_count ?? 0}회 시뮬</span>
+        </div>
+      </div>`;
+    grid.appendChild(col);
+  });
+
+  // 새 세계관 카드
+  const addCol = document.createElement('div');
+  addCol.className = 'col-md-4 col-sm-6';
+  addCol.innerHTML = `
+    <div class="new-world-card" onclick="openCreate()">
+      <i class="bi bi-plus-circle" style="font-size:2rem;"></i>
+      <span style="font-weight:600;">새 세계관 만들기</span>
+    </div>`;
+  grid.appendChild(addCol);
+}
+
+async function selectWorld(id) {
+  const res = await fetch(`/api/worlds/${id}/select`, { method: 'POST' });
+  if (res.ok) {
+    window.location.href = '/';
+  }
+}
+
+function openCreate() {
+  _editId = null;
+  document.getElementById('worldModalTitle').innerHTML = '<i class="bi bi-globe2 me-2"></i>새 세계관';
+  document.getElementById('worldName').value = '';
+  document.getElementById('worldDesc').value = '';
+  worldModal.show();
+  setTimeout(() => document.getElementById('worldName').focus(), 300);
+}
+
+function openEdit(id) {
+  _editId = id;
+  const w = _worlds.find(x => x.id === id);
+  if (!w) return;
+  document.getElementById('worldModalTitle').innerHTML = '<i class="bi bi-pencil me-2"></i>세계관 편집';
+  document.getElementById('worldName').value = w.name;
+  document.getElementById('worldDesc').value = w.description || '';
+  worldModal.show();
+}
+
+async function saveWorld() {
+  const name = document.getElementById('worldName').value.trim();
+  if (!name) { alert('세계관 이름을 입력하세요.'); return; }
+  const body = { name, description: document.getElementById('worldDesc').value.trim() };
+
+  const url    = _editId ? `/api/worlds/${_editId}` : '/api/worlds';
+  const method = _editId ? 'PUT' : 'POST';
+  const res = await fetch(url, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) { alert('저장 실패'); return; }
+
+  const data = await res.json();
+  worldModal.hide();
+
+  if (!_editId) {
+    // 새 세계관 생성 → 바로 선택하고 메인으로 이동
+    await fetch(`/api/worlds/${data.id}/select`, { method: 'POST' });
+    window.location.href = '/';
+  } else {
+    await loadWorlds();
+  }
+}
+
+function openDelete(id, name) {
+  _deleteId = id;
+  document.getElementById('deleteWorldName').textContent = name;
+  deleteModal.show();
+}
+
+async function confirmDelete() {
+  if (!_deleteId) return;
+  const res = await fetch(`/api/worlds/${_deleteId}`, { method: 'DELETE' });
+  if (res.ok) {
+    deleteModal.hide();
+    _deleteId = null;
+    await loadWorlds();
+  } else {
+    alert('삭제 실패');
+  }
+}
+
+function escH(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── 전체 DB 백업 / 복원 ──────────────────────────────────
+function downloadFullBackup() {
+  window.location.href = '/api/backup';
+}
+
+async function restoreFullBackup(input) {
+  const file = input.files[0];
+  if (!file) return;
+  input.value = '';
+
+  const text = await file.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (e) {
+    alert('JSON 파싱 실패: 올바른 백업 파일인지 확인하세요.');
+    return;
+  }
+
+  if (data.type !== 'full') {
+    alert('이 파일은 전체 DB 백업 파일이 아닙니다.\n세계관 단위 복원은 각 세계관 메인 뷰에서 하세요.');
+    return;
+  }
+
+  const worldCount = (data.worlds || []).length;
+  const entryCount = (data.entries || []).length;
+  if (!confirm(`⚠ 전체 DB 복원\n· 세계관: ${worldCount}개\n· 엔트리: ${entryCount}개\n· 내보낸 시각: ${data.exported_at || '알 수 없음'}\n\n현재 모든 데이터를 삭제하고 이 백업으로 교체합니다.\n이 작업은 되돌릴 수 없습니다. 계속하시겠습니까?`)) return;
+
+  const res = await fetch('/api/restore', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (res.ok) {
+    const result = await res.json();
+    alert(`복원 완료!\n· 세계관: ${result.worlds_restored}개\n· 엔트리: ${result.entries_restored}개`);
+    await loadWorlds();
+  } else {
+    alert('복원 실패');
+  }
+}
+</script>
+{% endblock %}

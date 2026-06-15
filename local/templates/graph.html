@@ -1,0 +1,1158 @@
+{% extends "base.html" %}
+{% block title %}관계도{% endblock %}
+
+{% block content %}
+<script src="https://cdn.jsdelivr.net/npm/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
+
+<style>
+  #graphWrap {
+    display: flex;
+    gap: 1rem;
+    height: calc(100vh - 128px);
+  }
+  #networkCanvas {
+    flex: 1;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: #0d1018;
+    overflow: hidden;
+    position: relative;
+  }
+  #emptyHint {
+    position: absolute; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    color: var(--text-muted); text-align: center; pointer-events: none;
+  }
+  #sidePanel {
+    width: 340px; flex-shrink: 0;
+    display: flex; flex-direction: column; gap: 0.75rem;
+    overflow-y: auto;
+  }
+  /* 컨트롤 바 */
+  #graphControls {
+    display: flex; align-items: center; gap: 0.6rem;
+    flex-wrap: wrap; margin-bottom: 0.75rem;
+  }
+  /* 범례 */
+  .legend-pill {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 3px 10px; border-radius: 20px;
+    font-size: 0.73rem; border: 1px solid; font-weight: 500;
+    cursor: pointer; transition: opacity 0.15s;
+    user-select: none;
+  }
+  .legend-pill.muted { opacity: 0.35; }
+  .legend-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+  /* 사이드 패널 카드 */
+  .side-card {
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px;
+    overflow: hidden;
+  }
+  .side-card-header {
+    padding: 12px 16px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .side-card-body { padding: 14px 16px; }
+  .meta-row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+  .meta-label { font-size: 0.72rem; color: var(--text-muted); }
+  .meta-val   { font-size: 0.82rem; color: var(--text-secondary); }
+
+  /* 연결 노드 아이템 */
+  .connected-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 8px; border-radius: 8px;
+    cursor: pointer; transition: background 0.12s;
+  }
+  .connected-item:hover { background: rgba(255,255,255,0.05); }
+
+  /* 편집 폼 */
+  .form-control, .form-select {
+    background: var(--bg-input) !important; border-color: var(--border) !important;
+    color: var(--text-primary) !important; font-size: 0.85rem;
+  }
+  .form-control:focus, .form-select:focus {
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 2px rgba(139,127,247,0.2) !important;
+  }
+
+  /* 선택 노드 강조 링 → vis.js의 highlight 색으로 처리 */
+</style>
+
+<!-- 컨트롤 바 -->
+<div id="graphControls">
+  <span style="font-weight:600; font-size:0.88rem; color:var(--text-primary);">
+    <i class="bi bi-diagram-3 me-1" style="color:var(--accent);"></i>엔트리 관계도
+  </span>
+  <div id="legendBar" class="d-flex flex-wrap gap-1 ms-2"></div>
+  <div class="ms-auto d-flex gap-2 align-items-center">
+    <!-- 포커스 모드 배너 -->
+    <div id="focusBanner" style="display:none; background:rgba(139,127,247,0.15); border:1px solid rgba(139,127,247,0.4);
+         border-radius:20px; padding:3px 12px; font-size:0.78rem; color:var(--accent); display:none; align-items:center; gap:8px;">
+      <i class="bi bi-bullseye me-1"></i>
+      <span id="focusBannerTitle"></span>
+      <span id="focusBannerDepth" style="font-size:0.7rem; opacity:0.7;"></span>
+      <button onclick="exitFocusMode()" style="background:none;border:none;color:var(--accent);padding:0 0 0 4px;font-size:0.8rem;cursor:pointer;" title="전체 보기로 돌아가기">
+        <i class="bi bi-x-lg"></i>
+      </button>
+    </div>
+    <div class="form-check form-switch mb-0 d-flex align-items-center gap-1">
+      <input class="form-check-input" type="checkbox" id="showInactiveGraph" onchange="reloadGraph()">
+      <label class="form-check-label small" for="showInactiveGraph" style="font-size:0.78rem;">비활성 포함</label>
+    </div>
+    <button class="btn btn-sm btn-outline-secondary" onclick="network && network.fit({ animation: { duration:400, easingFunction:'easeInOutQuad' } })">
+      <i class="bi bi-fullscreen"></i>
+    </button>
+    <button class="btn btn-sm btn-outline-secondary" onclick="reloadGraph()">
+      <i class="bi bi-arrow-clockwise"></i>
+    </button>
+  </div>
+</div>
+
+<div id="graphWrap">
+  <!-- 캔버스 -->
+  <div id="networkCanvas">
+    <div id="emptyHint" style="display:none;">
+      <i class="bi bi-diagram-3 display-4 opacity-25 d-block mb-2"></i>
+      <p class="small">등록된 엔트리가 없습니다.</p>
+    </div>
+  </div>
+
+  <!-- 사이드 패널 -->
+  <div id="sidePanel">
+
+    <!-- 빈 상태 안내 -->
+    <div class="side-card" id="sideEmpty">
+      <div class="side-card-body text-center py-5" style="color:var(--text-muted);">
+        <i class="bi bi-cursor display-4 opacity-20 d-block mb-3"></i>
+        <p class="small mb-0">노드를 클릭하면<br>상세 정보가 표시됩니다.</p>
+      </div>
+    </div>
+
+    <!-- 상세 카드 -->
+    <div class="side-card" id="sideDetail" style="display:none;">
+      <div class="side-card-header">
+        <span id="sdCategoryBadge"></span>
+        <span id="sdTitle" class="fw-semibold" style="font-size:0.9rem; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></span>
+        <div class="d-flex gap-1 ms-2">
+          <button class="btn btn-sm" onclick="enterFocusMode(1)" title="1단계 연결만 보기"
+            style="padding:3px 8px;font-size:0.75rem;border:1px solid rgba(139,127,247,0.4);color:var(--accent);">
+            <i class="bi bi-bullseye"></i>
+          </button>
+          <button class="btn btn-sm" onclick="enterFocusMode(2)" title="2단계 연결까지 보기"
+            style="padding:3px 8px;font-size:0.75rem;border:1px solid rgba(139,127,247,0.25);color:var(--accent);opacity:0.7;">
+            <i class="bi bi-diagram-2"></i>
+          </button>
+          <button class="btn btn-sm" id="editToggleBtn" onclick="toggleEditMode()"
+            style="padding:3px 8px;font-size:0.75rem;border:1px solid var(--border);color:var(--text-secondary);">
+            <i class="bi bi-pencil"></i>
+          </button>
+          <button class="btn btn-sm" onclick="deleteFromGraph()"
+            style="padding:3px 8px;font-size:0.75rem;border:1px solid rgba(255,112,112,0.3);color:#ff7070;">
+            <i class="bi bi-trash"></i>
+          </button>
+        </div>
+      </div>
+
+      <div class="side-card-body">
+        <!-- 뷰 모드 -->
+        <div id="viewBlock">
+          <!-- 이미지 영역 -->
+          <div id="sdImageArea" class="mb-3"></div>
+
+          <div class="mb-3">
+            <div class="meta-label mb-1">내용</div>
+            <div id="sdContent" style="white-space:pre-wrap;font-size:0.84rem;line-height:1.7;color:var(--text-secondary);max-height:200px;overflow-y:auto;"></div>
+          </div>
+          <div class="mb-3">
+            <div class="meta-label mb-1">키워드</div>
+            <div id="sdKeywords"></div>
+          </div>
+          <div class="mb-3">
+            <div class="meta-label mb-1">참조 엔트리</div>
+            <div id="sdRefs" class="d-flex flex-wrap gap-1"></div>
+          </div>
+          <hr style="border-color:var(--border); margin:10px 0;">
+          <div class="d-flex gap-3 flex-wrap" style="font-size:0.78rem;">
+            <div><span class="meta-label">생성 틱</span><br><span id="sdTick" class="meta-val"></span></div>
+            <div><span class="meta-label">상태</span><br><span id="sdStatus"></span></div>
+            <div><span class="meta-label">등록일</span><br><span id="sdCreatedAt" class="meta-val"></span></div>
+          </div>
+
+          <!-- 타임라인 섹션 -->
+          <div id="sdTimelineSection" style="display:none; margin-top:12px;">
+            <hr style="border-color:var(--border); margin:10px 0;">
+            <div class="d-flex align-items-center gap-2 mb-2">
+              <span class="meta-label mb-0" style="color:var(--accent);">
+                <i class="bi bi-clock-history me-1"></i>타임라인
+              </span>
+              <span id="sdTimelineCount" style="font-size:0.68rem;background:rgba(139,127,247,0.2);color:var(--accent);border-radius:8px;padding:1px 7px;"></span>
+            </div>
+            <div id="sdTimelineList"></div>
+            <a href="/timeline" style="font-size:0.72rem;color:var(--accent);text-decoration:none;">
+              <i class="bi bi-box-arrow-up-right me-1"></i>타임라인 페이지에서 보기
+            </a>
+          </div>
+        </div>
+
+        <!-- 편집 모드 -->
+        <div id="editBlock" style="display:none;">
+          <div class="mb-3">
+            <label class="form-label" style="font-size:0.78rem;">제목</label>
+            <input type="text" class="form-control form-control-sm" id="sdEditTitle">
+          </div>
+          <div class="mb-3">
+            <label class="form-label" style="font-size:0.78rem;">분류</label>
+            <select class="form-select form-select-sm" id="sdEditCategory">
+              {% for cat in categories %}
+              <option value="{{ cat }}">{{ cat }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="mb-3">
+            <div class="d-flex align-items-center justify-content-between mb-1">
+              <label class="form-label mb-0" style="font-size:0.78rem;">내용</label>
+              <button type="button" onclick="stripMdSide()"
+                style="background:none;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;padding:1px 6px;font-size:0.7rem;cursor:pointer;">
+                <i class="bi bi-eraser"></i> MD 제거</button>
+            </div>
+            <textarea class="form-control form-control-sm" id="sdEditContent" rows="8"
+              oninput="updateSideCharCount()"></textarea>
+            <div id="sdCharCount" class="small mt-1" style="color:var(--text-muted); font-size:0.72rem;"></div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label" style="font-size:0.78rem;">참조 ID (콤마 구분)</label>
+            <input type="text" class="form-control form-control-sm" id="sdEditRefs" placeholder="예: 1, 3, 7">
+          </div>
+          <div class="mb-3 form-check">
+            <input type="checkbox" class="form-check-input" id="sdEditActive">
+            <label class="form-check-label" style="font-size:0.78rem;" for="sdEditActive">활성 상태</label>
+          </div>
+          <div class="d-flex gap-2">
+            <button class="btn btn-sm btn-primary" onclick="saveFromGraph()" style="font-size:0.8rem;">
+              <i class="bi bi-check-lg me-1"></i>저장
+            </button>
+            <button class="btn btn-sm btn-outline-secondary" onclick="cancelEditMode()" style="font-size:0.8rem;">취소</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 연결 엔트리 -->
+    <div class="side-card" id="sideConnected" style="display:none;">
+      <div class="side-card-header" style="padding:10px 16px;">
+        <i class="bi bi-share me-1" style="color:var(--accent); font-size:0.85rem;"></i>
+        <span style="font-size:0.8rem; font-weight:500;">연결된 엔트리</span>
+        <span id="connectedCount" class="ms-auto badge" style="background:rgba(139,127,247,0.2);color:var(--accent);font-size:0.7rem;"></span>
+      </div>
+      <div class="side-card-body p-2" id="connectedList"></div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// ── 팔레트 ─────────────────────────────────────────────────
+// 조용하고 세련된 색상 (배경 어두운 tone-on-tone)
+const PALETTE = {
+  '세력':    { node: '#e05252', border: '#ff8080', glow: '#ff404044', font: '#fff0f0' },
+  '인물':    { node: '#4a90d9', border: '#72b0f0', glow: '#4a90d944', font: '#e8f4ff' },
+  '관념':    { node: '#8a65d4', border: '#b090f0', glow: '#8a65d444', font: '#f0eaff' },
+  '물건':    { node: '#c8823a', border: '#e8a860', glow: '#c8823a44', font: '#fff4e4' },
+  '종족':    { node: '#3aaa7a', border: '#60d0a0', glow: '#3aaa7a44', font: '#e4fff4' },
+  '사건':    { node: '#c8b040', border: '#e8d060', glow: '#c8b04044', font: '#fffce4' },
+  '장소':    { node: '#2cb8b8', border: '#3dd9d9', glow: '#2cb8b844', font: '#e4ffff' },
+  '마법/기술': { node: '#c84a8a', border: '#e86aaa', glow: '#c84a8a44', font: '#ffe4f4' },
+  '신화/종교': { node: '#b08828', border: '#d4a844', glow: '#b0882844', font: '#fff8e4' },
+  '역사/기록': { node: '#70904a', border: '#96b05a', glow: '#70904a44', font: '#f4ffe4' },
+  '규칙/법':  { node: '#4878b0', border: '#6a9ad4', glow: '#4878b044', font: '#e4f0ff' },
+  '연도':     { node: '#c8980a', border: '#ffd840', glow: '#ffd84033', font: '#ffd840' },
+};
+const DEFAULT_PAL = { node: '#5a6080', border: '#8890b0', glow: '#5a608044', font: '#e4e8ff' };
+const YEAR_HULL_FILL   = 'rgba(255, 216, 50, 0.055)';
+const YEAR_HULL_STROKE = 'rgba(255, 216, 50, 0.50)';
+
+let network = null;
+let allEntries = [];
+let selectedEntry = null;
+let simMaxChars = 1000;
+let isEditMode = false;
+let hiddenCats = new Set();
+
+document.addEventListener('DOMContentLoaded', async () => {
+  buildLegend();
+  await loadSimMaxChars();
+  await reloadGraph();
+});
+
+async function loadSimMaxChars() {
+  try {
+    const r = await fetch('/api/settings');
+    const s = await r.json();
+    simMaxChars = s.max_user_entry_chars ?? 1000;
+  } catch(e) {}
+}
+
+// ── 범례 (클릭으로 카테고리 토글) ──────────────────────────
+function buildLegend() {
+  const bar = document.getElementById('legendBar');
+  bar.innerHTML = Object.entries(PALETTE).map(([name, p]) => `
+    <span class="legend-pill" data-cat="${name}"
+      style="background:${p.node}18;color:${p.border};border-color:${p.node}44;"
+      onclick="toggleCat('${name}')">
+      <span class="legend-dot" style="background:${p.node};"></span>${name}
+    </span>
+  `).join('');
+}
+
+function toggleCat(cat) {
+  if (hiddenCats.has(cat)) hiddenCats.delete(cat);
+  else hiddenCats.add(cat);
+  document.querySelectorAll('.legend-pill').forEach(el => {
+    el.classList.toggle('muted', hiddenCats.has(el.dataset.cat));
+  });
+  reloadGraph();
+}
+
+// ── 그래프 로드 ──────────────────────────────────────────
+let _idToEntry = {};   // 전체 ID→엔트리 (참조 이름 조회용)
+let _idRemap   = {};   // 구버전ID → 최신ID 매핑
+
+async function reloadGraph() {
+  const showInactive = document.getElementById('showInactiveGraph').checked;
+  // 전체 로드 (dedupe API 사용 안 함 → JS에서 처리)
+  const res = await fetch(`/api/entries?active=${!showInactive}`);
+  const fullList = await res.json();
+
+  // 전체 ID 맵 구성 (참조 이름 조회용)
+  _idToEntry = {};
+  fullList.forEach(e => { _idToEntry[e.id] = e; });
+
+  // JS dedup: tick 내림차순 정렬 후 (title|category) 기준 최신 1개만
+  const sorted = [...fullList].sort(
+    (a, b) => (b.tick_created || 0) - (a.tick_created || 0) ||
+              new Date(b.created_at || 0) - new Date(a.created_at || 0)
+  );
+  const seen = {};
+  allEntries = sorted.filter(e => {
+    const k = e.title.trim().toLowerCase() + '|' + e.category;
+    if (seen[k]) return false;
+    seen[k] = true;
+    return true;
+  });
+
+  // 구버전ID → 최신ID 리맵 구성
+  const latestByKey = {};
+  allEntries.forEach(e => { latestByKey[e.title.trim().toLowerCase() + '|' + e.category] = e.id; });
+  _idRemap = {};
+  fullList.forEach(e => {
+    const k = e.title.trim().toLowerCase() + '|' + e.category;
+    const lid = latestByKey[k];
+    if (lid && lid !== e.id) _idRemap[e.id] = lid;
+  });
+
+  const visible = allEntries.filter(e => !hiddenCats.has(e.category));
+  document.getElementById('emptyHint').style.display = visible.length === 0 ? 'block' : 'none';
+  buildGraph(visible);
+}
+
+function buildGraph(entries) {
+  const container = document.getElementById('networkCanvas');
+  const idSet = new Set(entries.map(e => e.id));
+
+  // 연도 엔트리 ID 집합 (hull 및 edge 처리용)
+  const yearIdSet = new Set(entries.filter(e => e.category === '연도').map(e => e.id));
+
+  const nodes = new vis.DataSet(entries.map(e => {
+    const p = PALETTE[e.category] || DEFAULT_PAL;
+    const inactive = !e.is_active;
+    const isYear = e.category === '연도';
+    return {
+      id: e.id,
+      label: e.title.length > 15 ? e.title.slice(0, 14) + '…' : e.title,
+      title: `[${e.category}] ${e.title}`,
+      color: {
+        background: inactive ? '#282c3a' : (isYear ? 'rgba(200,152,10,0.15)' : p.node),
+        border:     inactive ? '#44485a' : p.border,
+        highlight: { background: isYear ? 'rgba(200,152,10,0.30)' : p.node, border: '#ffffff' },
+        hover:      { background: isYear ? 'rgba(200,152,10,0.25)' : p.node, border: p.border },
+      },
+      font: {
+        color: inactive ? '#5a6080' : p.font,
+        size:  isYear ? 13 : 12,
+        bold:  isYear,
+        face: 'Segoe UI, system-ui, sans-serif',
+        vadjust: 0,
+      },
+      shape: e.image_filename ? 'circularImage' : 'dot',
+      image: e.image_filename ? `/storage/${e.image_filename}` : undefined,
+      brokenImage: undefined,
+      size: e.image_filename ? 28 : (isYear ? 14 : (e.created_by === 'user' ? 18 : 13)),
+      borderWidth: isYear ? 2 : (e.image_filename ? 3 : (e.created_by === 'user' ? 2.5 : 1.5)),
+      borderDashes: isYear ? [7, 5] : false,
+      shadow: { enabled: !inactive, color: p.glow, size: e.image_filename ? 18 : (isYear ? 20 : 12), x: 0, y: 0 },
+      opacity: inactive ? 0.45 : (isYear ? 0.92 : 1.0),
+      _data: e,
+    };
+  }));
+
+  const edgeSet = new Set();
+  const edges = new vis.DataSet();
+  entries.forEach(e => {
+    (e.references || []).forEach(refId => {
+      // 구버전 ID는 최신 ID로 리맵
+      const resolvedId = _idRemap[refId] ?? refId;
+      if (!idSet.has(resolvedId)) return;
+      const key = [Math.min(e.id, resolvedId), Math.max(e.id, resolvedId)].join('-');
+      if (!edgeSet.has(key)) {
+        edgeSet.add(key);
+        const isYearEdge = yearIdSet.has(e.id) || yearIdSet.has(resolvedId);
+        edges.add({
+          from: e.id, to: resolvedId,
+          color: isYearEdge
+            ? { color: 'rgba(255,216,50,0.28)', highlight: 'rgba(255,224,80,0.8)', hover: 'rgba(255,220,60,0.55)' }
+            : { color: 'rgba(120,130,160,0.25)', highlight: 'rgba(180,190,255,0.7)', hover: 'rgba(160,170,220,0.5)' },
+          width:  isYearEdge ? 0.9 : 1.2,
+          dashes: isYearEdge ? [5, 5] : false,
+          length: isYearEdge ? 110 : undefined,
+          smooth: { enabled: true, type: 'dynamic', roundness: 0.3 },
+          arrows: { to: { enabled: true, scaleFactor: 0.5 } },
+        });
+      }
+    });
+  });
+
+  const options = {
+    physics: {
+      enabled: true,
+      solver: 'barnesHut',
+      barnesHut: {
+        gravitationalConstant: -5000,
+        centralGravity: 0.3,
+        springLength: 160,
+        springConstant: yearIdSet.size > 0 ? 0.06 : 0.04,
+        damping: 0.18,
+        avoidOverlap: 0.6,
+      },
+      stabilization: { enabled: true, iterations: yearIdSet.size > 0 ? 300 : 200, fit: true },
+    },
+    interaction: {
+      hover: true,
+      tooltipDelay: 300,
+      zoomView: true,
+      dragView: true,
+      hideEdgesOnDrag: true,
+    },
+    layout: { improvedLayout: entries.length < 200 },
+    nodes: { chosen: false },
+    edges: { chosen: false },
+  };
+
+  if (network) network.destroy();
+  network = new vis.Network(container, { nodes, edges }, options);
+
+  // 연도 hull 드로잉 (stabilize 후 beforeDrawing에서 렌더)
+  let _hullReady = false;
+  network.on('stabilizationIterationsDone', () => {
+    network.setOptions({ physics: { enabled: false } });
+    _hullReady = true;
+    network.redraw();
+  });
+
+  network.on('beforeDrawing', ctx => {
+    if (!_hullReady) return;
+    _drawYearHulls(ctx, entries, yearIdSet);
+  });
+
+  network.on('click', params => {
+    if (params.nodes.length > 0) {
+      const entry = entries.find(e => e.id === params.nodes[0]);
+      if (entry) showSidePanel(entry);
+    } else {
+      clearSidePanel();
+    }
+  });
+
+  // 재로드 후 선택 유지
+  if (selectedEntry) {
+    const still = entries.find(e => e.id === selectedEntry.id);
+    if (still) showSidePanel(still);
+  }
+}
+
+// ── 연도 Hull 드로잉 ──────────────────────────────────────
+function _drawYearHulls(ctx, entries, yearIdSet) {
+  if (!network || yearIdSet.size === 0) return;
+  try {
+    const allPos = network.getPositions();
+
+    // 연도 엔트리별로 연결된 이웃 노드 ID 수집
+    const refSet = {}; // yearId → Set<neighborId>
+    yearIdSet.forEach(yid => { refSet[yid] = new Set(); });
+
+    entries.forEach(e => {
+      const refs = (e.references || []).map(r => _idRemap[r] ?? r);
+      refs.forEach(rid => {
+        if (yearIdSet.has(rid) && e.id !== rid) refSet[rid].add(e.id);
+      });
+      if (yearIdSet.has(e.id)) {
+        refs.forEach(rid => { if (!yearIdSet.has(rid)) refSet[e.id].add(rid); });
+      }
+    });
+
+    yearIdSet.forEach(yid => {
+      const yPos = allPos[yid];
+      if (!yPos) return;
+      const yearEntry = entries.find(e => e.id === yid);
+      const label = yearEntry ? yearEntry.title : '';
+
+      const neighbors = refSet[yid];
+      let rx = 75, ry = 75; // minimum radius
+
+      if (neighbors.size > 0) {
+        neighbors.forEach(nid => {
+          const np = allPos[nid];
+          if (!np) return;
+          rx = Math.max(rx, Math.abs(np.x - yPos.x) + 68);
+          ry = Math.max(ry, Math.abs(np.y - yPos.y) + 68);
+        });
+      }
+
+      ctx.save();
+
+      // 반투명 채움
+      ctx.beginPath();
+      ctx.ellipse(yPos.x, yPos.y, rx, ry, 0, 0, Math.PI * 2);
+      ctx.fillStyle = YEAR_HULL_FILL;
+      ctx.fill();
+
+      // 점선 테두리
+      ctx.setLineDash([9, 6]);
+      ctx.strokeStyle = YEAR_HULL_STROKE;
+      ctx.lineWidth = 1.8;
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // 연도 라벨 (원 상단 바깥)
+      if (label) {
+        ctx.font = 'bold 13px "Segoe UI", system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'bottom';
+        // 배경 박스
+        const tw = ctx.measureText(label).width;
+        const tx = yPos.x, ty = yPos.y - ry - 6;
+        ctx.fillStyle = 'rgba(20,20,30,0.72)';
+        ctx.beginPath();
+        ctx.roundRect(tx - tw/2 - 8, ty - 18, tw + 16, 20, 6);
+        ctx.fill();
+        // 텍스트
+        ctx.fillStyle = 'rgba(255, 218, 50, 0.92)';
+        ctx.fillText(label, tx, ty);
+      }
+
+      ctx.restore();
+    });
+  } catch(e) { /* positions not ready */ }
+}
+
+// ── 사이드 패널 ───────────────────────────────────────────
+function showSidePanel(entry) {
+  selectedEntry = entry;
+  isEditMode = false;
+
+  document.getElementById('sideEmpty').style.display = 'none';
+  document.getElementById('sideDetail').style.display = 'block';
+
+  const p = PALETTE[entry.category] || DEFAULT_PAL;
+  document.getElementById('sdCategoryBadge').innerHTML =
+    `<span style="background:${p.node}22;color:${p.border};border:1px solid ${p.node}44;
+      border-radius:12px;padding:2px 10px;font-size:0.72rem;font-weight:600;white-space:nowrap;"
+    >${entry.category}</span>`;
+  document.getElementById('sdTitle').textContent = entry.title;
+  document.getElementById('sdContent').textContent = entry.content || '';
+
+  // 이미지 영역
+  renderImageArea(entry);
+
+  // 키워드
+  const kwEl = document.getElementById('sdKeywords');
+  if (entry.keywords) {
+    kwEl.innerHTML = entry.keywords.split(',').map(k => k.trim()).filter(Boolean).map(k =>
+      `<span style="background:rgba(106,173,255,0.1);color:#6aadff;border:1px solid rgba(106,173,255,0.25);
+        border-radius:12px;padding:2px 9px;font-size:0.7rem;display:inline-block;margin:2px;">${k}</span>`
+    ).join('');
+  } else {
+    kwEl.innerHTML = '<span style="font-size:0.75rem;color:var(--text-muted);">없음</span>';
+  }
+
+  document.getElementById('sdTick').textContent =
+    entry.tick_created === 0 ? '초기 설정' : `틱 ${entry.tick_created}`;
+  document.getElementById('sdStatus').innerHTML = entry.is_active
+    ? '<span style="color:#6eeab0;font-size:0.78rem;">● 활성</span>'
+    : '<span style="color:#ff7070;font-size:0.78rem;">● 비활성</span>';
+  document.getElementById('sdCreatedAt').textContent =
+    entry.created_at ? new Date(entry.created_at).toLocaleString('ko-KR') : '';
+
+  // 참조
+  const refsDiv = document.getElementById('sdRefs');
+  if (entry.references && entry.references.length > 0) {
+    refsDiv.innerHTML = entry.references.map(refId => {
+      // 구버전 ID → 최신 ID 리맵 후 조회
+      const resolvedId = _idRemap[refId] ?? refId;
+      const ref = allEntries.find(e => e.id === resolvedId) || _idToEntry[refId];
+      if (!ref) return '';
+      const rp = PALETTE[ref.category] || DEFAULT_PAL;
+      const nodeId = resolvedId;
+      return `<span onclick="jumpToNode(${nodeId})" style="background:${rp.node}22;color:${rp.border};
+        border:1px solid ${rp.node}44;border-radius:12px;padding:2px 9px;font-size:0.72rem;
+        cursor:pointer;display:inline-block;">${ref.title}</span>`;
+    }).filter(Boolean).join(' ') || '<span style="font-size:0.75rem;color:var(--text-muted);">없음</span>';
+  } else {
+    refsDiv.innerHTML = '<span style="font-size:0.75rem;color:var(--text-muted);">없음</span>';
+  }
+
+  showConnected(entry.id);
+  showViewMode();
+  network && network.selectNodes([entry.id]);
+  network && network.focus(entry.id, { scale: 1.1, animation: { duration: 350, easingFunction: 'easeInOutQuad' } });
+
+  // 타임라인 비동기 로드
+  loadNodeTimelines(entry.id);
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+async function loadNodeTimelines(entryId) {
+  const section = document.getElementById('sdTimelineSection');
+  const list = document.getElementById('sdTimelineList');
+  section.style.display = 'none';
+  try {
+    const res = await fetch(`/api/entries/${entryId}/timelines`);
+    if (!res.ok) return;
+    const tls = await res.json();
+    if (tls.length === 0) return;
+    section.style.display = 'block';
+    document.getElementById('sdTimelineCount').textContent = tls.length + '개';
+    list.innerHTML = tls.map(t => `
+      <div class="mb-2 p-2 rounded" style="background:rgba(139,127,247,0.05);border:1px solid rgba(139,127,247,0.15);cursor:pointer;"
+        onclick="window.location='/timeline?tl=${t.id}'">
+        <div style="font-size:0.8rem;font-weight:600;color:var(--text-primary);">
+          <i class="bi bi-clock-history me-1" style="color:var(--accent);"></i>${escHtml(t.name)}
+        </div>
+        <div style="font-size:0.72rem;color:var(--text-muted);">에피소드 ${t.event_count}개</div>
+        ${t.description ? `<div style="font-size:0.72rem;color:var(--text-secondary);margin-top:2px;">${escHtml(t.description.slice(0,60))}${t.description.length>60?'…':''}</div>` : ''}
+      </div>`).join('');
+  } catch(e) {}
+}
+
+// ── 이미지 ───────────────────────────────────────────────
+function renderImageArea(entry) {
+  const area = document.getElementById('sdImageArea');
+  if (entry.image_filename) {
+    area.innerHTML = `
+      <img src="/storage/${entry.image_filename}" alt="이미지"
+        onclick="openImagePopup(this.src)"
+        style="width:100%;max-height:320px;object-fit:contain;background:var(--bg-input);border-radius:8px;border:1px solid var(--border);display:block;cursor:zoom-in;">
+      <div class="d-flex gap-2 mt-2">
+        <label style="background:none;border:1px solid var(--border);color:var(--text-muted);border-radius:6px;
+          padding:3px 10px;font-size:0.75rem;cursor:pointer;flex:1;text-align:center;">
+          <i class="bi bi-arrow-repeat me-1"></i>교체
+          <input type="file" accept="image/*" style="display:none;" onchange="uploadImageGraph(this)">
+        </label>
+        <button onclick="deleteImageGraph()"
+          style="background:none;border:1px solid rgba(255,112,112,0.3);color:#ff7070;border-radius:6px;
+          padding:3px 10px;font-size:0.75rem;cursor:pointer;">
+          <i class="bi bi-trash"></i>
+        </button>
+      </div>`;
+  } else {
+    area.innerHTML = `
+      <div class="d-flex gap-2">
+        <label style="display:flex;align-items:center;justify-content:center;gap:6px;flex:1;
+          border:1px dashed var(--border);border-radius:8px;padding:10px;cursor:pointer;
+          color:var(--text-muted);font-size:0.78rem;transition:border-color 0.15s;"
+          onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
+          <i class="bi bi-image" style="font-size:1rem;"></i>업로드
+          <input type="file" accept="image/*" style="display:none;" onchange="uploadImageGraph(this)">
+        </label>
+        <button onclick="openNaiModal()"
+          style="display:flex;align-items:center;justify-content:center;gap:6px;flex:1;
+          border:1px dashed rgba(232,106,170,0.5);border-radius:8px;padding:10px;cursor:pointer;
+          background:none;color:#e86aaa;font-size:0.78rem;transition:border-color 0.15s;"
+          onmouseover="this.style.borderColor='#e86aaa'" onmouseout="this.style.borderColor='rgba(232,106,170,0.5)'">
+          <i class="bi bi-stars" style="font-size:1rem;"></i>NAI 생성
+        </button>
+      </div>`;
+  }
+}
+
+async function uploadImageGraph(input) {
+  if (!selectedEntry || !input.files[0]) return;
+  const file = input.files[0];
+  if (file.size > 5 * 1024 * 1024) { alert('파일 크기는 5MB 이하여야 합니다.'); return; }
+  const fd = new FormData();
+  fd.append('image', file);
+  const res = await fetch(`/api/entries/${selectedEntry.id}/image`, { method: 'POST', body: fd });
+  if (res.ok) {
+    const data = await res.json();
+    selectedEntry.image_filename = data.image_filename;
+    const idx = allEntries.findIndex(e => e.id === selectedEntry.id);
+    if (idx >= 0) allEntries[idx].image_filename = data.image_filename;
+    renderImageArea(selectedEntry);
+    await reloadGraph();
+  } else {
+    alert('이미지 업로드 실패');
+  }
+  input.value = '';
+}
+
+async function deleteImageGraph() {
+  if (!selectedEntry || !confirm('이미지를 삭제하시겠습니까?')) return;
+  const res = await fetch(`/api/entries/${selectedEntry.id}/image`, { method: 'DELETE' });
+  if (res.ok) {
+    selectedEntry.image_filename = null;
+    const idx = allEntries.findIndex(e => e.id === selectedEntry.id);
+    if (idx >= 0) allEntries[idx].image_filename = null;
+    renderImageArea(selectedEntry);
+    await reloadGraph();
+  }
+}
+
+function showConnected(entryId) {
+  const refs = (selectedEntry?.references || []);
+  const connected = allEntries.filter(e =>
+    e.id !== entryId && ((e.references || []).includes(entryId) || refs.includes(e.id))
+  );
+  const card = document.getElementById('sideConnected');
+  const list = document.getElementById('connectedList');
+
+  if (connected.length === 0) { card.style.display = 'none'; return; }
+  card.style.display = 'block';
+  document.getElementById('connectedCount').textContent = connected.length;
+  list.innerHTML = connected.map(e => {
+    const p = PALETTE[e.category] || DEFAULT_PAL;
+    return `<div class="connected-item" onclick="jumpToNode(${e.id})">
+      <span style="background:${p.node}22;color:${p.border};border:1px solid ${p.node}44;
+        border-radius:10px;padding:1px 8px;font-size:0.68rem;white-space:nowrap;flex-shrink:0;">${e.category}</span>
+      <span style="font-size:0.82rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${e.title}</span>
+    </div>`;
+  }).join('');
+}
+
+function clearSidePanel() {
+  selectedEntry = null;
+  document.getElementById('sideEmpty').style.display = 'block';
+  document.getElementById('sideDetail').style.display = 'none';
+  document.getElementById('sideConnected').style.display = 'none';
+}
+
+function jumpToNode(id) {
+  const entry = allEntries.find(e => e.id === id);
+  if (entry) showSidePanel(entry);
+}
+
+// ── 편집 모드 ─────────────────────────────────────────────
+function toggleEditMode() { isEditMode ? cancelEditMode() : startEditMode(); }
+
+function startEditMode() {
+  isEditMode = true;
+  const e = selectedEntry;
+  document.getElementById('sdEditTitle').value = e.title;
+  document.getElementById('sdEditCategory').value = e.category;
+  document.getElementById('sdEditContent').value = e.content;
+  document.getElementById('sdEditRefs').value = (e.references || []).join(', ');
+  document.getElementById('sdEditActive').checked = e.is_active;
+  showEditMode();
+  updateSideCharCount();
+}
+
+function cancelEditMode() { isEditMode = false; showViewMode(); }
+
+function showViewMode() {
+  document.getElementById('viewBlock').style.display = 'block';
+  document.getElementById('editBlock').style.display = 'none';
+  document.getElementById('editToggleBtn').innerHTML = '<i class="bi bi-pencil"></i>';
+}
+function showEditMode() {
+  document.getElementById('viewBlock').style.display = 'none';
+  document.getElementById('editBlock').style.display = 'block';
+  document.getElementById('editToggleBtn').innerHTML = '<i class="bi bi-x"></i>';
+}
+
+async function saveFromGraph() {
+  if (!selectedEntry) return;
+  const refs = document.getElementById('sdEditRefs').value
+    .split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+  const body = {
+    title: document.getElementById('sdEditTitle').value.trim(),
+    category: document.getElementById('sdEditCategory').value,
+    content: document.getElementById('sdEditContent').value.trim(),
+    references: refs,
+    is_active: document.getElementById('sdEditActive').checked,
+  };
+  if (!body.title || !body.content) { alert('제목과 내용을 입력하세요.'); return; }
+  const res = await fetch(`/api/entries/${selectedEntry.id}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  });
+  if (res.ok) await reloadGraph();
+  else alert('저장 실패');
+}
+
+async function deleteFromGraph() {
+  if (!selectedEntry || !confirm(`"${selectedEntry.title}" 엔트리를 삭제하시겠습니까?`)) return;
+  const res = await fetch(`/api/entries/${selectedEntry.id}`, { method: 'DELETE' });
+  if (res.ok) { selectedEntry = null; clearSidePanel(); await reloadGraph(); }
+}
+
+// ── 글자수 카운터 ─────────────────────────────────────────
+function updateSideCharCount() {
+  const ta = document.getElementById('sdEditContent');
+  const len = ta.value.length;
+  const el = document.getElementById('sdCharCount');
+  if (simMaxChars > 0) {
+    const over = len - simMaxChars;
+    el.innerHTML = over > 0
+      ? `<span style="color:#f59e0b;">${len}자 / ${simMaxChars}자 ⚠ ${over}자 초과</span>`
+      : `${len}자 / ${simMaxChars}자`;
+  } else {
+    el.textContent = `${len}자`;
+  }
+}
+
+// ── MD 제거 ───────────────────────────────────────────────
+function stripMarkdown(text) {
+  return text
+    .replace(/```[\w]*\n?([\s\S]*?)```/g, '$1').replace(/`([^`]+)`/g, '$1')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/\*\*\*(.+?)\*\*\*/g, '$1').replace(/\*\*(.+?)\*\*/g, '$1').replace(/\*(.+?)\*/g, '$1')
+    .replace(/__(.+?)__/g, '$1').replace(/_(.+?)_/g, '$1').replace(/~~(.+?)~~/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
+    .replace(/^>\s*/gm, '').replace(/^[\s]*[-*+]\s+/gm, '').replace(/^[\s]*\d+\.\s+/gm, '')
+    .replace(/\n{3,}/g, '\n\n').trim();
+}
+function stripMdSide() {
+  const ta = document.getElementById('sdEditContent');
+  ta.value = stripMarkdown(ta.value);
+  updateSideCharCount();
+}
+
+// ── 포커스 모드 ────────────────────────────────────────────
+let _focusMode = false;
+
+function enterFocusMode(depth) {
+  if (!selectedEntry) return;
+  _focusMode = true;
+
+  // depth 홉 이내 연결 엔트리 수집
+  const idSet = new Set(allEntries.map(e => e.id));
+  const include = new Set([selectedEntry.id]);
+
+  // BFS로 depth 홉까지 탐색
+  let frontier = [selectedEntry.id];
+  for (let d = 0; d < depth; d++) {
+    const next = [];
+    frontier.forEach(fid => {
+      const fEntry = allEntries.find(e => e.id === fid);
+      if (!fEntry) return;
+      // 이 엔트리가 참조하는 것들
+      (fEntry.references || []).forEach(refId => {
+        const rid = _idRemap[refId] ?? refId;
+        if (idSet.has(rid) && !include.has(rid)) { include.add(rid); next.push(rid); }
+      });
+      // 이 엔트리를 참조하는 것들
+      allEntries.forEach(e => {
+        if (include.has(e.id)) return;
+        const refs = (e.references || []).map(r => _idRemap[r] ?? r);
+        if (refs.includes(fid)) { include.add(e.id); next.push(e.id); }
+      });
+    });
+    frontier = next;
+    if (frontier.length === 0) break;
+  }
+
+  const filtered = allEntries.filter(e => include.has(e.id) && !hiddenCats.has(e.category));
+  buildGraph(filtered);
+
+  // 배너 표시
+  const banner = document.getElementById('focusBanner');
+  banner.style.display = 'flex';
+  document.getElementById('focusBannerTitle').textContent = selectedEntry.title;
+  document.getElementById('focusBannerDepth').textContent = depth === 1 ? '(1단계)' : '(2단계)';
+
+  // 선택 노드로 포커스
+  setTimeout(() => {
+    network && network.focus(selectedEntry.id, { scale: 1.2, animation: { duration: 400 } });
+  }, 100);
+}
+
+function exitFocusMode() {
+  _focusMode = false;
+  document.getElementById('focusBanner').style.display = 'none';
+  const visible = allEntries.filter(e => !hiddenCats.has(e.category));
+  buildGraph(visible);
+  setTimeout(() => {
+    if (selectedEntry) network && network.focus(selectedEntry.id, { scale: 1.0, animation: { duration: 400 } });
+    else network && network.fit({ animation: { duration: 400 } });
+  }, 100);
+}
+
+// ── NovelAI 이미지 생성 ───────────────────────────────────
+let _naiModal;
+document.addEventListener('DOMContentLoaded', () => {
+  _naiModal = new bootstrap.Modal(document.getElementById('naiModal'));
+});
+
+function openNaiModal() {
+  if (!selectedEntry) return;
+  // 기본 프롬프트: 엔트리 제목 + 카테고리 자동 생성
+  const catHints = {
+    '인물': 'portrait, character, 1person',
+    '세력': 'emblem, faction symbol, fantasy art',
+    '장소': 'landscape, scenery, location, environment',
+    '물건': 'item, artifact, object, detailed illustration',
+    '종족': 'creature, race, fantasy being',
+    '사건': 'epic scene, dramatic moment',
+    '마법/기술': 'magical effect, technology, arcane',
+    '신화/종교': 'divine, mythological, sacred',
+    '역사/기록': 'historical, ancient, parchment style',
+    '규칙/법': 'symbolic, concept art',
+    '연도': 'timeline, year marker, calendar, historical era',
+  };
+  const hint = catHints[selectedEntry.category] || 'fantasy art, detailed';
+  document.getElementById('naiPrompt').value = `${selectedEntry.title}, ${hint}, masterpiece, best quality`;
+  document.getElementById('naiNegPrompt').value = 'lowres, bad anatomy, bad hands, error, worst quality, blurry';
+  document.getElementById('naiStatus').innerHTML = '';
+  // 기본 프리셋 (세로 표준 832×1216) 활성화
+  document.querySelectorAll('.nai-preset').forEach(el => el.classList.remove('active'));
+  const defaultPreset = document.querySelector('.nai-preset[onclick*="832,1216"]');
+  if (defaultPreset) defaultPreset.classList.add('active');
+  _naiModal.show();
+}
+
+async function autoGenerateNaiPrompt() {
+  if (!selectedEntry) return;
+  const btn = document.getElementById('naiAutoGenBtn');
+  const statusEl = document.getElementById('naiStatus');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" style="width:.7rem;height:.7rem;"></span>생성 중...';
+  statusEl.innerHTML = '<span style="color:var(--text-secondary);font-size:0.78rem;">LLM으로 프롬프트 생성 중...</span>';
+  try {
+    const res = await fetch(`/api/entries/${selectedEntry.id}/generate-nai-prompt`, { method: 'POST' });
+    const data = await res.json();
+    if (data.error) {
+      statusEl.innerHTML = `<span style="color:#ff6b6b;font-size:0.78rem;">오류: ${data.error}</span>`;
+    } else {
+      document.getElementById('naiPrompt').value = data.prompt || '';
+      statusEl.innerHTML = '<span style="color:#6aff9a;font-size:0.78rem;"><i class="bi bi-check-circle me-1"></i>AI 프롬프트 생성 완료</span>';
+    }
+  } catch(e) {
+    statusEl.innerHTML = `<span style="color:#ff6b6b;font-size:0.78rem;">연결 오류: ${e.message}</span>`;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-magic me-1"></i>AI 자동생성';
+  }
+}
+
+function setNaiPreset(w, h, btn) {
+  document.getElementById('naiWidth').value = w;
+  document.getElementById('naiHeight').value = h;
+  document.querySelectorAll('.nai-preset').forEach(el => el.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+}
+
+function clearNaiPresetActive() {
+  document.querySelectorAll('.nai-preset').forEach(el => el.classList.remove('active'));
+}
+
+async function runNaiGenerate() {
+  if (!selectedEntry) return;
+  const btn = document.getElementById('naiGenBtn');
+  const prompt = document.getElementById('naiPrompt').value.trim();
+  if (!prompt) { alert('프롬프트를 입력하세요.'); return; }
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>생성 중...';
+  document.getElementById('naiStatus').innerHTML = '';
+  document.getElementById('naiPreview').style.display = 'none';
+
+  try {
+    const res = await fetch(`/api/entries/${selectedEntry.id}/generate-image-nai`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt,
+        negative_prompt: document.getElementById('naiNegPrompt').value,
+        model: document.getElementById('naiModel').value,
+        sampler: document.getElementById('naiSampler').value,
+        scale: parseFloat(document.getElementById('naiScale').value) || 6,
+        steps: parseInt(document.getElementById('naiSteps').value) || 28,
+        width: parseInt(document.getElementById('naiWidth').value) || 832,
+        height: parseInt(document.getElementById('naiHeight').value) || 1216,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      document.getElementById('naiStatus').innerHTML =
+        `<div style="color:#ff7070;font-size:0.82rem;"><i class="bi bi-x-circle me-1"></i>${data.error || '생성 실패'}</div>`;
+      return;
+    }
+    // 미리보기 표시
+    const preview = document.getElementById('naiPreview');
+    preview.src = `/storage/${data.image_filename}`;
+    preview.style.display = 'block';
+    // 엔트리 업데이트
+    selectedEntry.image_filename = data.image_filename;
+    const idx = allEntries.findIndex(e => e.id === selectedEntry.id);
+    if (idx >= 0) allEntries[idx].image_filename = data.image_filename;
+    renderImageArea(selectedEntry);
+    reloadGraph();
+    document.getElementById('naiStatus').innerHTML =
+      `<div style="color:#6eeab0;font-size:0.82rem;"><i class="bi bi-check-circle me-1"></i>생성 완료 — 엔트리에 저장됨</div>`;
+  } catch(e) {
+    document.getElementById('naiStatus').innerHTML =
+      `<div style="color:#ff7070;font-size:0.82rem;">${e.message}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-stars me-1"></i>생성';
+  }
+}
+</script>
+
+<!-- NovelAI 이미지 생성 모달 -->
+<style>
+.nai-preset {
+  background:none; border:1px solid rgba(255,255,255,0.15); border-radius:7px;
+  color:var(--text-secondary); font-size:0.7rem; padding:4px 8px; cursor:pointer;
+  text-align:center; line-height:1.3; transition:border-color 0.15s,color 0.15s;
+  min-width:62px;
+}
+.nai-preset:hover, .nai-preset.active {
+  border-color: rgba(232,106,170,0.7); color: #e86aaa;
+}
+</style>
+<div class="modal fade" id="naiModal" tabindex="-1">
+  <div class="modal-dialog modal-md">
+    <div class="modal-content">
+      <div class="modal-header py-2">
+        <h6 class="modal-title mb-0">
+          <i class="bi bi-stars me-2" style="color:#e86aaa;"></i>NovelAI 이미지 생성
+        </h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" style="max-height:82vh;overflow-y:auto;">
+
+        <!-- 모델 + 샘플러 -->
+        <div class="row g-2 mb-3">
+          <div class="col-7">
+            <label class="form-label" style="font-size:0.78rem;">모델</label>
+            <select class="form-select form-select-sm" id="naiModel">
+              <option value="nai-diffusion-4-5-curated">v4.5 Curated ✦ (최신 추천)</option>
+              <option value="nai-diffusion-4-5-full">v4.5 Full</option>
+              <option value="nai-diffusion-4-curated">v4 Curated</option>
+              <option value="nai-diffusion-4-full">v4 Full</option>
+              <option value="nai-diffusion-3" selected>v3 (호환성)</option>
+            </select>
+          </div>
+          <div class="col-5">
+            <label class="form-label" style="font-size:0.78rem;">샘플러</label>
+            <select class="form-select form-select-sm" id="naiSampler">
+              <option value="k_euler_ancestral" selected>Euler Ancestral</option>
+              <option value="k_euler">Euler</option>
+              <option value="k_dpmpp_2s_ancestral">DPM++ 2S Anc.</option>
+              <option value="k_dpmpp_2m">DPM++ 2M</option>
+              <option value="k_dpmpp_sde">DPM++ SDE</option>
+              <option value="k_dpm_2_ancestral">DPM2 Anc.</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- 프롬프트 -->
+        <div class="mb-3">
+          <div class="d-flex justify-content-between align-items-center mb-1">
+            <label class="form-label mb-0" style="font-size:0.78rem;">프롬프트</label>
+            <div class="d-flex gap-1">
+              <button type="button" id="naiAutoGenBtn" onclick="autoGenerateNaiPrompt()"
+                style="background:none;border:1px solid rgba(232,106,170,0.5);border-radius:4px;padding:2px 8px;
+                color:#e86aaa;font-size:0.72rem;cursor:pointer;transition:border-color 0.15s;"
+                onmouseover="this.style.borderColor='#e86aaa'" onmouseout="this.style.borderColor='rgba(232,106,170,0.5)'">
+                <i class="bi bi-magic me-1"></i>AI 자동생성
+              </button>
+              <button type="button" class="fse-btn" onclick="openFse('naiPrompt','NAI 프롬프트')"><i class="bi bi-arrows-fullscreen"></i></button>
+            </div>
+          </div>
+          <textarea class="form-control form-control-sm" id="naiPrompt" rows="3"
+            placeholder="masterpiece, best quality, 1girl..."></textarea>
+        </div>
+
+        <!-- 네거티브 -->
+        <div class="mb-3">
+          <label class="form-label" style="font-size:0.78rem;">네거티브 프롬프트</label>
+          <textarea class="form-control form-control-sm" id="naiNegPrompt" rows="2"
+            placeholder="lowres, bad anatomy..."></textarea>
+        </div>
+
+        <!-- 해상도 프리셋 -->
+        <div class="mb-2">
+          <label class="form-label" style="font-size:0.78rem;">해상도 프리셋
+            <span style="font-size:0.68rem;color:var(--text-muted);margin-left:4px;">※ 소형 = Anlas 절약</span>
+          </label>
+          <div class="d-flex gap-1 flex-wrap mt-1" id="naiPresetBtns">
+            <button class="nai-preset" onclick="setNaiPreset(512,768,this)">세로 소형<br><span style="color:var(--text-muted);">512×768</span></button>
+            <button class="nai-preset" onclick="setNaiPreset(832,1216,this)">세로 표준<br><span style="color:var(--text-muted);">832×1216</span></button>
+            <button class="nai-preset" onclick="setNaiPreset(1024,1536,this)">세로 대형<br><span style="color:var(--text-muted);">1024×1536</span></button>
+            <button class="nai-preset" onclick="setNaiPreset(768,512,this)">가로 소형<br><span style="color:var(--text-muted);">768×512</span></button>
+            <button class="nai-preset" onclick="setNaiPreset(1216,832,this)">가로 표준<br><span style="color:var(--text-muted);">1216×832</span></button>
+            <button class="nai-preset" onclick="setNaiPreset(512,512,this)">정방 소형<br><span style="color:var(--text-muted);">512×512</span></button>
+            <button class="nai-preset" onclick="setNaiPreset(1024,1024,this)">정방 표준<br><span style="color:var(--text-muted);">1024×1024</span></button>
+          </div>
+        </div>
+
+        <!-- 커스텀 해상도 -->
+        <div class="row g-2 mb-3">
+          <div class="col-6">
+            <label class="form-label" style="font-size:0.78rem;">가로 (px)</label>
+            <input type="number" class="form-control form-control-sm" id="naiWidth" value="832" min="64" step="64" oninput="clearNaiPresetActive()">
+          </div>
+          <div class="col-6">
+            <label class="form-label" style="font-size:0.78rem;">세로 (px)</label>
+            <input type="number" class="form-control form-control-sm" id="naiHeight" value="1216" min="64" step="64" oninput="clearNaiPresetActive()">
+          </div>
+        </div>
+
+        <!-- 고급 옵션 (접기) -->
+        <details class="mb-3">
+          <summary style="font-size:0.78rem;color:var(--text-muted);cursor:pointer;user-select:none;">
+            고급 옵션
+          </summary>
+          <div class="row g-2 mt-1">
+            <div class="col-6">
+              <label class="form-label" style="font-size:0.78rem;">CFG Scale</label>
+              <input type="number" class="form-control form-control-sm" id="naiScale" value="6" min="1" max="10" step="0.5">
+            </div>
+            <div class="col-6">
+              <label class="form-label" style="font-size:0.78rem;">Steps</label>
+              <input type="number" class="form-control form-control-sm" id="naiSteps" value="28" min="1" max="50">
+            </div>
+          </div>
+        </details>
+
+        <img id="naiPreview" style="display:none;width:100%;border-radius:8px;border:1px solid var(--border);">
+        <div id="naiStatus" class="mt-2"></div>
+      </div>
+      <div class="modal-footer py-2">
+        <div style="font-size:0.72rem;color:var(--text-muted);margin-right:auto;">
+          <i class="bi bi-key me-1"></i>NOVELAI_API_KEY 환경변수 필요
+        </div>
+        <button class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">닫기</button>
+        <button class="btn btn-sm" id="naiGenBtn" onclick="runNaiGenerate()"
+          style="background:linear-gradient(135deg,#c84a8a,#8a65d4);border:none;color:#fff;">
+          <i class="bi bi-stars me-1"></i>생성
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}

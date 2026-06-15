@@ -1,0 +1,694 @@
+{% extends "base.html" %}
+{% block title %}시뮬레이션{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+
+  <!-- 왼쪽: 설정 관리 -->
+  <div class="col-lg-5">
+    <div class="card">
+      <div class="card-header d-flex align-items-center justify-content-between py-3">
+        <span><i class="bi bi-sliders me-2"></i>시뮬레이션 설정</span>
+        <button class="btn btn-primary btn-sm" onclick="openConfigModal(null)">
+          <i class="bi bi-plus-lg me-1"></i>새 설정
+        </button>
+      </div>
+      <div class="card-body p-3">
+        <div id="configList"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 오른쪽: 실행 및 현황 -->
+  <div class="col-lg-7">
+    <div class="card mb-4" id="runPanel">
+      <div class="card-header py-3">
+        <i class="bi bi-play-circle me-2"></i>시뮬레이션 실행
+      </div>
+      <div class="card-body p-4" id="runEmpty">
+        <p class="text-muted small">왼쪽에서 설정을 선택한 뒤 실행하세요.</p>
+      </div>
+      <div class="card-body p-4" id="runContent" style="display:none;">
+        <div class="mb-3 d-flex align-items-center gap-3 flex-wrap">
+          <div>
+            <div style="font-size:0.78rem; color:var(--text-secondary);">설정</div>
+            <div class="fw-bold" id="runConfigName"></div>
+          </div>
+          <div class="ms-auto d-flex gap-2 align-items-center flex-wrap">
+            <label class="d-flex align-items-center gap-2 mb-0" style="cursor:pointer; font-size:0.83rem; color:var(--text-secondary);">
+              <input type="checkbox" id="excludeLlmToggle" class="form-check-input" style="margin:0;" onchange="loadTokenEstimate()">
+              LLM 생성 제외
+            </label>
+            <button class="btn btn-sm btn-outline-secondary" onclick="openEntrySelectModal()">
+              <i class="bi bi-toggles me-1"></i>엔트리 선택 (<span id="selectedCount">전체</span>)
+            </button>
+            <button class="btn btn-sm" id="timelinePickBtn" onclick="openTimelineModal()"
+              style="border:1px solid rgba(139,127,247,0.4); color:var(--accent); font-size:0.8rem;">
+              <i class="bi bi-clock-history me-1"></i><span id="timelinePickLabel">타임라인 없음</span>
+            </button>
+            <button class="btn btn-primary" id="startBtn" onclick="startSimulation()">
+              <i class="bi bi-play-fill me-1"></i>시뮬레이션 시작
+            </button>
+            <button class="btn btn-danger" id="cancelBtn" onclick="cancelSimulation()" style="display:none;">
+              <i class="bi bi-stop-fill me-1"></i>실행 중지
+            </button>
+          </div>
+        </div>
+        <!-- 선택된 타임라인 아크 미리보기 -->
+        <div id="arcPreview" style="display:none; margin-bottom:0.75rem; padding:10px 14px; border-radius:10px;
+          border:1px solid rgba(255,184,108,0.3); background:rgba(255,184,108,0.04); font-size:0.8rem;">
+          <div style="color:#ffb86c; font-weight:600; margin-bottom:6px;">
+            <i class="bi bi-map me-1"></i>스토리 아크
+          </div>
+          <div id="arcPreviewGoal" style="color:var(--text-secondary); margin-bottom:6px;"></div>
+          <div id="arcPreviewBeats" style="display:flex; flex-wrap:wrap; gap:4px;"></div>
+        </div>
+
+        <!-- DB 토큰 추정 -->
+        <div id="tokenEstimate" class="mb-3 p-3 rounded" style="background:rgba(139,127,247,0.07); border:1px solid rgba(139,127,247,0.2); display:none;">
+          <div class="d-flex align-items-center gap-3 flex-wrap">
+            <div style="font-size:0.8rem; color:var(--text-secondary);">
+              <i class="bi bi-calculator me-1"></i>현재 DB 예상 토큰
+            </div>
+            <span style="font-size:0.85rem;">
+              세계관 <strong id="estWorld">-</strong> tok
+              + 프롬프트 <strong id="estPrompt">-</strong> tok
+              = 총 <strong id="estTotal" style="color:var(--accent);">-</strong> tok
+            </span>
+            <span id="estPctBadge" style="font-size:0.78rem; border-radius:12px; padding:2px 10px;"></span>
+            <span style="font-size:0.78rem; color:var(--text-secondary);">엔트리 <span id="estEntries">-</span>개</span>
+          </div>
+        </div>
+        <!-- 진행 상황 -->
+        <div id="progressPanel" style="display:none;">
+          <div class="d-flex justify-content-between small mb-1">
+            <span id="progressLabel">진행 중...</span>
+            <span id="progressFrac" style="color:var(--text-secondary);"></span>
+          </div>
+          <div class="tick-progress mb-3">
+            <div class="tick-progress-bar" id="progressBar" style="width:0%"></div>
+          </div>
+          <!-- 토큰 현황 -->
+          <div class="d-flex gap-2 mb-3 flex-wrap" id="tokenStats" style="display:none!important;">
+            <div class="token-stat">
+              <div class="lbl">입력 토큰</div>
+              <div class="val" id="tokIn">0</div>
+            </div>
+            <div class="token-stat">
+              <div class="lbl">출력 토큰</div>
+              <div class="val" id="tokOut">0</div>
+            </div>
+            <div class="token-stat">
+              <div class="lbl">총 사용 토큰</div>
+              <div class="val" id="tokTotal">0</div>
+            </div>
+            <div class="token-stat">
+              <div class="lbl">컨텍스트 사용률</div>
+              <div class="val" id="tokPct">0%</div>
+            </div>
+          </div>
+          <div id="liveLog" style="max-height: 260px; overflow-y: auto;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 이전 실행 내역 -->
+    <div class="card">
+      <div class="card-header py-3 d-flex align-items-center justify-content-between">
+        <span><i class="bi bi-clock-history me-2"></i>실행 내역</span>
+        <button class="btn btn-sm btn-outline-secondary" onclick="loadRuns()"><i class="bi bi-arrow-clockwise"></i></button>
+      </div>
+      <div class="card-body p-3">
+        <div id="runList"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 엔트리 선택 모달 -->
+<div class="modal fade" id="entrySelectModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-toggles me-2"></i>틱에 포함할 엔트리 선택</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-3">
+        <div class="d-flex gap-2 mb-3">
+          <button class="btn btn-sm btn-outline-secondary" onclick="selectAllEntries(true)">전체 선택</button>
+          <button class="btn btn-sm btn-outline-secondary" onclick="selectAllEntries(false)">전체 해제</button>
+          <span class="ms-auto" style="font-size:0.82rem; color:var(--text-secondary);">
+            선택된 엔트리만 틱 컨텍스트에 포함됩니다
+          </span>
+        </div>
+        <div id="entrySelectList" style="max-height:420px; overflow-y:auto;"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">닫기</button>
+        <button class="btn btn-primary" onclick="applyEntrySelection()">
+          <i class="bi bi-check-lg me-1"></i>적용
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 설정 모달 -->
+<div class="modal fade" id="configModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="configModalTitle"><i class="bi bi-sliders me-2"></i>설정</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label small">설정 이름 <span class="text-danger">*</span></label>
+          <input type="text" class="form-control" id="cfgName" placeholder="예: 중세 판타지 기본">
+        </div>
+        <div class="row g-3 mb-3">
+          <div class="col-6">
+            <label class="form-label small">총 틱 수</label>
+            <input type="number" class="form-control" id="cfgTickCount" value="10" min="1" max="100">
+            <div class="form-text">LLM이 자율적으로 시간을 진행할 횟수</div>
+          </div>
+        </div>
+
+        <hr style="border-color: var(--border);">
+
+        <div class="mb-3">
+          <div class="prompt-level-label prompt-l1 mb-2">
+            <i class="bi bi-layers me-1"></i>Level 1 — 세계관 기반 법칙
+          </div>
+          <textarea class="form-control prompt-textarea" id="cfgL1"
+            placeholder="이 세계의 물리 법칙, 마법 시스템, 근본 규칙 등을 기술하세요.&#10;예: 이 세계에는 4원소 마법이 존재하며, 마법사는 한 원소만 다룰 수 있다..."></textarea>
+          <div class="form-text">LLM이 항상 참조하는 세계의 불변 규칙입니다.</div>
+        </div>
+
+        <div class="mb-3">
+          <div class="prompt-level-label prompt-l2 mb-2">
+            <i class="bi bi-calendar-event me-1"></i>Level 2 — 시대/맥락/현재 상황
+          </div>
+          <textarea class="form-control prompt-textarea" id="cfgL2"
+            placeholder="시뮬레이션 시작 시점의 시대적 배경, 현재 진행 중인 갈등, 정치 구조 등을 기술하세요.&#10;예: 현재 대륙에는 세 왕국이 냉전 중이며, 100년 만에 마물의 대이동이 예고되고 있다..."></textarea>
+          <div class="form-text">시뮬레이션의 출발점이 되는 현재 상황입니다.</div>
+        </div>
+
+        <div class="mb-3">
+          <div class="prompt-level-label prompt-l3 mb-2">
+            <i class="bi bi-gear me-1"></i>Level 3 — 틱 진행 규칙
+          </div>
+          <textarea class="form-control prompt-textarea" id="cfgL3"
+            placeholder="각 틱마다 LLM이 따라야 할 행동 규칙, 제약사항을 기술하세요.&#10;예: 각 틱은 10년을 나타낸다. 매 틱마다 반드시 하나 이상의 새 인물이 등장해야 한다. 기존 세력 간 관계는 점진적으로 변화해야 한다..."></textarea>
+          <div class="form-text">틱마다 반복 적용되는 생성 규칙입니다.</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">취소</button>
+        <button class="btn btn-primary" onclick="saveConfig()"><i class="bi bi-check-lg me-1"></i>저장</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let configs = [];
+let selectedConfig = null;
+let selectedRunId = null;
+let pollTimer = null;
+let configModal;
+let entrySelectModal;
+let timelineModal;
+let allDbEntries = [];       // 전체 엔트리 목록
+let selectedEntryIds = null; // null = 전체, [] = 선택된 목록
+let _selectedTimelineId = null;
+let _newTimelineName = '';
+let _allTimelines = [];
+
+document.addEventListener('DOMContentLoaded', () => {
+  configModal = new bootstrap.Modal(document.getElementById('configModal'));
+  entrySelectModal = new bootstrap.Modal(document.getElementById('entrySelectModal'));
+  timelineModal = new bootstrap.Modal(document.getElementById('timelineModal'));
+  loadConfigs();
+  loadRuns();
+});
+
+// ── 설정 ─────────────────────────────────
+
+async function loadConfigs() {
+  const res = await fetch('/api/configs');
+  configs = await res.json();
+  renderConfigs();
+}
+
+function renderConfigs() {
+  const container = document.getElementById('configList');
+  if (configs.length === 0) {
+    container.innerHTML = '<p class="text-muted small text-center py-3">설정이 없습니다. 새 설정을 추가하세요.</p>';
+    return;
+  }
+  container.innerHTML = configs.map(c => `
+    <div class="entry-card mb-2 ${selectedConfig?.id === c.id ? 'border-accent' : ''}"
+         style="${selectedConfig?.id === c.id ? 'border-color:var(--accent)' : ''}"
+         onclick="selectConfig(${c.id})">
+      <div class="d-flex align-items-center justify-content-between mb-1">
+        <span class="fw-semibold">${escHtml(c.name)}</span>
+        <div class="d-flex gap-2">
+          <span class="badge bg-secondary">${c.tick_count} 틱</span>
+          <button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="event.stopPropagation(); openConfigModal(${c.id})"><i class="bi bi-pencil"></i></button>
+          <button class="btn btn-sm btn-outline-danger py-0 px-2" onclick="event.stopPropagation(); deleteConfig(${c.id})"><i class="bi bi-trash"></i></button>
+        </div>
+      </div>
+      <div class="small text-muted">${escHtml(c.prompt_level_1.substring(0, 80))}${c.prompt_level_1.length > 80 ? '...' : ''}</div>
+    </div>
+  `).join('');
+}
+
+function selectConfig(id) {
+  selectedConfig = configs.find(c => c.id === id);
+  selectedEntryIds = null; // 설정 바꾸면 선택 초기화
+  renderConfigs();
+  document.getElementById('runEmpty').style.display = 'none';
+  document.getElementById('runContent').style.display = 'block';
+  document.getElementById('runConfigName').textContent = selectedConfig.name;
+  document.getElementById('progressPanel').style.display = 'none';
+  document.getElementById('startBtn').disabled = false;
+  document.getElementById('selectedCount').textContent = '전체';
+  loadTokenEstimate();
+}
+
+async function loadTokenEstimate() {
+  const el = document.getElementById('tokenEstimate');
+  el.style.display = 'block';
+  let url = `/api/token-estimate?config_id=${selectedConfig.id}`;
+  if (selectedEntryIds !== null) url += `&ids=${selectedEntryIds.join(',')}`;
+  if (document.getElementById('excludeLlmToggle').checked) url += `&exclude_llm=true`;
+  const res = await fetch(url);
+  const d = await res.json();
+  document.getElementById('estWorld').textContent = d.world_tokens.toLocaleString();
+  document.getElementById('estPrompt').textContent = d.prompt_tokens.toLocaleString();
+  document.getElementById('estTotal').textContent = d.total_estimated.toLocaleString();
+  document.getElementById('estEntries').textContent = d.entry_count;
+  const pct = d.usage_pct;
+  const badge = document.getElementById('estPctBadge');
+  badge.textContent = `컨텍스트 ${pct}%`;
+  badge.style.background = pct >= 80 ? 'rgba(255,112,112,0.15)' : pct >= 50 ? 'rgba(255,184,108,0.15)' : 'rgba(139,127,247,0.15)';
+  badge.style.color = pct >= 80 ? '#ff7070' : pct >= 50 ? '#ffb86c' : 'var(--accent)';
+}
+
+async function openEntrySelectModal() {
+  const res = await fetch('/api/entries?active=true');
+  allDbEntries = await res.json();
+  renderEntrySelectList();
+  entrySelectModal.show();
+}
+
+function renderEntrySelectList() {
+  const container = document.getElementById('entrySelectList');
+  const byCategory = {};
+  allDbEntries.forEach(e => {
+    byCategory[e.category] = byCategory[e.category] || [];
+    byCategory[e.category].push(e);
+  });
+  let html = '';
+  for (const [cat, items] of Object.entries(byCategory)) {
+    html += `<div class="mb-2" style="font-size:0.78rem; font-weight:700; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.8px;">${cat}</div>`;
+    items.forEach(e => {
+      const checked = selectedEntryIds === null || selectedEntryIds.includes(e.id);
+      html += `
+        <label class="d-flex align-items-center gap-2 p-2 mb-1 rounded" style="cursor:pointer; background:rgba(255,255,255,0.03);">
+          <input type="checkbox" class="entry-check" value="${e.id}" ${checked ? 'checked' : ''}>
+          <span class="category-badge cat-${e.category}" style="font-size:0.65rem;">${e.category}</span>
+          <span style="font-size:0.88rem;">${escHtml(e.title)}</span>
+          <span style="font-size:0.75rem; color:var(--text-secondary); margin-left:auto;">${e.created_by === 'llm' ? 'LLM' : '유저'}</span>
+        </label>`;
+    });
+  }
+  container.innerHTML = html || '<p style="color:var(--text-secondary);">활성 엔트리가 없습니다.</p>';
+}
+
+function selectAllEntries(checked) {
+  document.querySelectorAll('.entry-check').forEach(cb => cb.checked = checked);
+}
+
+function applyEntrySelection() {
+  const checked = [...document.querySelectorAll('.entry-check:checked')].map(cb => parseInt(cb.value));
+  selectedEntryIds = checked.length === allDbEntries.length ? null : checked;
+  document.getElementById('selectedCount').textContent =
+    selectedEntryIds === null ? '전체' : `${selectedEntryIds.length}개 선택`;
+  entrySelectModal.hide();
+  loadTokenEstimate();
+}
+
+function openConfigModal(id) {
+  if (id) {
+    const c = configs.find(x => x.id === id);
+    document.getElementById('configModalTitle').textContent = '설정 편집';
+    document.getElementById('cfgName').value = c.name;
+    document.getElementById('cfgTickCount').value = c.tick_count;
+    document.getElementById('cfgL1').value = c.prompt_level_1;
+    document.getElementById('cfgL2').value = c.prompt_level_2;
+    document.getElementById('cfgL3').value = c.prompt_level_3;
+    configModal._editId = id;
+  } else {
+    document.getElementById('configModalTitle').textContent = '새 설정';
+    document.getElementById('cfgName').value = '';
+    document.getElementById('cfgTickCount').value = 10;
+    document.getElementById('cfgL1').value = '';
+    document.getElementById('cfgL2').value = '';
+    document.getElementById('cfgL3').value = '';
+    configModal._editId = null;
+  }
+  configModal.show();
+}
+
+async function saveConfig() {
+  const body = {
+    name: document.getElementById('cfgName').value.trim(),
+    tick_count: parseInt(document.getElementById('cfgTickCount').value),
+    prompt_level_1: document.getElementById('cfgL1').value.trim(),
+    prompt_level_2: document.getElementById('cfgL2').value.trim(),
+    prompt_level_3: document.getElementById('cfgL3').value.trim(),
+  };
+  if (!body.name) { alert('이름을 입력하세요.'); return; }
+
+  const editId = configModal._editId;
+  const url = editId ? `/api/configs/${editId}` : '/api/configs';
+  const method = editId ? 'PUT' : 'POST';
+  const res = await fetch(url, { method, headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
+  if (res.ok) {
+    configModal.hide();
+    await loadConfigs();
+  } else {
+    alert('저장 실패');
+  }
+}
+
+async function deleteConfig(id) {
+  if (!confirm('설정을 삭제하시겠습니까?')) return;
+  await fetch(`/api/configs/${id}`, { method: 'DELETE' });
+  if (selectedConfig?.id === id) {
+    selectedConfig = null;
+    document.getElementById('runEmpty').style.display = 'block';
+    document.getElementById('runContent').style.display = 'none';
+  }
+  loadConfigs();
+}
+
+// ── 실행 ─────────────────────────────────
+
+async function startSimulation() {
+  if (!selectedConfig) return;
+  document.getElementById('startBtn').disabled = true;
+  document.getElementById('startBtn').style.display = 'none';
+  document.getElementById('cancelBtn').style.display = '';
+  document.getElementById('progressPanel').style.display = 'block';
+  document.getElementById('liveLog').innerHTML = '';
+  updateProgress(0, selectedConfig.tick_count, '시작 중...');
+
+  const body = { config_id: selectedConfig.id };
+  if (selectedEntryIds !== null) body.entry_ids = selectedEntryIds;
+  if (document.getElementById('excludeLlmToggle').checked) body.exclude_llm_entries = true;
+  if (_selectedTimelineId)     body.timeline_id = _selectedTimelineId;
+  if (_newTimelineName.trim()) body.new_timeline_name = _newTimelineName.trim();
+
+  const res = await fetch('/api/runs', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    alert('실행 시작 실패');
+    document.getElementById('startBtn').disabled = false;
+    document.getElementById('startBtn').style.display = '';
+    document.getElementById('cancelBtn').style.display = 'none';
+    return;
+  }
+  const run = await res.json();
+  selectedRunId = run.id;
+  pollProgress(run.id, selectedConfig.tick_count);
+  loadRuns();
+}
+
+async function cancelSimulation() {
+  if (!selectedRunId) return;
+  if (!confirm('현재 틱이 끝난 뒤 시뮬레이션을 중지합니다. 계속하시겠습니까?')) return;
+  await fetch(`/api/runs/${selectedRunId}/cancel`, { method: 'PUT' });
+  document.getElementById('cancelBtn').disabled = true;
+  document.getElementById('cancelBtn').innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>중지 중...';
+}
+
+function _resetRunButtons() {
+  document.getElementById('startBtn').disabled = false;
+  document.getElementById('startBtn').style.display = '';
+  document.getElementById('cancelBtn').style.display = 'none';
+  document.getElementById('cancelBtn').disabled = false;
+  document.getElementById('cancelBtn').innerHTML = '<i class="bi bi-stop-fill me-1"></i>실행 중지';
+}
+
+function pollProgress(runId, total) {
+  clearInterval(pollTimer);
+  document.getElementById('tokenStats').style.display = 'flex';
+  pollTimer = setInterval(async () => {
+    const runRes = await fetch(`/api/runs/${runId}`);
+    const run = await runRes.json();
+    updateProgress(run.current_tick, run.total_ticks, run.status);
+    updateTokenStats(run);
+
+    // 최근 로그 가져오기
+    const logRes = await fetch(`/api/logs?run_id=${runId}&limit=8`);
+    const data = await logRes.json();
+    renderLiveLog(data.logs.reverse());
+
+    if (['done', 'error', 'cancelled'].includes(run.status)) {
+      clearInterval(pollTimer);
+      _resetRunButtons();
+      loadRuns();
+    }
+  }, 2000);
+}
+
+const CONTEXT_MAX = 200000; // claude-sonnet-4.5 context window
+
+function updateProgress(cur, total, status) {
+  const pct = total > 0 ? Math.round((cur / total) * 100) : 0;
+  document.getElementById('progressBar').style.width = pct + '%';
+  document.getElementById('progressFrac').textContent = `${cur} / ${total}`;
+  const labels = { pending: '대기 중', running: `틱 ${cur} 진행 중...`, done: '완료!', error: '오류 발생', cancelled: '중지됨' };
+  document.getElementById('progressLabel').textContent = labels[status] || status;
+}
+
+function updateTokenStats(run) {
+  const tokIn = run.total_tokens_in || 0;
+  const tokOut = run.total_tokens_out || 0;
+  const tokTotal = run.total_tokens || 0;
+  const pct = Math.min(100, Math.round((tokTotal / CONTEXT_MAX) * 100));
+  document.getElementById('tokIn').textContent = tokIn.toLocaleString();
+  document.getElementById('tokOut').textContent = tokOut.toLocaleString();
+  document.getElementById('tokTotal').textContent = tokTotal.toLocaleString();
+  document.getElementById('tokPct').textContent = pct + '%';
+  // 80% 이상이면 경고색
+  document.getElementById('tokPct').style.color = pct >= 80 ? '#ff7070' : pct >= 50 ? '#ffb86c' : 'var(--accent)';
+}
+
+function renderLiveLog(logs) {
+  const container = document.getElementById('liveLog');
+  container.innerHTML = logs.map(l => `
+    <div class="log-item log-${l.event_type}">
+      <span class="log-tick-badge me-2">틱 ${l.tick_number}</span>
+      <span>${escHtml(l.description)}</span>
+      ${l.tokens_total ? `<span class="ms-2" style="font-size:0.72rem;color:var(--accent);">+${l.tokens_total.toLocaleString()} tok</span>` : ''}
+    </div>
+  `).join('');
+  container.scrollTop = container.scrollHeight;
+}
+
+async function loadRuns() {
+  const res = await fetch('/api/runs');
+  const runs = await res.json();
+  const container = document.getElementById('runList');
+  if (runs.length === 0) {
+    container.innerHTML = '<p class="text-muted small text-center py-2">실행 내역 없음</p>';
+    return;
+  }
+  const statusColors = { pending: 'secondary', running: 'warning', done: 'success', error: 'danger', cancelled: 'secondary' };
+  const statusLabels = { pending: '대기', running: '진행 중', done: '완료', error: '오류', cancelled: '중지됨' };
+  container.innerHTML = runs.map(r => {
+    const isActive = ['running', 'pending'].includes(r.status);
+    return `
+    <div class="d-flex align-items-center py-2" style="border-bottom: 1px solid var(--border);">
+      <div class="me-3">
+        <span class="badge bg-${statusColors[r.status] || 'secondary'}">${statusLabels[r.status] || r.status}</span>
+      </div>
+      <div class="flex-grow-1">
+        <div class="fw-semibold" style="font-size:0.9rem;">Run #${r.id}</div>
+        <div style="font-size:0.8rem; color:var(--text-secondary);">
+          ${r.current_tick} / ${r.total_ticks} 틱
+          ${r.total_tokens ? ` · <span style="color:var(--accent);">${r.total_tokens.toLocaleString()} 토큰</span>` : ''}
+          · ${new Date(r.started_at).toLocaleString('ko-KR')}
+        </div>
+      </div>
+      <div class="d-flex gap-1 ms-2">
+        <a href="/logs?run_id=${r.id}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-journal-text"></i></a>
+        ${isActive
+          ? `<button class="btn btn-sm btn-outline-warning" onclick="cancelRun(${r.id})" title="중지"><i class="bi bi-stop-fill"></i></button>`
+          : `<button class="btn btn-sm btn-outline-danger" onclick="deleteRun(${r.id})" title="삭제"><i class="bi bi-trash"></i></button>`
+        }
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function cancelRun(runId) {
+  if (!confirm('현재 틱이 끝난 뒤 중지합니다. 계속하시겠습니까?')) return;
+  const res = await fetch(`/api/runs/${runId}/cancel`, { method: 'PUT' });
+  if (res.ok) loadRuns();
+  else alert('중지 실패: ' + (await res.json()).error);
+}
+
+async function deleteRun(runId) {
+  if (!confirm(`Run #${runId}과 관련 로그를 모두 삭제합니다. 계속하시겠습니까?`)) return;
+  const res = await fetch(`/api/runs/${runId}`, { method: 'DELETE' });
+  if (res.ok) {
+    if (selectedRunId === runId) {
+      document.getElementById('progressPanel').style.display = 'none';
+      selectedRunId = null;
+    }
+    loadRuns();
+  } else {
+    alert('삭제 실패: ' + (await res.json()).error);
+  }
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── 타임라인 선택 ─────────────────────────────────────────
+async function openTimelineModal() {
+  const res = await fetch('/api/timelines');
+  _allTimelines = await res.json();
+  const list = document.getElementById('tlPickList');
+  list.innerHTML = `
+    <div class="form-check mb-2">
+      <input class="form-check-input" type="radio" name="tlPick" id="tlPickNone" value=""
+        ${!_selectedTimelineId && !_newTimelineName ? 'checked' : ''}>
+      <label class="form-check-label small" for="tlPickNone">타임라인 없이 실행</label>
+    </div>
+    <div class="form-check mb-2">
+      <input class="form-check-input" type="radio" name="tlPick" id="tlPickNew" value="__new__"
+        ${_newTimelineName ? 'checked' : ''}>
+      <label class="form-check-label small" for="tlPickNew">
+        <i class="bi bi-plus-circle me-1"></i>새 타임라인 생성
+      </label>
+    </div>
+    <div id="tlNewNameWrap" class="ms-4 mb-2" style="${_newTimelineName ? '' : 'display:none;'}">
+      <input type="text" class="form-control form-control-sm" id="tlNewName"
+        placeholder="새 타임라인 이름" value="${escHtml(_newTimelineName)}">
+    </div>
+    ${_allTimelines.length > 0 ? '<hr style="border-color:var(--border); margin:8px 0;">' : ''}
+    ${_allTimelines.map(t => `
+      <div class="form-check mb-2">
+        <input class="form-check-input" type="radio" name="tlPick" id="tlPick${t.id}" value="${t.id}"
+          ${_selectedTimelineId === t.id ? 'checked' : ''}>
+        <label class="form-check-label small" for="tlPick${t.id}">
+          ${escHtml(t.name)}
+          <span style="color:var(--text-muted); font-size:0.72rem;">(${t.event_count}개 에피소드)</span>
+        </label>
+      </div>`).join('')}
+  `;
+  // 새 타임라인 라디오 토글 시 이름 입력창 표시
+  list.querySelectorAll('input[name="tlPick"]').forEach(r => {
+    r.addEventListener('change', () => {
+      document.getElementById('tlNewNameWrap').style.display =
+        r.value === '__new__' ? '' : 'none';
+    });
+  });
+  timelineModal.show();
+}
+
+async function applyTimelinePick() {
+  const checked = document.querySelector('input[name="tlPick"]:checked');
+  if (!checked) return;
+  _selectedTimelineId = null;
+  _newTimelineName = '';
+  if (checked.value === '__new__') {
+    _newTimelineName = (document.getElementById('tlNewName').value || '').trim();
+    if (!_newTimelineName) { alert('타임라인 이름을 입력하세요.'); return; }
+  } else if (checked.value) {
+    _selectedTimelineId = parseInt(checked.value);
+  }
+  // 버튼 레이블 갱신
+  let label = '타임라인 없음';
+  if (_newTimelineName) label = `+ ${_newTimelineName}`;
+  else if (_selectedTimelineId) {
+    const tl = _allTimelines.find(t => t.id === _selectedTimelineId);
+    if (tl) label = tl.name;
+  }
+  document.getElementById('timelinePickLabel').textContent = label;
+  document.getElementById('timelinePickBtn').style.borderColor =
+    (_selectedTimelineId || _newTimelineName) ? 'var(--accent)' : 'rgba(139,127,247,0.4)';
+  timelineModal.hide();
+  // 스토리 아크 미리보기 업데이트
+  await updateArcPreview();
+}
+
+async function updateArcPreview() {
+  const preview = document.getElementById('arcPreview');
+  if (!_selectedTimelineId) { preview.style.display = 'none'; return; }
+  try {
+    const res = await fetch(`/api/timelines/${_selectedTimelineId}`);
+    const tl = await res.json();
+    const beats = tl.beats || [];
+    const goal = tl.narrative_goal || '';
+    if (!goal && beats.length === 0) { preview.style.display = 'none'; return; }
+    preview.style.display = 'block';
+    const goalEl = document.getElementById('arcPreviewGoal');
+    goalEl.innerHTML = goal ? `<strong>서사 목표:</strong> ${escHtml(goal)}` : '';
+    goalEl.style.display = goal ? 'block' : 'none';
+
+    const BEAT_COLORS = {
+      '기': '#6eeab0', '승': '#6aadff', '전': '#ffb86c', '결': '#ff7070',
+      '복선': '#b07aff', '위기': '#ff9f7a', '절정': '#ffe96a',
+    };
+    const beatsEl = document.getElementById('arcPreviewBeats');
+    beatsEl.innerHTML = beats.map(b => {
+      const col = BEAT_COLORS[b.beat_label] || '#8892a4';
+      const label = b.beat_label ? `[${b.beat_label}] ` : '';
+      const fixedIcon = b.is_fixed ? '📌' : '✨';
+      return `<span title="${escHtml(b.title)}" style="
+        padding:2px 8px; border-radius:8px; font-size:0.7rem; font-weight:500;
+        background:${col}18; color:${col}; border:1px solid ${col}33; white-space:nowrap;">
+        ${fixedIcon} 틱${b.tick_number} ${label}${escHtml(b.title.slice(0, 20))}${b.title.length > 20 ? '…' : ''}
+      </span>`;
+    }).join('');
+  } catch(e) {
+    document.getElementById('arcPreview').style.display = 'none';
+  }
+}
+</script>
+
+<!-- 타임라인 선택 모달 -->
+<div class="modal fade" id="timelineModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" style="font-size:0.95rem;">
+          <i class="bi bi-clock-history me-2" style="color:var(--accent);"></i>타임라인 연결
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body py-3" id="tlPickList"></div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">취소</button>
+        <button class="btn btn-primary btn-sm" onclick="applyTimelinePick()">
+          <i class="bi bi-check-lg me-1"></i>적용
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}

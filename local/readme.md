@@ -9,10 +9,19 @@ DB(`worldbuilding.db`)도 이 폴더 안에 따로 생성됩니다.
 1. oMLX를 실행해서 `http://127.0.0.1:8000/v1` 에서 OpenAI 호환 API가
    떠 있고, 모델 목록에 `mlx-community--gemma-4-26b-a4b-it-8bit` 가
    "준비됨" 상태인지 확인하세요.
-2. `.env` 파일을 열어 필요하면 값을 수정하세요.
+2. **`.env` 파일을 만드세요** (`.env`는 git에 커밋되지 않으므로 직접 생성해야 합니다):
+   ```bash
+   cd local
+   cp .env.example .env
+   ```
+3. `.env` 파일을 열어 필요하면 값을 수정하세요.
    - `LLM_BASE_URL`: oMLX의 OpenAI 호환 엔드포인트
    - `LLM_MODEL`: 사용할 모델명 (oMLX 모델 목록의 이름과 동일해야 함)
    - `LLM_API_KEY`: oMLX가 키를 검증하지 않으면 임의 문자열로 둬도 됩니다.
+   - `PORT`: 기본 5002 (원본 앱 5001과 충돌 방지)
+
+   > `.env`가 없으면 앱은 기본값(`PORT=5001`, Copilot API)으로 동작하며
+   > 화면에 "로컬 (oMLX)" 배지가 표시되지 않습니다.
 
 ## 실행
 

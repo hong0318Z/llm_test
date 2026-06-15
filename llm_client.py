@@ -18,12 +18,27 @@ CONTEXT_SUMMARY_THRESHOLD = 120_000
 
 
 def get_llm_client(model_override: str = None):
-    """GitHub Copilot API 클라이언트 반환. model_override가 있으면 해당 모델 사용."""
+    """LLM API 클라이언트 반환.
+
+    LLM_BASE_URL 환경변수가 설정되어 있으면 (예: mlx_lm.server 같은 로컬
+    OpenAI 호환 서버) 해당 엔드포인트를 사용하고, 없으면 GitHub Copilot
+    API를 사용합니다.
+    """
+    local_base_url = os.environ.get("LLM_BASE_URL")
+    if local_base_url:
+        model = model_override or os.environ.get("LLM_MODEL", "local-model")
+        client = OpenAI(
+            base_url=local_base_url,
+            api_key=os.environ.get("LLM_API_KEY", "not-needed"),
+        )
+        return client, model
+
     github_token = os.environ.get("GITHUB_TOKEN")
     if not github_token:
         raise EnvironmentError(
             "GITHUB_TOKEN 환경변수가 필요합니다.\n"
-            ".env 파일에 GITHUB_TOKEN=your_token 을 추가하세요."
+            ".env 파일에 GITHUB_TOKEN=your_token 을 추가하세요.\n"
+            "또는 로컬 모델을 사용하려면 LLM_BASE_URL을 설정하세요 (예: http://localhost:8080/v1)."
         )
     model = model_override or os.environ.get("LLM_MODEL", DEFAULT_MODEL)
     client = OpenAI(

@@ -26,7 +26,9 @@ def get_llm_client(model_override: str = None):
     """
     local_base_url = os.environ.get("LLM_BASE_URL")
     if local_base_url:
-        model = model_override or os.environ.get("LLM_MODEL", "local-model")
+        # 로컬 서버는 보통 모델 1개만 로드되어 있으므로, DB 설정의 모델명
+        # (claude-sonnet-4.5 등)을 무시하고 LLM_MODEL env 값을 강제 사용.
+        model = os.environ.get("LLM_MODEL", "local-model")
         client = OpenAI(
             base_url=local_base_url,
             api_key=os.environ.get("LLM_API_KEY", "not-needed"),

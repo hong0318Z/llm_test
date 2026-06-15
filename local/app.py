@@ -175,6 +175,17 @@ def inject_world():
     return {"current_world": world}
 
 
+@app.context_processor
+def inject_llm_mode():
+    """모든 템플릿에 로컬 LLM 모드 정보 주입 (LLM_BASE_URL 설정 시 로컬 모드)"""
+    base_url = os.environ.get("LLM_BASE_URL")
+    return {
+        "llm_local_mode": bool(base_url),
+        "llm_base_url": base_url,
+        "llm_model_env": os.environ.get("LLM_MODEL"),
+    }
+
+
 def _require_world_redirect():
     """세계관 미선택 시 /worlds로 리다이렉트 (페이지 라우트에서 사용)"""
     if not session.get("world_id"):
@@ -1676,14 +1687,16 @@ def test_llm():
         return jsonify({
             "ok": True,
             "model": model,
+            "local": bool(os.environ.get("LLM_BASE_URL")),
+            "base_url": os.environ.get("LLM_BASE_URL"),
             "reply": reply,
             "tokens_in": usage.prompt_tokens if usage else None,
             "tokens_out": usage.completion_tokens if usage else None,
         })
     except EnvironmentError as e:
-        return jsonify({"ok": False, "error": str(e)}), 400
+        return jsonify({"ok": False, "error": str(e), "local": bool(os.environ.get("LLM_BASE_URL")), "base_url": os.environ.get("LLM_BASE_URL")}), 400
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+        return jsonify({"ok": False, "error": str(e), "local": bool(os.environ.get("LLM_BASE_URL")), "base_url": os.environ.get("LLM_BASE_URL")}), 500
 
 
 # ─────────────────────────────────────────

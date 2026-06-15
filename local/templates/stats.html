@@ -1,0 +1,261 @@
+{% extends "base.html" %}
+{% block title %}연구 통계{% endblock %}
+
+{% block content %}
+<style>
+  .stat-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.25rem 1.5rem;
+  }
+  .stat-label { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .stat-value { font-size: 1.75rem; font-weight: 700; color: var(--text-primary); line-height: 1.2; }
+  .stat-sub   { font-size: 0.8rem; color: var(--text-secondary); margin-top: 2px; }
+
+  .run-row { cursor: default; transition: background 0.15s; }
+  .run-row:hover { background: rgba(255,255,255,0.03); }
+
+  .bar-row { margin-bottom: 0.55rem; }
+  .bar-label { font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 2px; display: flex; justify-content: space-between; }
+  .bar-track { height: 8px; background: rgba(255,255,255,0.07); border-radius: 4px; overflow: hidden; }
+  .bar-fill  { height: 100%; border-radius: 4px; transition: width 0.5s ease; }
+
+  .word-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 12px; border-radius: 20px; margin: 3px;
+    font-size: 0.82rem; border: 1px solid var(--border);
+    background: var(--bg-card);
+  }
+  .word-count {
+    background: rgba(139,127,247,0.25); color: var(--accent);
+    border-radius: 10px; padding: 1px 7px; font-size: 0.72rem; font-weight: 600;
+  }
+
+  .status-badge {
+    display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.72rem; font-weight: 600;
+  }
+  .status-done       { background: rgba(110,234,176,0.15); color: #6eeab0; }
+  .status-cancelled  { background: rgba(255,112,112,0.15); color: #ff7070; }
+  .status-running    { background: rgba(139,127,247,0.2);  color: var(--accent); }
+  .status-error      { background: rgba(255,185,0,0.15);   color: #ffb900; }
+  .status-pending    { background: rgba(200,208,224,0.12); color: var(--text-muted); }
+
+  .section-title {
+    font-size: 0.8rem; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.8px; color: var(--text-muted); margin-bottom: 1rem;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .section-title::after {
+    content: ''; flex: 1; height: 1px; background: var(--border);
+  }
+  table { width: 100%; border-collapse: collapse; }
+  th { font-size: 0.72rem; color: var(--text-muted); font-weight: 600;
+       text-transform: uppercase; letter-spacing: 0.4px;
+       padding: 8px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  td { font-size: 0.82rem; padding: 9px 10px; border-bottom: 1px solid rgba(46,50,68,0.6);
+       color: var(--text-secondary); }
+  td.num { font-family: monospace; color: var(--text-primary); }
+  .refresh-btn { background: none; border: 1px solid var(--border); color: var(--text-muted);
+                 border-radius: 6px; padding: 4px 10px; font-size: 0.78rem; cursor: pointer;
+                 transition: all 0.15s; }
+  .refresh-btn:hover { border-color: var(--accent); color: var(--accent); }
+</style>
+
+<div class="d-flex align-items-center justify-content-between mb-4">
+  <h5 class="mb-0" style="color:var(--text-primary);">
+    <i class="bi bi-bar-chart-line me-2" style="color:var(--accent);"></i>연구 통계 대시보드
+  </h5>
+  <button class="refresh-btn" onclick="loadStats()">
+    <i class="bi bi-arrow-clockwise me-1"></i>새로고침
+  </button>
+</div>
+
+<!-- ── 요약 카드 ───────────────────────────────────────── -->
+<div class="row g-3 mb-4" id="summaryCards">
+  <!-- JS로 채움 -->
+</div>
+
+<!-- ── 메인 그리드 ─────────────────────────────────────── -->
+<div class="row g-3">
+
+  <!-- 런 히스토리 (좌측 넓게) -->
+  <div class="col-12 col-xl-8">
+    <div class="stat-card">
+      <div class="section-title"><i class="bi bi-clock-history"></i>런 히스토리</div>
+      <div style="overflow-x:auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>상태</th>
+              <th>완료틱/전체</th>
+              <th>총 시간</th>
+              <th>틱당 평균</th>
+              <th>입력 토큰</th>
+              <th>출력 토큰</th>
+              <th>RAG 발동</th>
+              <th>시작일시</th>
+            </tr>
+          </thead>
+          <tbody id="runTableBody">
+            <tr><td colspan="9" class="text-center text-muted py-4">로딩 중...</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div id="runTotalsRow" class="mt-3 pt-3" style="border-top:1px solid var(--border); display:none;">
+        <!-- 합계 행 -->
+      </div>
+    </div>
+  </div>
+
+  <!-- 우측 패널 -->
+  <div class="col-12 col-xl-4 d-flex flex-column gap-3">
+
+    <!-- 가장 많이 참조된 엔트리 -->
+    <div class="stat-card flex-grow-1">
+      <div class="section-title"><i class="bi bi-link-45deg"></i>가장 많이 참조된 엔트리</div>
+      <div id="topRefsChart">
+        <div class="text-muted text-center small py-3">로딩 중...</div>
+      </div>
+    </div>
+
+    <!-- Top 10 단어 -->
+    <div class="stat-card">
+      <div class="section-title"><i class="bi bi-chat-text"></i>가장 많이 언급된 단어 Top 10</div>
+      <div id="topWordsChart">
+        <div class="text-muted text-center small py-3">로딩 중...</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+const CAT_COLORS = {
+  '세력':'#ff7070','인물':'#6aadff','관념':'#b07aff',
+  '물건':'#ffb86c','종족':'#6eeab0','사건':'#ffe96a',
+};
+
+function fmt(n) { return n == null ? '—' : Number(n).toLocaleString(); }
+function fmtSec(s) {
+  if (s == null) return '—';
+  if (s < 60) return `${s.toFixed(1)}s`;
+  const m = Math.floor(s / 60), sec = (s % 60).toFixed(0);
+  return `${m}m ${sec}s`;
+}
+function fmtDate(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString('ko-KR', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
+}
+
+const STATUS_LABEL = {
+  done: '완료', running: '실행중', cancelled: '취소됨', error: '오류', pending: '대기중'
+};
+
+async function loadStats() {
+  const res = await fetch('/api/stats');
+  const data = await res.json();
+  renderSummary(data.totals);
+  renderRunTable(data.runs, data.totals);
+  renderTopRefs(data.top_referenced);
+  renderTopWords(data.top_words);
+}
+
+function renderSummary(t) {
+  const cards = [
+    { label: '총 토큰 사용량', value: fmt(t.tokens_total), sub: `입력 ${fmt(t.tokens_in)} / 출력 ${fmt(t.tokens_out)}`, color: '#8b7ff7' },
+    { label: '총 런 수 (완료)', value: `${t.run_count}회`, sub: `완료 ${t.done_run_count}회`, color: '#6eeab0' },
+    { label: '평균 런 시간', value: fmtSec(t.avg_run_duration_sec), sub: `총 ${fmtSec(t.total_duration_sec)}`, color: '#6aadff' },
+    { label: '세계관 엔트리', value: fmt(t.entry_count), sub: `유저 ${t.user_entries} / LLM ${t.llm_entries}`, color: '#ffb86c' },
+  ];
+  document.getElementById('summaryCards').innerHTML = cards.map(c => `
+    <div class="col-6 col-md-3">
+      <div class="stat-card">
+        <div class="stat-label">${c.label}</div>
+        <div class="stat-value" style="color:${c.color};">${c.value}</div>
+        <div class="stat-sub">${c.sub}</div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function renderRunTable(runs, totals) {
+  const tbody = document.getElementById('runTableBody');
+  if (runs.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-4">런 기록이 없습니다.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = runs.map(r => `
+    <tr class="run-row">
+      <td class="num">#${r.id}</td>
+      <td><span class="status-badge status-${r.status}">${STATUS_LABEL[r.status] || r.status}</span></td>
+      <td class="num">${r.completed_ticks} / ${r.total_ticks}</td>
+      <td class="num">${fmtSec(r.duration_sec)}</td>
+      <td class="num">${r.avg_tick_sec ? r.avg_tick_sec + 's' : '—'}</td>
+      <td class="num">${fmt(r.tokens_in)}</td>
+      <td class="num">${fmt(r.tokens_out)}</td>
+      <td class="num">${r.rag_ticks > 0 ? `<span style="color:#6aadff;">${r.rag_ticks}회</span>` : '<span style="color:var(--text-muted);">0</span>'}</td>
+      <td style="font-size:0.75rem;">${fmtDate(r.started_at)}</td>
+    </tr>
+  `).join('');
+
+  // 합계 행
+  const totalRow = document.getElementById('runTotalsRow');
+  totalRow.style.display = 'flex';
+  totalRow.innerHTML = `
+    <div class="d-flex flex-wrap gap-4" style="font-size:0.8rem; color:var(--text-secondary);">
+      <span><span style="color:var(--text-muted);">총 입력</span> <strong style="color:var(--text-primary);font-family:monospace;">${fmt(totals.tokens_in)}</strong></span>
+      <span><span style="color:var(--text-muted);">총 출력</span> <strong style="color:var(--text-primary);font-family:monospace;">${fmt(totals.tokens_out)}</strong></span>
+      <span><span style="color:var(--text-muted);">총 합산</span> <strong style="color:var(--accent);font-family:monospace;">${fmt(totals.tokens_total)}</strong></span>
+      <span><span style="color:var(--text-muted);">총 처리시간</span> <strong style="color:#6aadff;">${fmtSec(totals.total_duration_sec)}</strong></span>
+    </div>`;
+}
+
+function renderTopRefs(items) {
+  const el = document.getElementById('topRefsChart');
+  if (!items || items.length === 0) {
+    el.innerHTML = '<div class="text-muted small text-center py-3">데이터 없음</div>';
+    return;
+  }
+  const max = items[0].count;
+  el.innerHTML = items.map((item, i) => {
+    const col = CAT_COLORS[item.category] || '#8892a4';
+    const pct = max > 0 ? Math.round(item.count / max * 100) : 0;
+    return `
+      <div class="bar-row">
+        <div class="bar-label">
+          <span>
+            <span class="badge me-1" style="background:${col}22;color:${col};font-size:0.65rem;border:1px solid ${col}44;">${item.category || '?'}</span>
+            ${item.title}
+          </span>
+          <span style="font-family:monospace;color:var(--text-primary);">${item.count}</span>
+        </div>
+        <div class="bar-track">
+          <div class="bar-fill" style="width:${pct}%;background:${col};opacity:0.7;"></div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function renderTopWords(words) {
+  const el = document.getElementById('topWordsChart');
+  if (!words || words.length === 0) {
+    el.innerHTML = '<div class="text-muted small text-center py-3">데이터 없음</div>';
+    return;
+  }
+  const max = words[0].count;
+  // 크기 스케일: 0.8rem ~ 1.4rem
+  el.innerHTML = `<div class="d-flex flex-wrap">` +
+    words.map(w => {
+      const size = 0.8 + (w.count / max) * 0.6;
+      const opacity = 0.5 + (w.count / max) * 0.5;
+      return `<span class="word-chip" style="font-size:${size.toFixed(2)}rem;opacity:${opacity.toFixed(2)};">
+        ${w.word} <span class="word-count">${w.count}</span>
+      </span>`;
+    }).join('') + `</div>`;
+}
+
+document.addEventListener('DOMContentLoaded', loadStats);
+</script>
+{% endblock %}

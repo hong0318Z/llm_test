@@ -1,0 +1,989 @@
+{% extends "base.html" %}
+{% block title %}타임라인{% endblock %}
+
+{% block content %}
+<style>
+  /* ── 레이아웃 ── */
+  #tlWrap { display:flex; gap:1rem; height:calc(100vh - 128px); }
+  #tlList { width:260px; flex-shrink:0; display:flex; flex-direction:column; gap:0.5rem; overflow-y:auto; }
+  #tlMain { flex:1; display:flex; flex-direction:column; overflow:hidden; }
+  #tlBody  { flex:1; overflow-y:auto; padding-right:4px; }
+
+  /* ── 타임라인 목록 카드 ── */
+  .tl-item {
+    padding:10px 14px; border-radius:10px;
+    border:1px solid var(--border); background:var(--bg-card);
+    cursor:pointer; transition:all 0.15s;
+  }
+  .tl-item:hover { border-color:rgba(139,127,247,0.5); }
+  .tl-item.active { border-color:var(--accent); background:rgba(139,127,247,0.08); }
+  .tl-item-name { font-size:0.88rem; font-weight:600; color:var(--text-primary); }
+  .tl-item-meta { font-size:0.72rem; color:var(--text-muted); margin-top:2px; }
+
+  /* ── 헤더 ── */
+  #tlHeader {
+    border-radius:12px; border:1px solid var(--border); background:var(--bg-card);
+    padding:14px 18px; margin-bottom:1rem;
+    display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+  }
+  #tlHeaderName { font-size:1.05rem; font-weight:700; flex:1; }
+  #tlHeaderDesc { font-size:0.8rem; color:var(--text-secondary); }
+
+  /* ── 세로 타임라인 ── */
+  .tl-events { position:relative; padding-left:52px; }
+  .tl-events::before {
+    content:''; position:absolute; left:20px; top:0; bottom:0;
+    width:2px; background:linear-gradient(to bottom, transparent, var(--border) 5%, var(--border) 95%, transparent);
+  }
+
+  .tl-event {
+    position:relative; margin-bottom:1.5rem;
+  }
+  /* 틱 마커 */
+  .tl-tick-marker {
+    position:absolute; left:-40px; top:12px;
+    width:32px; height:32px; border-radius:50%;
+    display:flex; align-items:center; justify-content:center;
+    font-size:0.65rem; font-weight:700; line-height:1;
+    border:2px solid; transition:transform 0.15s;
+    cursor:default; flex-direction:column; gap:1px;
+  }
+  .tl-tick-marker.auto  { background:#0d1018; border-color:var(--accent); color:var(--accent); }
+  .tl-tick-marker.user  { background:rgba(106,173,255,0.12); border-color:#6aadff; color:#6aadff; }
+
+  /* 이벤트 카드 */
+  .tl-event-card {
+    border-radius:10px; border:1px solid var(--border); background:var(--bg-card);
+    padding:12px 16px; transition:border-color 0.15s;
+  }
+  .tl-event-card:hover { border-color:rgba(139,127,247,0.4); }
+  .tl-event-title { font-size:0.88rem; font-weight:600; color:var(--text-primary); margin-bottom:4px; }
+  .tl-event-desc  { font-size:0.8rem; color:var(--text-secondary); white-space:pre-wrap; line-height:1.6; }
+  .tl-event-footer { margin-top:8px; display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  .entry-badge {
+    padding:2px 8px; border-radius:10px; font-size:0.68rem; font-weight:500;
+    background:rgba(139,127,247,0.12); color:var(--accent);
+    border:1px solid rgba(139,127,247,0.25); cursor:pointer; white-space:nowrap;
+  }
+  .tl-actions { margin-left:auto; display:flex; gap:4px; opacity:0; transition:opacity 0.15s; }
+  .tl-event-card:hover .tl-actions { opacity:1; }
+  .tl-act-btn {
+    background:none; border:1px solid var(--border); border-radius:5px;
+    padding:2px 7px; font-size:0.7rem; color:var(--text-muted); cursor:pointer;
+    transition:all 0.12s;
+  }
+  .tl-act-btn:hover { border-color:var(--accent); color:var(--accent); }
+  .tl-act-btn.danger:hover { border-color:#ff7070; color:#ff7070; }
+
+  /* 틱 그룹 헤더 */
+  .tl-tick-group-label {
+    font-size:0.7rem; text-transform:uppercase; letter-spacing:0.6px;
+    color:var(--text-muted); margin-bottom:0.5rem; margin-top:0.25rem;
+  }
+
+  /* 스토리 아크 패널 */
+  #arcPanel {
+    border-radius:12px; border:1px solid rgba(255,184,108,0.3);
+    background:rgba(255,184,108,0.04); padding:14px 18px; margin-bottom:1rem;
+  }
+  #arcPanel.collapsed #arcBody { display:none; }
+  .arc-toggle-btn {
+    background:none; border:none; color:var(--accent); font-size:0.78rem;
+    cursor:pointer; padding:0; text-decoration:underline;
+  }
+  .beat-row {
+    display:flex; align-items:center; gap:8px; padding:6px 8px; border-radius:8px;
+    border:1px solid var(--border); background:var(--bg-card); margin-bottom:6px;
+    transition:border-color 0.15s;
+  }
+  .beat-row:hover { border-color:rgba(255,184,108,0.5); }
+  .beat-label-badge {
+    padding:2px 8px; border-radius:8px; font-size:0.68rem; font-weight:700;
+    white-space:nowrap; min-width:28px; text-align:center;
+  }
+  .beat-tick-num {
+    font-size:0.72rem; color:var(--text-muted); white-space:nowrap; min-width:40px;
+  }
+  .beat-title { font-size:0.83rem; flex:1; }
+  .beat-fixed-icon { font-size:0.75rem; }
+  .beat-act-btn {
+    background:none; border:1px solid var(--border); border-radius:5px;
+    padding:2px 6px; font-size:0.68rem; color:var(--text-muted); cursor:pointer;
+  }
+  .beat-act-btn:hover { border-color:var(--accent); color:var(--accent); }
+  .beat-act-btn.danger:hover { border-color:#ff7070; color:#ff7070; }
+
+  /* 타임라인 위 비트 오버레이 마커 */
+  .tl-beat-marker {
+    position:absolute; left:-43px; top:12px;
+    width:38px; height:28px; border-radius:6px;
+    display:flex; align-items:center; justify-content:center;
+    font-size:0.6rem; font-weight:700; border:1.5px solid;
+    background:rgba(255,184,108,0.12); border-color:#ffb86c; color:#ffb86c;
+    z-index:2; flex-direction:column; gap:1px;
+  }
+
+  /* 새 에피소드 추가 폼 */
+  #addEventForm {
+    border-radius:10px; border:1px solid var(--border); background:var(--bg-card);
+    padding:14px 16px; margin-bottom:1rem; display:none;
+  }
+
+  /* 빈 상태 */
+  #tlEmpty { text-align:center; color:var(--text-muted); padding:4rem 0; }
+
+  /* 입력 */
+  .form-control, .form-select {
+    background:var(--bg-input) !important; border-color:var(--border) !important;
+    color:var(--text-primary) !important; font-size:0.85rem;
+  }
+  .form-control:focus, .form-select:focus {
+    border-color:var(--accent) !important;
+    box-shadow:0 0 0 2px rgba(139,127,247,0.18) !important;
+  }
+</style>
+
+<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.75rem;">
+  <h5 class="mb-0" style="color:var(--text-primary);">
+    <i class="bi bi-clock-history me-2" style="color:var(--accent);"></i>타임라인
+  </h5>
+  <div class="d-flex gap-2">
+    <button class="btn btn-sm" onclick="openLlmGenModal()"
+      style="border:1px solid rgba(110,234,176,0.5);color:#6eeab0;font-size:0.8rem;">
+      <i class="bi bi-stars me-1"></i>LLM 생성
+    </button>
+    <button class="btn btn-sm btn-primary" onclick="openCreateTimeline()">
+      <i class="bi bi-plus-lg me-1"></i>새 타임라인
+    </button>
+  </div>
+</div>
+
+<div id="tlWrap">
+
+  <!-- ── 왼쪽: 타임라인 목록 ── -->
+  <div id="tlList">
+    <div id="tlListInner">
+      <div class="text-muted small text-center py-4">로딩 중...</div>
+    </div>
+  </div>
+
+  <!-- ── 오른쪽: 타임라인 뷰 ── -->
+  <div id="tlMain">
+
+    <!-- 선택 전 안내 -->
+    <div id="tlSelectHint" style="text-align:center; color:var(--text-muted); padding:5rem 0;">
+      <i class="bi bi-arrow-left display-4 opacity-20 d-block mb-3"></i>
+      <p class="small">왼쪽에서 타임라인을 선택하세요.</p>
+    </div>
+
+    <!-- 타임라인 뷰 -->
+    <div id="tlView" style="display:none; height:100%; display:flex; flex-direction:column;">
+
+      <!-- 헤더 -->
+      <div id="tlHeader">
+        <div style="flex:1; min-width:0;">
+          <div id="tlHeaderName">—</div>
+          <div id="tlHeaderDesc"></div>
+        </div>
+        <div class="d-flex gap-2 align-items-center flex-wrap">
+          <span id="tlEventCount" class="badge" style="background:rgba(139,127,247,0.2);color:var(--accent);font-size:0.75rem;"></span>
+          <button class="btn btn-sm" onclick="openAddEvent()"
+            style="border:1px solid rgba(139,127,247,0.4);color:var(--accent);font-size:0.78rem;padding:4px 10px;">
+            <i class="bi bi-plus-lg me-1"></i>에피소드 추가
+          </button>
+          <button class="btn btn-sm btn-outline-secondary" onclick="openEditTimeline()" style="font-size:0.78rem;padding:4px 10px;">
+            <i class="bi bi-pencil me-1"></i>편집
+          </button>
+          <button class="btn btn-sm" onclick="deleteTimeline()"
+            style="border:1px solid rgba(255,112,112,0.3);color:#ff7070;font-size:0.78rem;padding:4px 10px;">
+            <i class="bi bi-trash me-1"></i>삭제
+          </button>
+        </div>
+      </div>
+
+      <!-- 스토리 아크 패널 -->
+      <div id="arcPanel" class="collapsed">
+        <div class="d-flex align-items-center gap-2 mb-2">
+          <span style="font-size:0.82rem; font-weight:700; color:#ffb86c;">
+            <i class="bi bi-map me-1"></i>스토리 아크
+          </span>
+          <span id="arcBeatCount" class="badge" style="background:rgba(255,184,108,0.2);color:#ffb86c;font-size:0.7rem;"></span>
+          <button class="arc-toggle-btn ms-1" onclick="toggleArcPanel()" id="arcToggleBtn">펼치기</button>
+          <button class="btn btn-sm ms-auto" onclick="openArcGoalEdit()"
+            style="border:1px solid rgba(255,184,108,0.4);color:#ffb86c;font-size:0.75rem;padding:2px 8px;">
+            <i class="bi bi-pencil me-1"></i>서사 목표 편집
+          </button>
+          <button class="btn btn-sm" onclick="openAddBeat()"
+            style="border:1px solid rgba(255,184,108,0.4);color:#ffb86c;font-size:0.75rem;padding:2px 8px;">
+            <i class="bi bi-plus-lg me-1"></i>비트 추가
+          </button>
+        </div>
+        <div id="arcGoalPreview" style="font-size:0.78rem;color:var(--text-secondary);margin-bottom:6px;display:none;"></div>
+        <div id="arcBody">
+          <div id="beatList"></div>
+        </div>
+      </div>
+
+      <!-- 에피소드 추가 폼 -->
+      <div id="addEventForm">
+        <div class="row g-2 mb-2">
+          <div class="col-3">
+            <label class="form-label" style="font-size:0.75rem;">틱 번호</label>
+            <input type="number" class="form-control form-control-sm" id="addTick" min="0" value="0">
+          </div>
+          <div class="col-9">
+            <label class="form-label" style="font-size:0.75rem;">에피소드 제목 <span style="color:#ff7070;">*</span></label>
+            <input type="text" class="form-control form-control-sm" id="addTitle" placeholder="제목을 입력하세요">
+          </div>
+        </div>
+        <div class="mb-2">
+          <div class="d-flex justify-content-between align-items-center mb-1">
+            <label class="form-label mb-0" style="font-size:0.75rem;">설명</label>
+            <button type="button" class="fse-btn" onclick="openFse('addDesc','에피소드 설명')"><i class="bi bi-arrows-fullscreen"></i></button>
+          </div>
+          <textarea class="form-control form-control-sm" id="addDesc" rows="3" placeholder="이 에피소드에 대한 설명..."></textarea>
+        </div>
+        <div class="d-flex gap-2 justify-content-end">
+          <button class="btn btn-sm btn-outline-secondary" onclick="closeAddEvent()">취소</button>
+          <button class="btn btn-sm btn-primary" onclick="submitAddEvent()">
+            <i class="bi bi-check-lg me-1"></i>추가
+          </button>
+        </div>
+      </div>
+
+      <!-- 타임라인 바디 -->
+      <div id="tlBody">
+        <div id="tlEmpty" style="display:none;">
+          <i class="bi bi-hourglass display-4 opacity-20 d-block mb-3"></i>
+          <p class="small">에피소드가 없습니다.<br>시뮬레이션 실행 시 자동으로 기록되거나<br>[에피소드 추가]로 직접 입력하세요.</p>
+        </div>
+        <div id="tlEventsList" class="tl-events"></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── 타임라인 생성/편집 모달 ── -->
+<div class="modal fade" id="tlModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="tlModalTitle">새 타임라인</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label small">이름 <span style="color:#ff7070;">*</span></label>
+          <input type="text" class="form-control" id="tlModalName" placeholder="타임라인 이름">
+        </div>
+        <div class="mb-3">
+          <div class="d-flex justify-content-between align-items-center mb-1">
+            <label class="form-label small mb-0">설명</label>
+            <button type="button" class="fse-btn" onclick="openFse('tlModalDesc','타임라인 설명')"><i class="bi bi-arrows-fullscreen"></i></button>
+          </div>
+          <textarea class="form-control" id="tlModalDesc" rows="2" placeholder="이 타임라인에 대한 설명..."></textarea>
+        </div>
+        <div class="mb-1">
+          <div class="d-flex justify-content-between align-items-center mb-1">
+            <label class="form-label small mb-0" style="color:#ffb86c;">
+              <i class="bi bi-map me-1"></i>서사 목표 (큰 이슈)
+            </label>
+            <button type="button" class="fse-btn" onclick="openFse('tlModalGoal','서사 목표 / 큰 이슈')"><i class="bi bi-arrows-fullscreen"></i></button>
+          </div>
+          <textarea class="form-control" id="tlModalGoal" rows="3"
+            placeholder="예: 대륙 통일 전쟁의 발발과 종결, 마왕의 부활과 영웅의 대항...&#10;이 목표를 달성하는 방향으로 시뮬레이션이 진행됩니다."></textarea>
+          <div class="form-text" style="color:var(--text-muted);">시뮬레이션 실행 시 LLM에게 제공되는 전체 서사 방향입니다.</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">취소</button>
+        <button class="btn btn-primary" onclick="saveTimeline()">
+          <i class="bi bi-check-lg me-1"></i>저장
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── 에피소드 편집 모달 ── -->
+<div class="modal fade" id="editEventModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">에피소드 편집</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="editEvId">
+        <div class="mb-3">
+          <label class="form-label small">틱 번호</label>
+          <input type="number" class="form-control form-control-sm" id="editEvTick" min="0">
+        </div>
+        <div class="mb-3">
+          <label class="form-label small">제목</label>
+          <input type="text" class="form-control form-control-sm" id="editEvTitle">
+        </div>
+        <div class="mb-1">
+          <div class="d-flex justify-content-between align-items-center mb-1">
+            <label class="form-label small mb-0">설명</label>
+            <button type="button" class="fse-btn" onclick="openFse('editEvDesc','에피소드 설명')"><i class="bi bi-arrows-fullscreen"></i></button>
+          </div>
+          <textarea class="form-control form-control-sm" id="editEvDesc" rows="5"></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">취소</button>
+        <button class="btn btn-primary" onclick="saveEditEvent()">저장</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── LLM 타임라인 생성 모달 ── -->
+<div class="modal fade" id="llmGenModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" style="color:#6eeab0;">
+          <i class="bi bi-stars me-2"></i>LLM 타임라인 자동 생성
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label small">메인 엔트리 <span style="color:#ff7070;">*</span></label>
+          <select class="form-select" id="llmGenEntry">
+            <option value="">— 엔트리 선택 —</option>
+          </select>
+          <div class="form-text">이 엔트리를 중심으로 타임라인이 생성됩니다.</div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label small">에피소드 수</label>
+          <input type="number" class="form-control" id="llmGenCount" value="5" min="2" max="15">
+        </div>
+        <div class="mb-3">
+          <label class="form-label small">타임라인 이름 (비우면 LLM이 자동 생성)</label>
+          <input type="text" class="form-control" id="llmGenName" placeholder="예: 아르곤 왕국의 흥망성쇠">
+        </div>
+        <div class="mb-1">
+          <div class="d-flex justify-content-between align-items-center mb-1">
+            <label class="form-label small mb-0">추가 지시 프롬프트</label>
+            <button type="button" class="fse-btn" onclick="openFse('llmGenPrompt','추가 지시 프롬프트')"><i class="bi bi-arrows-fullscreen"></i></button>
+          </div>
+          <textarea class="form-control" id="llmGenPrompt" rows="3"
+            placeholder="예: 이 인물의 성장 과정을 중심으로, 비극적인 결말로 끝나게 해줘&#10;예: 전쟁 전후 5단계로 구성하고 각 단계를 상세하게&#10;비워두면 LLM이 알아서 구성합니다."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">취소</button>
+        <button class="btn btn-primary" id="llmGenBtn" onclick="runLlmGenerate()"
+          style="background:#6eeab0;border-color:#6eeab0;color:#111;">
+          <i class="bi bi-stars me-1"></i>생성하기
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── 비트 추가/편집 모달 ── -->
+<div class="modal fade" id="beatModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="beatModalTitle" style="color:#ffb86c;">
+          <i class="bi bi-map me-2"></i>스토리 비트 추가
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="beatEditId">
+        <div class="row g-2 mb-3">
+          <div class="col-4">
+            <label class="form-label small">틱 번호 <span style="color:#ff7070;">*</span></label>
+            <input type="number" class="form-control form-control-sm" id="beatTick" min="1" value="1">
+          </div>
+          <div class="col-4">
+            <label class="form-label small">라벨</label>
+            <select class="form-select form-select-sm" id="beatLabel">
+              <option value="">직접 입력</option>
+              <option value="기">기 (시작)</option>
+              <option value="승">승 (전개)</option>
+              <option value="전">전 (전환)</option>
+              <option value="결">결 (결말)</option>
+              <option value="복선">복선</option>
+              <option value="위기">위기</option>
+              <option value="절정">절정</option>
+            </select>
+          </div>
+          <div class="col-4">
+            <label class="form-label small">유형</label>
+            <select class="form-select form-select-sm" id="beatFixed">
+              <option value="true">📌 고정 (유저 지정)</option>
+              <option value="false">✨ AI 자유 해석</option>
+            </select>
+          </div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label small">비트 제목 <span style="color:#ff7070;">*</span></label>
+          <input type="text" class="form-control form-control-sm" id="beatTitle"
+            placeholder="예: 왕국 간 전쟁 선포, 주인공의 각성, 최종 결전 시작...">
+        </div>
+        <div class="mb-1">
+          <div class="d-flex justify-content-between align-items-center mb-1">
+            <label class="form-label small mb-0">상세 설명 (선택)</label>
+            <button type="button" class="fse-btn" onclick="openFse('beatDesc','스토리 비트 상세 설명')"><i class="bi bi-arrows-fullscreen"></i></button>
+          </div>
+          <textarea class="form-control form-control-sm" id="beatDesc" rows="3"
+            placeholder="이 비트에서 반드시 일어나야 할 사건의 상세 내용...&#10;비워두면 LLM이 아크 방향에 맞춰 자유롭게 채웁니다."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">취소</button>
+        <button class="btn btn-primary" onclick="saveBeat()" style="background:#ffb86c;border-color:#ffb86c;color:#111;">
+          <i class="bi bi-check-lg me-1"></i>저장
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── 서사 목표 편집 모달 ── -->
+<div class="modal fade" id="arcGoalModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" style="color:#ffb86c;"><i class="bi bi-map me-2"></i>서사 목표 편집</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="d-flex justify-content-between align-items-center mb-1">
+          <label class="form-label small mb-0">큰 이슈 / 전체 서사 목표</label>
+          <button type="button" class="fse-btn" onclick="openFse('arcGoalText','서사 목표')"><i class="bi bi-arrows-fullscreen"></i></button>
+        </div>
+        <textarea class="form-control" id="arcGoalText" rows="5"
+          placeholder="예: 대륙 통일 전쟁의 발발과 종결, 마왕의 부활과 영웅의 대항...&#10;이 목표를 달성하는 방향으로 시뮬레이션이 진행됩니다."></textarea>
+        <div class="form-text" style="color:var(--text-muted);">시뮬레이션 매 틱마다 LLM에게 전달되는 전체 서사 방향입니다.</div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">취소</button>
+        <button class="btn btn-primary" onclick="saveArcGoal()" style="background:#ffb86c;border-color:#ffb86c;color:#111;">
+          <i class="bi bi-check-lg me-1"></i>저장
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const CAT_COLORS = {
+  '세력':'#ff7070','인물':'#6aadff','관념':'#b07aff',
+  '물건':'#ffb86c','종족':'#6eeab0','사건':'#ffe96a',
+};
+
+let timelines = [];
+let currentTl = null;
+let tlModal, editEventModal, beatModal, arcGoalModal, llmGenModal;
+let _entryMap = {};   // id → entry (for badges)
+let _allEntries = []; // for LLM gen modal select
+
+document.addEventListener('DOMContentLoaded', async () => {
+  tlModal = new bootstrap.Modal(document.getElementById('tlModal'));
+  editEventModal = new bootstrap.Modal(document.getElementById('editEventModal'));
+  beatModal = new bootstrap.Modal(document.getElementById('beatModal'));
+  arcGoalModal = new bootstrap.Modal(document.getElementById('arcGoalModal'));
+  llmGenModal = new bootstrap.Modal(document.getElementById('llmGenModal'));
+  // 엔트리 목록 로드 (배지용)
+  const er = await fetch('/api/entries?active=true');
+  _allEntries = await er.json();
+  _entryMap = Object.fromEntries(_allEntries.map(e => [e.id, e]));
+  await loadTimelines();
+});
+
+// ── 타임라인 목록 ────────────────────────────────────────
+async function loadTimelines() {
+  const res = await fetch('/api/timelines');
+  timelines = await res.json();
+  renderList();
+  if (currentTl) {
+    const still = timelines.find(t => t.id === currentTl.id);
+    if (still) await selectTimeline(still.id);
+    else { currentTl = null; showSelectHint(); }
+  }
+}
+
+function renderList() {
+  const el = document.getElementById('tlListInner');
+  if (timelines.length === 0) {
+    el.innerHTML = '<div class="text-muted small text-center py-4">타임라인이 없습니다.<br>위 버튼으로 생성하세요.</div>';
+    return;
+  }
+  el.innerHTML = timelines.map(t => {
+    const entryBadge = t.main_entry_id && _entryMap[t.main_entry_id]
+      ? `<span style="font-size:0.65rem;background:rgba(110,234,176,0.12);color:#6eeab0;border:1px solid rgba(110,234,176,0.25);border-radius:6px;padding:1px 6px;margin-left:4px;">
+          ${escHtml(_entryMap[t.main_entry_id].title)}</span>`
+      : '';
+    return `
+    <div class="tl-item ${currentTl && currentTl.id === t.id ? 'active' : ''}" onclick="selectTimeline(${t.id})">
+      <div class="tl-item-name">${escHtml(t.name)}${entryBadge}</div>
+      <div class="tl-item-meta">에피소드 ${t.event_count}개 · ${fmtDate(t.created_at)}</div>
+    </div>`;
+  }).join('');
+}
+
+async function selectTimeline(id) {
+  const res = await fetch(`/api/timelines/${id}`);
+  currentTl = await res.json();
+  renderList();
+  renderTimeline();
+  document.getElementById('tlSelectHint').style.display = 'none';
+  document.getElementById('tlView').style.display = 'flex';
+}
+
+function showSelectHint() {
+  document.getElementById('tlSelectHint').style.display = 'block';
+  document.getElementById('tlView').style.display = 'none';
+}
+
+// ── 타임라인 렌더 ────────────────────────────────────────
+function renderTimeline() {
+  if (!currentTl) return;
+  document.getElementById('tlHeaderName').textContent = currentTl.name;
+  // 메인 엔트리 배지
+  const mainEntry = currentTl.main_entry_id && _entryMap[currentTl.main_entry_id];
+  document.getElementById('tlHeaderDesc').innerHTML =
+    (mainEntry ? `<span style="font-size:0.72rem;background:rgba(110,234,176,0.12);color:#6eeab0;border:1px solid rgba(110,234,176,0.3);border-radius:6px;padding:1px 8px;margin-right:6px;">
+      <i class="bi bi-link-45deg"></i> ${escHtml(mainEntry.title)}</span>` : '') +
+    escHtml(currentTl.description || '');
+  document.getElementById('tlEventCount').textContent = `${currentTl.event_count}개 에피소드`;
+
+  renderArcPanel();
+
+  const events = currentTl.events || [];
+  const empty = document.getElementById('tlEmpty');
+  const list = document.getElementById('tlEventsList');
+
+  if (events.length === 0) {
+    empty.style.display = 'block';
+    list.innerHTML = '';
+    return;
+  }
+  empty.style.display = 'none';
+
+  // 틱별 그룹핑
+  const byTick = {};
+  events.forEach(ev => {
+    const k = ev.tick_number;
+    if (!byTick[k]) byTick[k] = [];
+    byTick[k].push(ev);
+  });
+
+  // 비트맵: 틱 → 비트
+  const beatMap = {};
+  (currentTl.beats || []).forEach(b => {
+    if (!beatMap[b.tick_number]) beatMap[b.tick_number] = [];
+    beatMap[b.tick_number].push(b);
+  });
+
+  const ticks = Object.keys(byTick).map(Number).sort((a,b) => a-b);
+  list.innerHTML = ticks.map(tick => {
+    const tickEvents = byTick[tick];
+    const tickBeats = beatMap[tick] || [];
+    return tickEvents.map((ev, idx) => renderEvent(ev, tick, idx === 0, tickBeats)).join('');
+  }).join('');
+}
+
+// ── 스토리 아크 패널 렌더 ────────────────────────────────
+function renderArcPanel() {
+  const beats = currentTl.beats || [];
+  const goal = currentTl.narrative_goal || '';
+  const countEl = document.getElementById('arcBeatCount');
+  countEl.textContent = beats.length > 0 ? `비트 ${beats.length}개` : '비트 없음';
+
+  const goalEl = document.getElementById('arcGoalPreview');
+  if (goal) {
+    goalEl.style.display = 'block';
+    goalEl.innerHTML = `<i class="bi bi-bullseye me-1" style="color:#ffb86c;"></i><strong>서사 목표:</strong> ${escHtml(goal)}`;
+  } else {
+    goalEl.style.display = 'none';
+  }
+
+  const BEAT_COLORS = {
+    '기': '#6eeab0', '승': '#6aadff', '전': '#ffb86c', '결': '#ff7070',
+    '복선': '#b07aff', '위기': '#ff9f7a', '절정': '#ffe96a',
+  };
+
+  const list = document.getElementById('beatList');
+  if (beats.length === 0) {
+    list.innerHTML = '<div style="font-size:0.78rem;color:var(--text-muted);text-align:center;padding:8px 0;">비트가 없습니다. [비트 추가]로 기-승-전-결을 설정하세요.</div>';
+    return;
+  }
+
+  list.innerHTML = beats.map(b => {
+    const col = BEAT_COLORS[b.beat_label] || '#8892a4';
+    const fixedIcon = b.is_fixed ? '📌' : '✨';
+    const fixedTitle = b.is_fixed ? '고정 비트 (유저 지정)' : 'AI 자유 해석 비트';
+    return `
+      <div class="beat-row" id="beat-${b.id}">
+        <span class="beat-tick-num">틱 ${b.tick_number}</span>
+        ${b.beat_label
+          ? `<span class="beat-label-badge" style="background:${col}18;color:${col};border:1px solid ${col}33;">${b.beat_label}</span>`
+          : '<span style="width:28px;"></span>'}
+        <span class="beat-title">${escHtml(b.title)}</span>
+        <span class="beat-fixed-icon" title="${fixedTitle}">${fixedIcon}</span>
+        ${b.description ? `<span title="${escHtml(b.description)}" style="font-size:0.72rem;color:var(--text-muted);cursor:help;"><i class="bi bi-info-circle"></i></span>` : ''}
+        <button class="beat-act-btn" onclick="openEditBeat(${b.id})"><i class="bi bi-pencil"></i></button>
+        <button class="beat-act-btn danger" onclick="deleteBeat(${b.id})"><i class="bi bi-trash"></i></button>
+      </div>`;
+  }).join('');
+}
+
+function toggleArcPanel() {
+  const panel = document.getElementById('arcPanel');
+  const btn = document.getElementById('arcToggleBtn');
+  const collapsed = panel.classList.toggle('collapsed');
+  btn.textContent = collapsed ? '펼치기' : '접기';
+}
+
+function renderEvent(ev, tick, showTick, tickBeats) {
+  const isAuto = ev.event_type === 'auto';
+  const markerClass = isAuto ? 'auto' : 'user';
+  const markerLabel = tick === 0 ? '사용자' : `틱<br>${tick}`;
+  const markerTitle = isAuto ? `자동 기록 (틱 ${tick})` : `수동 추가 (틱 ${tick})`;
+
+  // 비트 마커
+  const BEAT_COLORS = {
+    '기': '#6eeab0', '승': '#6aadff', '전': '#ffb86c', '결': '#ff7070',
+    '복선': '#b07aff', '위기': '#ff9f7a', '절정': '#ffe96a',
+  };
+  let beatMarkerHtml = '';
+  if (showTick && tickBeats && tickBeats.length > 0) {
+    const b = tickBeats[0];
+    const col = BEAT_COLORS[b.beat_label] || '#ffb86c';
+    const label = b.beat_label || '비트';
+    const fixedIcon = b.is_fixed ? '📌' : '✨';
+    beatMarkerHtml = `<div class="tl-beat-marker" style="background:${col}18;border-color:${col};color:${col};"
+      title="${escHtml(b.title)}\n(${b.is_fixed ? '고정' : 'AI 자유'})">
+      ${fixedIcon}<span>${escHtml(label)}</span>
+    </div>`;
+  }
+
+  const entryBadges = (ev.affected_entries || []).map(e => {
+    const col = CAT_COLORS[e.category] || '#8892a4';
+    return `<span class="entry-badge" style="background:${col}18;color:${col};border-color:${col}33;"
+      title="${e.category}">${escHtml(e.title)}</span>`;
+  }).join('');
+
+  const desc = ev.description
+    ? `<div class="tl-event-desc mt-2" style="display:none;">${escHtml(ev.description)}</div>` : '';
+  const toggleDesc = ev.description
+    ? `<button class="tl-act-btn" onclick="toggleDesc(this)" title="설명 펼치기">
+        <i class="bi bi-chevron-down"></i></button>` : '';
+
+  return `
+    <div class="tl-event" id="ev-${ev.id}">
+      ${showTick ? `${beatMarkerHtml}<div class="tl-tick-marker ${markerClass}" title="${markerTitle}" style="${beatMarkerHtml ? 'margin-top:34px;' : ''}">
+        ${markerLabel}
+      </div>` : `<div class="tl-tick-marker ${markerClass}" style="opacity:0;pointer-events:none;">${markerLabel}</div>`}
+      <div class="tl-event-card">
+        <div class="d-flex align-items-start gap-2">
+          <div class="tl-event-title flex-grow-1">${escHtml(ev.title)}</div>
+          <div class="tl-actions">
+            ${toggleDesc}
+            <button class="tl-act-btn" onclick="openEditEvent(${ev.id})" title="편집">
+              <i class="bi bi-pencil"></i></button>
+            <button class="tl-act-btn danger" onclick="deleteEvent(${ev.id})" title="삭제">
+              <i class="bi bi-trash"></i></button>
+          </div>
+        </div>
+        ${desc}
+        ${entryBadges ? `<div class="tl-event-footer">${entryBadges}</div>` : ''}
+      </div>
+    </div>`;
+}
+
+function toggleDesc(btn) {
+  const desc = btn.closest('.tl-event-card').querySelector('.tl-event-desc');
+  if (!desc) return;
+  const visible = desc.style.display !== 'none';
+  desc.style.display = visible ? 'none' : 'block';
+  btn.innerHTML = visible ? '<i class="bi bi-chevron-down"></i>' : '<i class="bi bi-chevron-up"></i>';
+}
+
+// ── 서사 목표 편집 ────────────────────────────────────────
+function openArcGoalEdit() {
+  if (!currentTl) return;
+  document.getElementById('arcGoalText').value = currentTl.narrative_goal || '';
+  arcGoalModal.show();
+}
+
+async function saveArcGoal() {
+  if (!currentTl) return;
+  const goal = document.getElementById('arcGoalText').value.trim();
+  const res = await fetch(`/api/timelines/${currentTl.id}`, {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ narrative_goal: goal }),
+  });
+  if (res.ok) {
+    arcGoalModal.hide();
+    await selectTimeline(currentTl.id);
+  } else {
+    alert('저장 실패');
+  }
+}
+
+// ── 스토리 비트 CRUD ────────────────────────────────────
+function openAddBeat() {
+  if (!currentTl) return;
+  document.getElementById('beatModalTitle').textContent = '스토리 비트 추가';
+  document.getElementById('beatEditId').value = '';
+  document.getElementById('beatTick').value = 1;
+  document.getElementById('beatLabel').value = '';
+  document.getElementById('beatFixed').value = 'true';
+  document.getElementById('beatTitle').value = '';
+  document.getElementById('beatDesc').value = '';
+  beatModal.show();
+}
+
+function openEditBeat(beatId) {
+  if (!currentTl) return;
+  const beat = (currentTl.beats || []).find(b => b.id === beatId);
+  if (!beat) return;
+  document.getElementById('beatModalTitle').textContent = '스토리 비트 편집';
+  document.getElementById('beatEditId').value = beatId;
+  document.getElementById('beatTick').value = beat.tick_number;
+  document.getElementById('beatLabel').value = beat.beat_label || '';
+  document.getElementById('beatFixed').value = beat.is_fixed ? 'true' : 'false';
+  document.getElementById('beatTitle').value = beat.title;
+  document.getElementById('beatDesc').value = beat.description || '';
+  beatModal.show();
+}
+
+async function saveBeat() {
+  const title = document.getElementById('beatTitle').value.trim();
+  if (!title) { alert('비트 제목을 입력하세요.'); return; }
+  const editId = document.getElementById('beatEditId').value;
+  const body = {
+    tick_number: parseInt(document.getElementById('beatTick').value) || 1,
+    beat_label: document.getElementById('beatLabel').value,
+    is_fixed: document.getElementById('beatFixed').value === 'true',
+    title,
+    description: document.getElementById('beatDesc').value.trim(),
+  };
+  let res;
+  if (editId) {
+    res = await fetch(`/api/story-beats/${editId}`, {
+      method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
+    });
+  } else {
+    res = await fetch(`/api/timelines/${currentTl.id}/beats`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
+    });
+  }
+  if (res.ok) {
+    beatModal.hide();
+    await selectTimeline(currentTl.id);
+    // 패널 자동 펼치기
+    const panel = document.getElementById('arcPanel');
+    if (panel.classList.contains('collapsed')) toggleArcPanel();
+  } else {
+    alert('저장 실패');
+  }
+}
+
+async function deleteBeat(beatId) {
+  if (!confirm('이 비트를 삭제하시겠습니까?')) return;
+  const res = await fetch(`/api/story-beats/${beatId}`, { method: 'DELETE' });
+  if (res.ok) await selectTimeline(currentTl.id);
+}
+
+// ── CRUD ────────────────────────────────────────────────
+function openCreateTimeline() {
+  document.getElementById('tlModalTitle').textContent = '새 타임라인';
+  document.getElementById('tlModalName').value = '';
+  document.getElementById('tlModalDesc').value = '';
+  document.getElementById('tlModalGoal').value = '';
+  tlModal._editId = null;
+  tlModal.show();
+}
+
+function openEditTimeline() {
+  if (!currentTl) return;
+  document.getElementById('tlModalTitle').textContent = '타임라인 편집';
+  document.getElementById('tlModalName').value = currentTl.name;
+  document.getElementById('tlModalDesc').value = currentTl.description || '';
+  document.getElementById('tlModalGoal').value = currentTl.narrative_goal || '';
+  tlModal._editId = currentTl.id;
+  tlModal.show();
+}
+
+async function saveTimeline() {
+  const name = document.getElementById('tlModalName').value.trim();
+  if (!name) { alert('이름을 입력하세요.'); return; }
+  const body = {
+    name,
+    description: document.getElementById('tlModalDesc').value.trim(),
+    narrative_goal: document.getElementById('tlModalGoal').value.trim(),
+  };
+  const editId = tlModal._editId;
+  const url = editId ? `/api/timelines/${editId}` : '/api/timelines';
+  const method = editId ? 'PUT' : 'POST';
+  const res = await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  if (res.ok) {
+    tlModal.hide();
+    await loadTimelines();
+    if (!editId) {
+      const tl = await res.json();
+      await selectTimeline(tl.id);
+    } else {
+      await selectTimeline(editId);
+    }
+  } else {
+    alert('저장 실패');
+  }
+}
+
+async function deleteTimeline() {
+  if (!currentTl || !confirm(`"${currentTl.name}" 타임라인을 삭제하시겠습니까?\n모든 에피소드가 함께 삭제됩니다.`)) return;
+  await fetch(`/api/timelines/${currentTl.id}`, { method: 'DELETE' });
+  currentTl = null;
+  await loadTimelines();
+  showSelectHint();
+}
+
+// ── 에피소드 추가 ────────────────────────────────────────
+function openAddEvent() {
+  const form = document.getElementById('addEventForm');
+  form.style.display = form.style.display === 'none' ? 'block' : 'none';
+  if (form.style.display === 'block') {
+    document.getElementById('addTitle').focus();
+  }
+}
+function closeAddEvent() {
+  document.getElementById('addEventForm').style.display = 'none';
+  document.getElementById('addTitle').value = '';
+  document.getElementById('addDesc').value = '';
+}
+async function submitAddEvent() {
+  const title = document.getElementById('addTitle').value.trim();
+  if (!title) { alert('제목을 입력하세요.'); return; }
+  const body = {
+    title,
+    description: document.getElementById('addDesc').value.trim(),
+    tick_number: parseInt(document.getElementById('addTick').value) || 0,
+  };
+  const res = await fetch(`/api/timelines/${currentTl.id}/events`, {
+    method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body),
+  });
+  if (res.ok) {
+    closeAddEvent();
+    await selectTimeline(currentTl.id);
+  } else {
+    alert('추가 실패');
+  }
+}
+
+// ── 에피소드 편집/삭제 ────────────────────────────────────
+function openEditEvent(evId) {
+  const ev = (currentTl.events || []).find(e => e.id === evId);
+  if (!ev) return;
+  document.getElementById('editEvId').value = evId;
+  document.getElementById('editEvTick').value = ev.tick_number;
+  document.getElementById('editEvTitle').value = ev.title;
+  document.getElementById('editEvDesc').value = ev.description || '';
+  editEventModal.show();
+}
+async function saveEditEvent() {
+  const id = parseInt(document.getElementById('editEvId').value);
+  const body = {
+    tick_number: parseInt(document.getElementById('editEvTick').value) || 0,
+    title: document.getElementById('editEvTitle').value.trim(),
+    description: document.getElementById('editEvDesc').value.trim(),
+  };
+  if (!body.title) { alert('제목을 입력하세요.'); return; }
+  const res = await fetch(`/api/timeline-events/${id}`, {
+    method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body),
+  });
+  if (res.ok) {
+    editEventModal.hide();
+    await selectTimeline(currentTl.id);
+  } else {
+    alert('저장 실패');
+  }
+}
+async function deleteEvent(evId) {
+  if (!confirm('이 에피소드를 삭제하시겠습니까?')) return;
+  const res = await fetch(`/api/timeline-events/${evId}`, { method: 'DELETE' });
+  if (res.ok) await selectTimeline(currentTl.id);
+}
+
+// ── LLM 타임라인 생성 ─────────────────────────────────────
+function openLlmGenModal() {
+  // 엔트리 select 채우기
+  const sel = document.getElementById('llmGenEntry');
+  const CAT_ORDER = ['세력','인물','관념','물건','종족','사건'];
+  const grouped = {};
+  _allEntries.forEach(e => { (grouped[e.category] = grouped[e.category]||[]).push(e); });
+  sel.innerHTML = '<option value="">— 엔트리 선택 —</option>';
+  CAT_ORDER.forEach(cat => {
+    if (!grouped[cat]) return;
+    const og = document.createElement('optgroup');
+    og.label = cat;
+    grouped[cat].forEach(e => {
+      const opt = document.createElement('option');
+      opt.value = e.id;
+      opt.textContent = e.title;
+      og.appendChild(opt);
+    });
+    sel.appendChild(og);
+  });
+  document.getElementById('llmGenName').value = '';
+  document.getElementById('llmGenPrompt').value = '';
+  document.getElementById('llmGenCount').value = 5;
+  llmGenModal.show();
+}
+
+async function runLlmGenerate() {
+  const entryId = parseInt(document.getElementById('llmGenEntry').value);
+  if (!entryId) { alert('엔트리를 선택하세요.'); return; }
+
+  const btn = document.getElementById('llmGenBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>생성 중...';
+
+  try {
+    const res = await fetch('/api/timelines/generate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        entry_id: entryId,
+        episode_count: parseInt(document.getElementById('llmGenCount').value) || 5,
+        timeline_name: document.getElementById('llmGenName').value.trim(),
+        extra_prompt: document.getElementById('llmGenPrompt').value.trim(),
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) { alert('생성 실패: ' + (data.error || '')); return; }
+
+    llmGenModal.hide();
+    await loadTimelines();
+    await selectTimeline(data.timeline.id);
+  } catch(e) {
+    alert('오류: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-stars me-1"></i>생성하기';
+  }
+}
+
+// ── 유틸 ────────────────────────────────────────────────
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function fmtDate(iso) {
+  if (!iso) return '';
+  return new Date(iso).toLocaleDateString('ko-KR', { month:'short', day:'numeric' });
+}
+</script>
+{% endblock %}

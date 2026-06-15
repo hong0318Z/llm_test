@@ -1,0 +1,230 @@
+{% extends "base.html" %}
+{% block title %}LLM 프롬프트 설정{% endblock %}
+
+{% block extra_head %}
+<style>
+  .prompt-card { margin-bottom: 24px; }
+  .prompt-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 6px;
+  }
+  .prompt-label { font-weight: 700; font-size: 1rem; color: var(--text-primary); }
+  .prompt-desc  { font-size: 0.8rem; color: var(--text-muted); margin-bottom: 8px; }
+  .prompt-meta  { font-size: 0.75rem; color: var(--text-muted); margin-top: 4px; }
+  .modified-badge {
+    font-size: 0.7rem; background: rgba(255,184,108,0.18); color: #ffb86c;
+    border-radius: 10px; padding: 2px 9px; font-weight: 600;
+  }
+  .placeholder-hint {
+    font-size: 0.78rem; color: var(--accent); background: rgba(139,127,247,0.08);
+    border: 1px solid rgba(139,127,247,0.2); border-radius: 6px;
+    padding: 6px 12px; margin-bottom: 8px; line-height: 1.6;
+  }
+  .prompt-textarea {
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 0.82rem;
+    min-height: 260px;
+    resize: vertical;
+    line-height: 1.55;
+  }
+  .btn-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+  .save-indicator {
+    font-size: 0.78rem; color: #6eeab0;
+    opacity: 0; transition: opacity 0.4s;
+  }
+  .save-indicator.show { opacity: 1; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row g-0 mb-4 align-items-center">
+  <div class="col">
+    <h4 class="mb-1" style="font-weight:800;"><i class="bi bi-braces me-2" style="color:var(--accent);"></i>LLM 마스터 프롬프트 설정</h4>
+    <p class="mb-0" style="color:var(--text-secondary); font-size:0.88rem;">
+      시뮬레이션·타임라인 생성에 사용되는 LLM 프롬프트를 직접 편집합니다.
+      변경사항은 즉시 저장되며 다음 실행부터 반영됩니다.
+    </p>
+  </div>
+  <div class="col-auto">
+    <button class="btn btn-outline-danger btn-sm" onclick="resetAllPrompts()">
+      <i class="bi bi-arrow-counterclockwise me-1"></i>전체 기본값 복원
+    </button>
+  </div>
+</div>
+
+<div id="promptList">
+  <div class="text-center py-5" style="color:var(--text-muted);">
+    <div class="spinner-border spinner-border-sm me-2"></div>불러오는 중...
+  </div>
+</div>
+
+<!-- 기본값 미리보기 모달 -->
+<div class="modal fade" id="defaultModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-file-text me-2"></i>기본값 미리보기</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-0">
+        <pre id="defaultModalContent" class="m-0 p-3"
+             style="background:var(--bg-input); font-size:0.8rem; max-height:70vh; overflow-y:auto; white-space:pre-wrap;"></pre>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">닫기</button>
+        <button class="btn btn-warning" id="defaultModalApplyBtn" onclick="applyDefault()">
+          <i class="bi bi-arrow-counterclockwise me-1"></i>이 프롬프트에 적용
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let _prompts = [];
+let _defaultModal;
+let _currentDefaultKey = null;
+
+document.addEventListener('DOMContentLoaded', async () => {
+  _defaultModal = new bootstrap.Modal(document.getElementById('defaultModal'));
+  await loadPrompts();
+});
+
+async function loadPrompts() {
+  const res = await fetch('/api/prompts?defaults=true');
+  _prompts = await res.json();
+  renderPrompts();
+}
+
+const PLACEHOLDER_HINTS = {
+  simulation_system: '{prompt_level_1} {prompt_level_2} {prompt_level_3}',
+  simulation_user:   '{tick_number} {world_state} {story_beat_section}',
+  summary:           '{world_state} {tick_number}',
+  timeline_generate: '{category} {title} {content} {world_state} {extra_prompt}',
+  nai_base_positive: '(고정 태그 — 플레이스홀더 없음)',
+  nai_base_negative: '(고정 태그 — 플레이스홀더 없음)',
+  nai_auto_generator: '{category} {title} {content} {keywords}',
+};
+
+function renderPrompts() {
+  const container = document.getElementById('promptList');
+  container.innerHTML = _prompts.map(p => `
+    <div class="card prompt-card" id="card-${p.key}">
+      <div class="card-body p-4">
+        <div class="prompt-header">
+          <div class="d-flex align-items-center gap-2">
+            <span class="prompt-label">${escH(p.label)}</span>
+            ${p.is_modified ? '<span class="modified-badge">수정됨</span>' : ''}
+          </div>
+          <div class="d-flex gap-2">
+            <button class="btn btn-sm btn-outline-secondary" onclick="showDefault('${p.key}')" title="기본값 보기">
+              <i class="bi bi-file-text me-1"></i>기본값
+            </button>
+            <button class="btn btn-sm btn-outline-warning" onclick="resetPrompt('${p.key}')" title="기본값으로 복원">
+              <i class="bi bi-arrow-counterclockwise"></i>
+            </button>
+          </div>
+        </div>
+        <p class="prompt-desc">${escH(p.description)}</p>
+        <div class="placeholder-hint">
+          <i class="bi bi-braces me-1"></i>사용 가능한 플레이스홀더:
+          <strong>${(PLACEHOLDER_HINTS[p.key] || '').split(' ').map(ph => `<code>${ph}</code>`).join(' ')}</strong>
+        </div>
+        <div class="d-flex justify-content-between align-items-center mb-1">
+          <span style="font-size:0.72rem; color:var(--text-muted);">프롬프트 내용</span>
+          <button type="button" class="fse-btn" onclick="openFse('ta-${p.key}', '${escH(p.label)}')"><i class="bi bi-arrows-fullscreen"></i></button>
+        </div>
+        <textarea class="form-control prompt-textarea" id="ta-${p.key}">${escH(p.content)}</textarea>
+        <div class="btn-row">
+          <button class="btn btn-primary btn-sm" onclick="savePrompt('${p.key}')">
+            <i class="bi bi-check-lg me-1"></i>저장
+          </button>
+          <span class="save-indicator" id="saved-${p.key}"><i class="bi bi-check-circle-fill me-1"></i>저장됨</span>
+          <span class="ms-auto prompt-meta" id="meta-${p.key}">
+            ${p.is_modified ? '마지막 수정: ' + new Date(p.updated_at).toLocaleString('ko-KR') : '기본값 사용 중'}
+          </span>
+        </div>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function savePrompt(key) {
+  const content = document.getElementById(`ta-${key}`).value;
+  const res = await fetch(`/api/prompts/${key}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+  });
+  if (!res.ok) { alert('저장 실패'); return; }
+  const updated = await res.json();
+
+  // 수정됨 배지 업데이트
+  const p = _prompts.find(x => x.key === key);
+  if (p) { p.content = content; p.is_modified = updated.is_modified; p.updated_at = updated.updated_at; }
+
+  const badge = document.querySelector(`#card-${key} .modified-badge`);
+  const label = document.querySelector(`#card-${key} .prompt-label`);
+  if (updated.is_modified) {
+    if (!badge) {
+      const span = document.createElement('span');
+      span.className = 'modified-badge';
+      span.textContent = '수정됨';
+      label.insertAdjacentElement('afterend', span);
+    }
+  } else if (badge) {
+    badge.remove();
+  }
+  document.getElementById(`meta-${key}`).textContent =
+    updated.is_modified ? '마지막 수정: ' + new Date(updated.updated_at).toLocaleString('ko-KR') : '기본값 사용 중';
+
+  const ind = document.getElementById(`saved-${key}`);
+  ind.classList.add('show');
+  setTimeout(() => ind.classList.remove('show'), 2000);
+}
+
+async function resetPrompt(key) {
+  const p = _prompts.find(x => x.key === key);
+  if (!p || !p.is_modified) return;
+  if (!confirm(`"${p.label}"을 기본값으로 복원하시겠습니까?`)) return;
+  const res = await fetch(`/api/prompts/${key}/reset`, { method: 'POST' });
+  if (!res.ok) { alert('복원 실패'); return; }
+  const updated = await res.json();
+  if (p) { p.content = updated.content; p.is_modified = false; }
+  document.getElementById(`ta-${key}`).value = updated.content;
+  const badge = document.querySelector(`#card-${key} .modified-badge`);
+  if (badge) badge.remove();
+  document.getElementById(`meta-${key}`).textContent = '기본값 사용 중';
+}
+
+async function resetAllPrompts() {
+  if (!confirm('모든 프롬프트를 기본값으로 복원하시겠습니까?\n수정한 내용이 모두 사라집니다.')) return;
+  for (const p of _prompts) {
+    if (p.is_modified) {
+      await fetch(`/api/prompts/${p.key}/reset`, { method: 'POST' });
+    }
+  }
+  await loadPrompts();
+}
+
+function showDefault(key) {
+  _currentDefaultKey = key;
+  const p = _prompts.find(x => x.key === key);
+  document.getElementById('defaultModalContent').textContent = p?.default_content || '';
+  document.getElementById('defaultModalApplyBtn').disabled = !p?.is_modified;
+  _defaultModal.show();
+}
+
+function applyDefault() {
+  if (!_currentDefaultKey) return;
+  resetPrompt(_currentDefaultKey);
+  _defaultModal.hide();
+}
+
+function escH(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+{% endblock %}

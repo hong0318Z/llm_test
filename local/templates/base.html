@@ -219,6 +219,13 @@
   <nav class="navbar navbar-expand-lg sticky-top">
     <div class="container-fluid px-4">
       <a class="navbar-brand" href="/"><i class="bi bi-globe2 me-2"></i>WorldLLM <small style="font-size:0.6rem;opacity:0.5;">by hongjun</small></a>
+      {% if llm_local_mode %}
+      <span class="ms-3 d-flex align-items-center gap-1" title="{{ llm_base_url }} / {{ llm_model_env }}"
+         style="background:rgba(255,184,108,0.12); border:1px solid rgba(255,184,108,0.35); border-radius:20px; padding:3px 12px;">
+        <i class="bi bi-cpu" style="color:#ffb86c; font-size:0.78rem;"></i>
+        <span style="color:#ffb86c; font-size:0.8rem; font-weight:600;">로컬 (oMLX)</span>
+      </span>
+      {% endif %}
       {% if current_world %}
       <a href="/worlds" class="ms-3 d-flex align-items-center gap-1 text-decoration-none"
          style="background:rgba(139,127,247,0.12); border:1px solid rgba(139,127,247,0.3); border-radius:20px; padding:3px 12px;">
@@ -431,6 +438,7 @@
             <i class="bi bi-check-circle-fill" style="color:#6eeab0; font-size:1.3rem;"></i>
             <span style="color:#6eeab0; font-weight:600;">연결 성공</span>
           </div>
+          ${data.local ? `<div class="mb-2"><span style="color:var(--text-secondary);">대상:</span> <strong style="color:#ffb86c;">로컬 (oMLX)</strong> <span style="color:var(--text-secondary);">${data.base_url}</span></div>` : ''}
           <div class="mb-2"><span style="color:var(--text-secondary);">모델:</span> <strong>${data.model}</strong></div>
           <div class="mb-2"><span style="color:var(--text-secondary);">응답:</span></div>
           <div class="p-3 rounded mb-2" style="background:var(--bg-input); font-size:0.9rem;">${escHtmlBase(data.reply)}</div>
@@ -447,7 +455,9 @@
           </div>
           <pre class="p-3 rounded" style="font-size:0.82rem; white-space:pre-wrap;">${escHtmlBase(data.error)}</pre>
           <div class="mt-2" style="font-size:0.82rem; color:var(--text-secondary);">
-            .env 파일에 GITHUB_TOKEN이 올바르게 설정되어 있는지 확인하세요.
+            ${data.local
+              ? `로컬 모드(oMLX, ${data.base_url})로 설정되어 있습니다. oMLX 서버가 실행 중인지, 모델이 "준비됨" 상태인지 확인하세요.`
+              : '.env 파일에 GITHUB_TOKEN이 올바르게 설정되어 있는지 확인하세요.'}
           </div>
         `;
         btn.innerHTML = '<i class="bi bi-x-circle me-1" style="color:#ff7070;"></i>연결 실패';

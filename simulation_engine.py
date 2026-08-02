@@ -3,7 +3,7 @@
 토큰 사용량 추적 및 컨텍스트 한계 시 자동 요약 포함
 """
 from datetime import datetime
-from models import db, WorldEntry, SimulationRun, SimulationLog, TimelineEvent, StoryBeat, Timeline, AppSettings, LlmPromptConfig, CREATOR_LLM, CREATOR_USER
+from models import db, WorldEntry, SimulationRun, SimulationLog, TimelineEvent, StoryBeat, Timeline, AppSettings, UserLlmSettings, LlmPromptConfig, CREATOR_LLM, CREATOR_USER
 import llm_client
 
 
@@ -15,6 +15,7 @@ def run_simulation(run_id: int, app):
             return
 
         config = run.config
+        llm_client.set_active_user(run.user_id)
         run.status = "running"
         db.session.commit()
 
@@ -61,9 +62,10 @@ def run_simulation(run_id: int, app):
         try:
             # 시뮬레이션 모델 설정 로드 (최초 1회)
             _sim_settings = AppSettings.get()
+            _user_settings = UserLlmSettings.get_for_user(run.user_id) if run.user_id else None
             # 로컬 endpoint에서는 .env의 LLM_MODEL이 단일 진실 소스다.
             import os
-            _model_sim = os.environ.get("LLM_MODEL") if os.environ.get("LLM_BASE_URL") else (_sim_settings.llm_model_simulation or None)
+            _model_sim = (_user_settings.llm_model or None) if _user_settings and _user_settings.llm_model else (_sim_settings.llm_model_simulation or None)
 
             for tick in range(1, run.total_ticks + 1):
                 # 매 틱 시작 전 취소 여부 확인
@@ -78,6 +80,9 @@ def run_simulation(run_id: int, app):
 
                 # 컨텍스트 한계 근접 시 자동 요약 먼저 실행
                 settings = AppSettings.get()
+                embedding_enabled = _user_settings.embedding_enabled if _user_settings else settings.embedding_enabled
+                embedding_model = _user_settings.embedding_model if _user_settings else settings.embedding_model
+                reference_limit = _user_settings.rag_reference_limit if _user_settings else settings.rag_reference_limit
                 max_chars = settings.max_llm_entry_chars or 500
                 rag_budget = settings.rag_token_budget or 0
                 cfg_dict = {**config.to_dict(), "max_content_chars": max_chars, "rag_token_budget": rag_budget}
@@ -100,10 +105,10 @@ def run_simulation(run_id: int, app):
 
                 # 로컬 환경에서는 전체 DB를 한 번에 넣지 않는다. 임베딩이 켜진 경우
                 # 매 틱의 최근 맥락으로 벡터 검색해 코어(유저) + 상위 참조만 순차 호출한다.
-                if settings.embedding_enabled and recent_context:
+                if embedding_enabled and recent_context:
                     try:
                         import json as _json
-                        qvec = llm_client.generate_embedding(recent_context, settings.embedding_model)
+                        qvec = llm_client.generate_embedding(recent_context, embedding_model)
                         core = [e for e in entries if e.get("created_by") == "user"]
                         candidates = []
                         for e in entries:
@@ -113,7 +118,7 @@ def run_simulation(run_id: int, app):
                             if score >= 0 and e.get("created_by") != "user":
                                 candidates.append((score, e))
                         candidates.sort(key=lambda item: item[0], reverse=True)
-                        entries = core + [e for _, e in candidates[:settings.rag_reference_limit]]
+                        entries = core + [e for _, e in candidates[:reference_limit]]
                     except Exception:
                         # 임베딩 서버가 일시적으로 꺼져도 기존 키워드 RAG로 계속 진행
                         pass

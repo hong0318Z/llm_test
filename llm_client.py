@@ -8,6 +8,22 @@ import os
 import re
 import json
 from openai import OpenAI
+from flask import session, has_request_context
+import threading
+
+_connection_context = threading.local()
+
+def set_active_user(user_id):
+    """백그라운드 시뮬레이션 스레드가 실행자 개인 설정을 사용하도록 지정."""
+    _connection_context.user_id = user_id
+
+def _user_connection_settings():
+    try:
+        from models import UserLlmSettings
+        uid = session.get("user_id") if has_request_context() else getattr(_connection_context, "user_id", None)
+        return UserLlmSettings.get_for_user(uid) if uid else None
+    except Exception:
+        return None
 
 COPILOT_BASE_URL = "https://api.githubcopilot.com"
 DEFAULT_MODEL = "claude-sonnet-4.5"
@@ -46,8 +62,11 @@ def get_llm_client(model_override: str = None):
 
     LLM_BASE_URL을 지정하면 Ollama, LM Studio, vLLM 등으로 전환된다.
     """
-    base_url = os.environ.get("LLM_BASE_URL") or COPILOT_BASE_URL
-    api_key = os.environ.get("LLM_API_KEY") or os.environ.get("GITHUB_TOKEN")
+    settings = _user_connection_settings()
+    ui_base_url = settings.llm_base_url if settings else ""
+    ui_api_key = settings.llm_api_key if settings else ""
+    base_url = ui_base_url or os.environ.get("LLM_BASE_URL") or COPILOT_BASE_URL
+    api_key = ui_api_key or os.environ.get("LLM_API_KEY") or os.environ.get("GITHUB_TOKEN")
     if not api_key:
         # Ollama 등 인증 없는 OpenAI 호환 서버도 OpenAI SDK에는 더미 키가 필요하다.
         if os.environ.get("LLM_BASE_URL"):
@@ -55,7 +74,7 @@ def get_llm_client(model_override: str = None):
         else:
             raise EnvironmentError("GITHUB_TOKEN 또는 LLM_API_KEY가 필요합니다.")
 
-    model = model_override or os.environ.get("LLM_MODEL", DEFAULT_MODEL)
+    model = model_override or (settings.llm_model if settings and settings.llm_model else None) or os.environ.get("LLM_MODEL", DEFAULT_MODEL)
     client = OpenAI(
         base_url=base_url,
         api_key=api_key,
@@ -64,15 +83,18 @@ def get_llm_client(model_override: str = None):
             "Editor-Plugin-Version": "copilot-chat/0.22.0",
             "Copilot-Integration-Id": "vscode-chat",
             "Openai-Organization": "github-copilot",
-        } if not os.environ.get("LLM_BASE_URL") else {}),
+        } if base_url == COPILOT_BASE_URL else {}),
     )
     return client, model
 
 
 def get_embedding_client():
     """임베딩 전용 OpenAI 호환 endpoint. 미지정 시 LLM endpoint를 재사용한다."""
-    base_url = os.environ.get("EMBEDDING_BASE_URL") or os.environ.get("LLM_BASE_URL") or COPILOT_BASE_URL
-    api_key = os.environ.get("EMBEDDING_API_KEY") or os.environ.get("LLM_API_KEY") or os.environ.get("GITHUB_TOKEN") or "local-no-key"
+    settings = _user_connection_settings()
+    ui_base_url = settings.embedding_base_url if settings else ""
+    ui_api_key = settings.embedding_api_key if settings else ""
+    base_url = ui_base_url or os.environ.get("EMBEDDING_BASE_URL") or os.environ.get("LLM_BASE_URL") or COPILOT_BASE_URL
+    api_key = ui_api_key or os.environ.get("EMBEDDING_API_KEY") or os.environ.get("LLM_API_KEY") or os.environ.get("GITHUB_TOKEN") or "local-no-key"
     return OpenAI(base_url=base_url, api_key=api_key)
 
 

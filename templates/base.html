@@ -275,6 +275,7 @@
               <i class="bi bi-plug me-1"></i>LLM 연결 테스트
             </button>
           </li>
+          {% if current_user %}<li class="nav-item ms-2"><span class="small" style="color:var(--text-secondary)">{{ current_user.name }}</span> <a class="small ms-1" href="/logout">로그아웃</a></li>{% if current_user.is_admin %}<li class="nav-item"><a class="nav-link" href="/admin/users">사용자 승인</a></li>{% endif %}{% endif %}
         </ul>
       </div>
     </div>
@@ -348,6 +349,14 @@
             <div class="form-text">켜면 엔트리 저장/수정 시 임베딩을 요청하며, 틱마다 관련 참조만 선택합니다.</div>
           </div>
           <div class="row g-2 mb-2"><div class="col-md-8"><label class="form-label small">임베딩 모델</label><input class="form-control" id="msEmbeddingModel" placeholder="nomic-embed-text"></div><div class="col-md-4"><label class="form-label small">틱당 참조 수</label><input type="number" class="form-control" id="msReferenceLimit" min="1" max="50"></div></div>
+
+          <hr style="border-color:var(--border);">
+          <div class="small mb-2" style="color:var(--text-secondary)"><i class="bi bi-hdd-network me-1"></i>연결 정보는 이 NAS의 내부 DB에 저장됩니다. API 키는 저장 여부만 표시되며 다시 읽어 오지 않습니다.</div>
+          <div class="mb-3"><label class="form-label small">LLM OpenAI 호환 주소</label><input class="form-control" id="msLlmBaseUrl" placeholder="http://192.168.0.10:11434/v1"><div class="form-text">Ollama, LM Studio, vLLM 등. 비우면 기존 환경변수/Copilot 설정을 사용합니다.</div></div>
+          <div class="mb-3"><label class="form-label small">사용할 모델명 (로컬 포함)</label><input class="form-control" id="msCustomModel" placeholder="예: qwen3:8b 또는 llama3.1:8b"><div class="form-text">입력하면 시뮬레이션·대화에 이 모델을 사용합니다.</div></div>
+          <div class="mb-3"><label class="form-label small">LLM API 키 <span id="msLlmKeyState"></span></label><input type="password" class="form-control" id="msLlmApiKey" autocomplete="new-password" placeholder="변경할 때만 입력"><div class="form-text">Ollama처럼 인증이 없으면 비워도 됩니다.</div></div>
+          <div class="mb-3"><label class="form-label small">임베딩 OpenAI 호환 주소</label><input class="form-control" id="msEmbeddingBaseUrl" placeholder="LLM 주소와 같으면 비워도 됨"></div>
+          <div class="mb-2"><label class="form-label small">임베딩 API 키 <span id="msEmbeddingKeyState"></span></label><input type="password" class="form-control" id="msEmbeddingApiKey" autocomplete="new-password" placeholder="변경할 때만 입력"></div>
 
           <hr style="border-color:var(--border);">
 
@@ -496,6 +505,13 @@
     document.getElementById('msEmbeddingEnabled').checked = !!s.embedding_enabled;
     document.getElementById('msEmbeddingModel').value = s.embedding_model ?? 'nomic-embed-text';
     document.getElementById('msReferenceLimit').value = s.rag_reference_limit ?? 8;
+    document.getElementById('msLlmBaseUrl').value = s.llm_base_url ?? '';
+    document.getElementById('msCustomModel').value = s.llm_base_url ? (s.llm_model_simulation ?? '') : '';
+    document.getElementById('msEmbeddingBaseUrl').value = s.embedding_base_url ?? '';
+    document.getElementById('msLlmApiKey').value = '';
+    document.getElementById('msEmbeddingApiKey').value = '';
+    document.getElementById('msLlmKeyState').textContent = s.llm_api_key_saved ? '(저장됨)' : '';
+    document.getElementById('msEmbeddingKeyState').textContent = s.embedding_api_key_saved ? '(저장됨)' : '';
     masterSettingsModal.show();
   }
 
@@ -504,11 +520,15 @@
       max_llm_entry_chars: parseInt(document.getElementById('msLlmChars').value) || 0,
       max_user_entry_chars: parseInt(document.getElementById('msUserChars').value) || 0,
       rag_token_budget: parseInt(document.getElementById('msRagBudget').value) || 0,
-      llm_model_simulation: document.getElementById('msModelSim').value,
+      llm_model_simulation: document.getElementById('msCustomModel').value.trim() || document.getElementById('msModelSim').value,
       llm_model_nai: document.getElementById('msModelNai').value,
       embedding_enabled: document.getElementById('msEmbeddingEnabled').checked,
       embedding_model: document.getElementById('msEmbeddingModel').value,
       rag_reference_limit: parseInt(document.getElementById('msReferenceLimit').value) || 8,
+      llm_base_url: document.getElementById('msLlmBaseUrl').value.trim(),
+      llm_api_key: document.getElementById('msLlmApiKey').value,
+      embedding_base_url: document.getElementById('msEmbeddingBaseUrl').value.trim(),
+      embedding_api_key: document.getElementById('msEmbeddingApiKey').value,
     };
     const res = await fetch('/api/settings', {
       method: 'PUT',

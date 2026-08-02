@@ -8,7 +8,7 @@ import json as _json
 from collections import Counter
 from flask import Flask, jsonify, request, render_template, abort, Response, send_from_directory, session, redirect, url_for
 from werkzeug.utils import secure_filename
-from models import db, World, WorldEntry, SimulationConfig, SimulationRun, SimulationLog, WorldSnapshot, AppSettings, LlmPromptConfig, Timeline, TimelineEvent, StoryBeat, CATEGORIES
+from models import db, User, UserLlmSettings, World, WorldEntry, SimulationConfig, SimulationRun, SimulationLog, WorldSnapshot, AppSettings, LlmPromptConfig, Timeline, TimelineEvent, StoryBeat, CATEGORIES
 from datetime import datetime
 
 app = Flask(__name__)
@@ -48,6 +48,7 @@ with app.app_context():
         ("timelines",           "world_id",                "INTEGER"),
         ("simulation_configs",  "world_id",                "INTEGER"),
         ("simulation_runs",     "world_id",                "INTEGER"),
+        ("simulation_runs",     "user_id",                 "INTEGER"),
         ("world_snapshots",     "world_id",                "INTEGER"),
         # 모델 선택 컬럼
         ("app_settings",        "llm_model_simulation",    "TEXT DEFAULT 'claude-sonnet-4.5'"),
@@ -55,6 +56,10 @@ with app.app_context():
         ("app_settings",        "embedding_enabled",       "BOOLEAN DEFAULT 0"),
         ("app_settings",        "embedding_model",         "TEXT DEFAULT 'nomic-embed-text'"),
         ("app_settings",        "rag_reference_limit",     "INTEGER DEFAULT 8"),
+        ("app_settings",        "llm_base_url",            "TEXT DEFAULT ''"),
+        ("app_settings",        "llm_api_key",             "TEXT DEFAULT ''"),
+        ("app_settings",        "embedding_base_url",      "TEXT DEFAULT ''"),
+        ("app_settings",        "embedding_api_key",       "TEXT DEFAULT ''"),
     ]
     with db.engine.connect() as conn:
         for table, col, col_def in _migrate_columns:
@@ -158,6 +163,13 @@ with app.app_context():
             e.is_superseded = False
         db.session.commit()
 
+    # 최초 설치 시 마스터 계정 생성. 이후 비밀번호는 DB 해시로만 보관된다.
+    if not User.query.filter_by(username="admin").first():
+        admin = User(username="admin", name="Master", is_admin=True, is_approved=True)
+        admin.set_password("kevin0318")
+        db.session.add(admin)
+        db.session.commit()
+
 
 STORAGE_DIR = os.path.join(os.path.dirname(__file__), "storage")
 ALLOWED_IMAGE_EXT = {"jpg", "jpeg", "png", "gif", "webp"}
@@ -173,12 +185,76 @@ def get_world_id():
     return session.get("world_id")
 
 
+def current_user():
+    uid = session.get("user_id")
+    return User.query.get(uid) if uid else None
+
+
+@app.before_request
+def require_login():
+    allowed = {"login", "register", "logout", "static"}
+    if request.endpoint in allowed or request.path.startswith("/storage/"):
+        return None
+    user = current_user()
+    if user and user.is_approved:
+        return None
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "로그인이 필요하거나 관리자 승인을 기다리는 계정입니다."}), 401
+    return redirect(url_for("login"))
+
+
 @app.context_processor
 def inject_world():
     """모든 템플릿에 current_world 주입"""
     wid = session.get("world_id")
     world = World.query.get(wid) if wid else None
-    return {"current_world": world}
+    return {"current_world": world, "current_user": current_user()}
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        username = (request.form.get("username") or "").strip()
+        user = User.query.filter_by(username=username).first()
+        if not user or not user.check_password(request.form.get("password") or ""):
+            return render_template("login.html", error="아이디 또는 비밀번호가 올바르지 않습니다.")
+        if not user.is_approved:
+            return render_template("login.html", error="관리자 승인 대기 중입니다.")
+        session.clear(); session["user_id"] = user.id
+        return redirect(url_for("worlds_page"))
+    return render_template("login.html")
+
+
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    if request.method == "POST":
+        username, name, password = [(request.form.get(k) or "").strip() for k in ("username", "name", "password")]
+        if len(username) < 3 or len(password) < 6 or not name:
+            return render_template("register.html", error="아이디 3자 이상, 비밀번호 6자 이상, 이름을 입력하세요.")
+        if User.query.filter_by(username=username).first():
+            return render_template("register.html", error="이미 사용 중인 아이디입니다.")
+        user = User(username=username, name=name, is_approved=False); user.set_password(password)
+        db.session.add(user); db.session.commit()
+        return render_template("login.html", message="가입 요청이 완료되었습니다. 관리자 승인 후 로그인할 수 있습니다.")
+    return render_template("register.html")
+
+
+@app.route("/logout")
+def logout():
+    session.clear(); return redirect(url_for("login"))
+
+
+@app.route("/admin/users")
+def admin_users():
+    if not current_user() or not current_user().is_admin: abort(403)
+    return render_template("admin_users.html", users=User.query.order_by(User.created_at.desc()).all())
+
+
+@app.route("/admin/users/<int:user_id>/approve", methods=["POST"])
+def approve_user(user_id):
+    if not current_user() or not current_user().is_admin: abort(403)
+    user = User.query.get_or_404(user_id); user.is_approved = True; db.session.commit()
+    return redirect(url_for("admin_users"))
 
 
 def _require_world_redirect():
@@ -1020,13 +1096,18 @@ def delete_config(config_id):
 
 @app.route("/api/settings", methods=["GET"])
 def get_settings():
-    return jsonify(AppSettings.get().to_dict())
+    base = AppSettings.get().to_dict()
+    user_settings = UserLlmSettings.get_for_user(current_user().id)
+    base.update(user_settings.to_dict())
+    base["llm_model_simulation"] = user_settings.llm_model or base["llm_model_simulation"]
+    return jsonify(base)
 
 
 @app.route("/api/settings", methods=["PUT"])
 def update_settings():
     data = request.json or {}
     s = AppSettings.get()
+    us = UserLlmSettings.get_for_user(current_user().id)
     if "max_llm_entry_chars" in data:
         s.max_llm_entry_chars = int(data["max_llm_entry_chars"])
     if "max_user_entry_chars" in data:
@@ -1040,8 +1121,20 @@ def update_settings():
     if "embedding_enabled" in data: s.embedding_enabled = bool(data["embedding_enabled"])
     if "embedding_model" in data: s.embedding_model = str(data["embedding_model"]).strip()[:200]
     if "rag_reference_limit" in data: s.rag_reference_limit = max(1, min(50, int(data["rag_reference_limit"])))
+    if "llm_base_url" in data: us.llm_base_url = str(data["llm_base_url"]).strip()[:500]
+    if "embedding_base_url" in data: us.embedding_base_url = str(data["embedding_base_url"]).strip()[:500]
+    # 빈 값은 기존 키 유지, clear_* 플래그로만 명시적으로 제거한다.
+    if str(data.get("llm_api_key") or "").strip(): us.llm_api_key = str(data["llm_api_key"]).strip()
+    if str(data.get("embedding_api_key") or "").strip(): us.embedding_api_key = str(data["embedding_api_key"]).strip()
+    if data.get("clear_llm_api_key"): us.llm_api_key = ""
+    if data.get("clear_embedding_api_key"): us.embedding_api_key = ""
+    if "llm_model_simulation" in data: us.llm_model = str(data["llm_model_simulation"]).strip()[:200]
+    if "embedding_enabled" in data: us.embedding_enabled = bool(data["embedding_enabled"])
+    if "embedding_model" in data: us.embedding_model = str(data["embedding_model"]).strip()[:200]
+    if "rag_reference_limit" in data: us.rag_reference_limit = max(1, min(50, int(data["rag_reference_limit"])))
     db.session.commit()
-    return jsonify(s.to_dict())
+    out = s.to_dict(); out.update(us.to_dict()); out["llm_model_simulation"] = us.llm_model or out["llm_model_simulation"]
+    return jsonify(out)
 
 
 # ─────────────────────────────────────────
@@ -1510,6 +1603,7 @@ def start_run():
 
     run = SimulationRun(
         world_id=wid,
+        user_id=current_user().id,
         config_id=config.id,
         status="pending",
         current_tick=0,
@@ -1757,7 +1851,7 @@ def chat():
     context = [e.to_dict() for e in entries[:settings.rag_reference_limit]]
     try:
         import llm_client
-        model_override = os.environ.get("LLM_MODEL") if os.environ.get("LLM_BASE_URL") else (settings.llm_model_simulation or None)
+        model_override = (settings.llm_model_simulation or None) if settings.llm_base_url else (os.environ.get("LLM_MODEL") if os.environ.get("LLM_BASE_URL") else (settings.llm_model_simulation or None))
         client, model = llm_client.get_llm_client(model_override)
         system = "당신은 세계관 기획 파트너입니다. 사용자가 아이디어를 명확히 정의하도록 질문·대안·일관성 점검을 돕습니다. 확정되지 않은 사실은 단정하지 마세요.\n\n현재 참조 데이터:\n" + llm_client.serialize_world_state(context, settings.max_llm_entry_chars or 500)
         messages = [{"role": "system", "content": system}] + [{"role": m.get("role", "user"), "content": str(m.get("content", ""))} for m in history if m.get("role") in ("user", "assistant")] + [{"role": "user", "content": message}]

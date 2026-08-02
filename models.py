@@ -1,12 +1,54 @@
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
 import json
+from werkzeug.security import generate_password_hash, check_password_hash
 
 db = SQLAlchemy()
 
 CATEGORIES = ["세력", "인물", "관념", "물건", "종족", "사건", "장소", "마법/기술", "신화/종교", "역사/기록", "규칙/법", "연도"]
 CREATOR_USER = "user"
 CREATOR_LLM = "llm"
+
+
+class User(db.Model):
+    __tablename__ = "users"
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), unique=True, nullable=False, index=True)
+    password_hash = db.Column(db.String(255), nullable=False)
+    name = db.Column(db.String(100), nullable=False)
+    is_admin = db.Column(db.Boolean, default=False)
+    is_approved = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def set_password(self, password): self.password_hash = generate_password_hash(password)
+    def check_password(self, password): return check_password_hash(self.password_hash, password)
+    def to_dict(self): return {"id": self.id, "username": self.username, "name": self.name, "is_admin": bool(self.is_admin), "is_approved": bool(self.is_approved), "created_at": self.created_at.isoformat() + "Z" if self.created_at else None}
+
+
+class UserLlmSettings(db.Model):
+    """계정별 LLM 연결 정보. 키 원문은 API 응답에 포함하지 않는다."""
+    __tablename__ = "user_llm_settings"
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), unique=True, nullable=False)
+    llm_base_url = db.Column(db.String(500), default="")
+    llm_api_key = db.Column(db.Text, default="")
+    llm_model = db.Column(db.String(200), default="")
+    embedding_enabled = db.Column(db.Boolean, default=False)
+    embedding_base_url = db.Column(db.String(500), default="")
+    embedding_api_key = db.Column(db.Text, default="")
+    embedding_model = db.Column(db.String(200), default="nomic-embed-text")
+    rag_reference_limit = db.Column(db.Integer, default=8)
+
+    @staticmethod
+    def get_for_user(user_id):
+        s = UserLlmSettings.query.filter_by(user_id=user_id).first()
+        if not s:
+            s = UserLlmSettings(user_id=user_id)
+            db.session.add(s); db.session.commit()
+        return s
+
+    def to_dict(self):
+        return {"llm_base_url": self.llm_base_url or "", "llm_api_key_saved": bool(self.llm_api_key), "llm_model": self.llm_model or "", "embedding_enabled": bool(self.embedding_enabled), "embedding_base_url": self.embedding_base_url or "", "embedding_api_key_saved": bool(self.embedding_api_key), "embedding_model": self.embedding_model or "nomic-embed-text", "rag_reference_limit": self.rag_reference_limit or 8}
 
 
 class World(db.Model):
@@ -147,6 +189,11 @@ class AppSettings(db.Model):
     embedding_enabled = db.Column(db.Boolean, default=False)
     embedding_model = db.Column(db.String(200), default="nomic-embed-text")
     rag_reference_limit = db.Column(db.Integer, default=8)
+    # 웹 UI에서 관리하는 OpenAI 호환 연결 설정. 키는 응답에 원문을 노출하지 않는다.
+    llm_base_url = db.Column(db.String(500), default="")
+    llm_api_key = db.Column(db.Text, default="")
+    embedding_base_url = db.Column(db.String(500), default="")
+    embedding_api_key = db.Column(db.Text, default="")
 
     @staticmethod
     def get():
@@ -167,6 +214,10 @@ class AppSettings(db.Model):
             "embedding_enabled": bool(self.embedding_enabled),
             "embedding_model": self.embedding_model or "nomic-embed-text",
             "rag_reference_limit": self.rag_reference_limit if self.rag_reference_limit is not None else 8,
+            "llm_base_url": self.llm_base_url or "",
+            "llm_api_key_saved": bool(self.llm_api_key),
+            "embedding_base_url": self.embedding_base_url or "",
+            "embedding_api_key_saved": bool(self.embedding_api_key),
         }
 
 
@@ -201,6 +252,7 @@ class SimulationRun(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     world_id = db.Column(db.Integer, db.ForeignKey("worlds.id"), nullable=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
     config_id = db.Column(db.Integer, db.ForeignKey("simulation_configs.id"))
     status = db.Column(db.String(50), default="pending")
     current_tick = db.Column(db.Integer, default=0)

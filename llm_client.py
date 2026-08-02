@@ -284,11 +284,13 @@ questions는 정말 중요한 미결정 사항만 최대 5개, entries는 3~12�
 """
 
 
-def design_world(context: str, answers: str = "", existing_entries: list = None) -> dict:
+def design_world(context: str, answers: str = "", existing_entries: list = None,
+                 prior_entries: list = None, batch_number: int = 1) -> dict:
     """큰 맥락을 DB 엔트리 초안과 보완 질문으로 변환한다. 저장은 호출자가 승인 후 수행한다."""
     client, model = get_llm_client()
     existing = serialize_world_state(existing_entries or [], max_chars=250) if existing_entries else "(아직 없음)"
-    prompt = f"=== 사용자의 큰 맥락 ===\n{context}\n\n=== 보완 답변 ===\n{answers or '(없음)'}\n\n=== 기존 DB (중복 생성 금지) ===\n{existing}"
+    prior = "\n".join(f"- [{e.get('category','')}] {e.get('title','')}" for e in (prior_entries or [])) or "(첫 번째 묶음)"
+    prompt = f"=== 사용자의 큰 맥락 ===\n{context}\n\n=== 보완 답변 ===\n{answers or '(없음)'}\n\n=== 기존 DB (중복 생성 금지) ===\n{existing}\n\n=== 앞선 설계 묶음에서 이미 만든 항목 (절대 중복 금지) ===\n{prior}\n\n이번은 설계 묶음 {batch_number}입니다. 앞선 항목을 확장하는 서로 다른 6~12개 항목을 생성하세요. 관계·갈등·지리·제도 중 아직 비어 있는 영역을 우선하세요."
     response = client.chat.completions.create(model=model, messages=[
         {"role": "system", "content": WORLD_DESIGN_PROMPT}, {"role": "user", "content": prompt}
     ], temperature=0.55, max_tokens=3000)

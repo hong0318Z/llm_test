@@ -1884,11 +1884,20 @@ def world_design_plan():
     wid = get_world_id()
     entries = [e.to_dict() for e in WorldEntry.query.filter_by(world_id=wid, is_active=True).filter(
         db.or_(WorldEntry.is_superseded.is_(False), WorldEntry.is_superseded.is_(None))).limit(100).all()]
+    rounds = max(1, min(5, int(data.get("rounds", 3))))
     try:
         import llm_client
-        result = llm_client.design_world(context, (data.get("answers") or "").strip(), entries)
-        result["entries"] = [e for e in result.get("entries", []) if e.get("category") in CATEGORIES and e.get("title") and e.get("content")]
-        return jsonify(result)
+        all_entries, all_questions, summary = [], [], ""
+        for batch in range(1, rounds + 1):
+            result = llm_client.design_world(context, (data.get("answers") or "").strip(), entries, all_entries, batch)
+            if not summary: summary = result.get("summary", "")
+            all_questions.extend(result.get("questions", []))
+            for item in result.get("entries", []):
+                if item.get("category") in CATEGORIES and item.get("title") and item.get("content"):
+                    # 제목+분류 기준으로 같은 항목은 한 번만 유지한다.
+                    if not any(e["title"].strip().lower() == item["title"].strip().lower() and e["category"] == item["category"] for e in all_entries):
+                        all_entries.append(item)
+        return jsonify({"summary": summary, "questions": list(dict.fromkeys(str(q) for q in all_questions if q))[:10], "entries": all_entries, "ready": True, "batches": rounds})
     except Exception as e:
         return jsonify({"error": str(e)}), 502
 

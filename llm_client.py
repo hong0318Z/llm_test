@@ -358,7 +358,9 @@ def serialize_world_state(entries: list, max_chars: int = 500) -> str:
                 content = content[:max_chars] + f"…(+{len(item['content'])-max_chars}자 생략)"
             creator_tag = " [🔒유저]" if item.get("created_by") == "user" else ""
             version_tag = f" [{item['version_note']}]" if item.get("version_note") else ""
-            lines.append(f"  ID={item['id']} | {item['title']}{creator_tag}{version_tag}{ref_str}")
+            # 세계관 설계의 아직 DB에 저장되지 않은 임시 엔트리는 id가 없을 수 있다.
+            item_id = item.get("id", "임시")
+            lines.append(f"  ID={item_id} | {item['title']}{creator_tag}{version_tag}{ref_str}")
             lines.append(f"    {content}")
 
     return "\n".join(lines)

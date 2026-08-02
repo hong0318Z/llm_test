@@ -352,7 +352,7 @@
 
           <hr style="border-color:var(--border);">
           <div class="small mb-2" style="color:var(--text-secondary)"><i class="bi bi-hdd-network me-1"></i>연결 정보는 이 NAS의 내부 DB에 저장됩니다. API 키는 저장 여부만 표시되며 다시 읽어 오지 않습니다.</div>
-          <div class="mb-3"><label class="form-label small">LLM OpenAI 호환 주소</label><input class="form-control" id="msLlmBaseUrl" placeholder="http://192.168.0.10:11434/v1"><div class="form-text">Ollama, LM Studio, vLLM 등. 비우면 기존 환경변수/Copilot 설정을 사용합니다.</div></div>
+          <div class="mb-3"><label class="form-label small">LLM OpenAI 호환 주소</label><div class="input-group"><input class="form-control" id="msLlmBaseUrl" placeholder="http://192.168.0.10:11434/v1"><button type="button" class="btn btn-outline-secondary" onclick="loadAvailableModels(this)"><i class="bi bi-arrow-repeat"></i> 모델 불러오기</button></div><div class="form-text">주소·키를 입력해 저장한 뒤 모델 불러오기를 누르세요.</div></div>
           <div class="mb-3"><label class="form-label small">사용할 모델명 (로컬 포함)</label><input class="form-control" id="msCustomModel" placeholder="예: qwen3:8b 또는 llama3.1:8b"><div class="form-text">입력하면 시뮬레이션·대화에 이 모델을 사용합니다.</div></div>
           <div class="mb-3"><label class="form-label small">LLM API 키 <span id="msLlmKeyState"></span></label><input type="password" class="form-control" id="msLlmApiKey" autocomplete="new-password" placeholder="변경할 때만 입력"><div class="form-text">Ollama처럼 인증이 없으면 비워도 됩니다.</div></div>
           <div class="mb-3"><label class="form-label small">임베딩 OpenAI 호환 주소</label><input class="form-control" id="msEmbeddingBaseUrl" placeholder="LLM 주소와 같으면 비워도 됨"></div>
@@ -500,8 +500,8 @@
     document.getElementById('msLlmChars').value = s.max_llm_entry_chars ?? 500;
     document.getElementById('msUserChars').value = s.max_user_entry_chars ?? 1000;
     document.getElementById('msRagBudget').value = s.rag_token_budget ?? 0;
-    document.getElementById('msModelSim').value = s.llm_model_simulation ?? 'claude-sonnet-4.5';
-    document.getElementById('msModelNai').value = s.llm_model_nai ?? 'claude-sonnet-4.5';
+    setModelSelect('msModelSim', s.llm_model_simulation ?? 'claude-sonnet-4.5');
+    setModelSelect('msModelNai', s.llm_model_nai ?? 'claude-sonnet-4.5');
     document.getElementById('msEmbeddingEnabled').checked = !!s.embedding_enabled;
     document.getElementById('msEmbeddingModel').value = s.embedding_model ?? 'nomic-embed-text';
     document.getElementById('msReferenceLimit').value = s.rag_reference_limit ?? 8;
@@ -515,7 +515,28 @@
     masterSettingsModal.show();
   }
 
-  async function saveMasterSettings() {
+  function setModelSelect(id, value) {
+    const el = document.getElementById(id);
+    if (![...el.options].some(o => o.value === value)) el.add(new Option(value, value));
+    el.value = value;
+  }
+
+  async function loadAvailableModels(btn) {
+    const url = document.getElementById('msLlmBaseUrl').value.trim();
+    if (!url) { alert('먼저 LLM 주소를 입력하고 저장하세요.'); return; }
+    btn.disabled = true;
+    try {
+      // API 키/주소는 서버에 저장되어야 서버가 모델 목록을 조회할 수 있습니다.
+      await saveMasterSettings(true);
+      const res = await fetch('/api/models'); const data = await res.json();
+      if (!res.ok) throw Error(data.error || '모델 목록을 읽지 못했습니다.');
+      for (const id of data.models) { setModelOption('msModelSim', id); setModelOption('msModelNai', id); }
+      alert(`${data.models.length}개 모델을 불러왔습니다.`);
+    } catch (e) { alert('모델 불러오기 실패: ' + e.message); } finally { btn.disabled = false; }
+  }
+  function setModelOption(id, value) { const el=document.getElementById(id); if(![...el.options].some(o=>o.value===value)) el.add(new Option(value,value)); }
+
+  async function saveMasterSettings(silent = false) {
     const body = {
       max_llm_entry_chars: parseInt(document.getElementById('msLlmChars').value) || 0,
       max_user_entry_chars: parseInt(document.getElementById('msUserChars').value) || 0,
@@ -536,11 +557,11 @@
       body: JSON.stringify(body),
     });
     if (res.ok) {
-      masterSettingsModal.hide();
+      if (!silent) masterSettingsModal.hide();
       // 페이지의 글자수 카운터 기준값 갱신 (함수가 있는 페이지에서만)
       if (typeof loadSimMaxChars === 'function') loadSimMaxChars();
     } else {
-      alert('저장 실패');
+      if (!silent) alert('저장 실패');
     }
   }
   </script>

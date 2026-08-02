@@ -49,6 +49,7 @@ with app.app_context():
         ("simulation_configs",  "world_id",                "INTEGER"),
         ("simulation_runs",     "world_id",                "INTEGER"),
         ("simulation_runs",     "user_id",                 "INTEGER"),
+        ("user_llm_settings",   "nai_model",               "TEXT DEFAULT ''"),
         ("world_snapshots",     "world_id",                "INTEGER"),
         # 모델 선택 컬럼
         ("app_settings",        "llm_model_simulation",    "TEXT DEFAULT 'claude-sonnet-4.5'"),
@@ -535,14 +536,14 @@ def _enrich_entry(entry):
 @app.route("/api/entries/<int:entry_id>/embed", methods=["POST"])
 def embed_entry(entry_id):
     entry = WorldEntry.query.get_or_404(entry_id)
-    settings = AppSettings.get()
-    if not settings.embedding_enabled:
+    user_settings = UserLlmSettings.get_for_user(current_user().id)
+    if not user_settings.embedding_enabled:
         return jsonify({"error": "임베딩이 비활성화되어 있습니다."}), 400
     try:
         import llm_client
         entry.embedding_json = _json.dumps(llm_client.generate_embedding(
-            f"{entry.title}\n{entry.category}\n{entry.content}\n태그: {entry.auto_tags_json}", settings.embedding_model))
-        entry.embedding_model = settings.embedding_model
+            f"{entry.title}\n{entry.category}\n{entry.content}\n태그: {entry.auto_tags_json}", user_settings.embedding_model))
+        entry.embedding_model = user_settings.embedding_model
         db.session.commit()
         return jsonify({"ok": True, "entry": entry.to_dict()})
     except Exception as e:
@@ -801,6 +802,7 @@ def generate_nai_prompt_api(entry_id):
     from llm_client import generate_nai_prompt
     entry = WorldEntry.query.get_or_404(entry_id)
     settings = AppSettings.get()
+    user_settings = UserLlmSettings.get_for_user(current_user().id)
 
     # 프롬프트 설정 로드
     prompt_overrides = {p.key: p.content for p in LlmPromptConfig.query.all()}
@@ -820,7 +822,7 @@ def generate_nai_prompt_api(entry_id):
             world_entries=world_entries,
             prompt_template=nai_tmpl,
             base_positive=base_positive,
-            model_override=settings.llm_model_nai or None,
+            model_override=user_settings.nai_model or user_settings.llm_model or settings.llm_model_nai or None,
         )
         return jsonify({"ok": True, "prompt": tags})
     except Exception as e:
@@ -1100,6 +1102,7 @@ def get_settings():
     user_settings = UserLlmSettings.get_for_user(current_user().id)
     base.update(user_settings.to_dict())
     base["llm_model_simulation"] = user_settings.llm_model or base["llm_model_simulation"]
+    base["llm_model_nai"] = user_settings.nai_model or base["llm_model_nai"]
     return jsonify(base)
 
 
@@ -1129,12 +1132,26 @@ def update_settings():
     if data.get("clear_llm_api_key"): us.llm_api_key = ""
     if data.get("clear_embedding_api_key"): us.embedding_api_key = ""
     if "llm_model_simulation" in data: us.llm_model = str(data["llm_model_simulation"]).strip()[:200]
+    if "llm_model_nai" in data: us.nai_model = str(data["llm_model_nai"]).strip()[:200]
     if "embedding_enabled" in data: us.embedding_enabled = bool(data["embedding_enabled"])
     if "embedding_model" in data: us.embedding_model = str(data["embedding_model"]).strip()[:200]
     if "rag_reference_limit" in data: us.rag_reference_limit = max(1, min(50, int(data["rag_reference_limit"])))
     db.session.commit()
-    out = s.to_dict(); out.update(us.to_dict()); out["llm_model_simulation"] = us.llm_model or out["llm_model_simulation"]
+    out = s.to_dict(); out.update(us.to_dict()); out["llm_model_simulation"] = us.llm_model or out["llm_model_simulation"]; out["llm_model_nai"] = us.nai_model or out["llm_model_nai"]
     return jsonify(out)
+
+
+@app.route("/api/models", methods=["GET"])
+def list_available_models():
+    """현재 사용자의 OpenAI 호환 endpoint에서 모델 목록을 읽는다."""
+    try:
+        import llm_client
+        client, _ = llm_client.get_llm_client()
+        models = client.models.list()
+        ids = sorted({m.id for m in models.data if getattr(m, "id", None)})
+        return jsonify({"models": ids})
+    except Exception as e:
+        return jsonify({"error": str(e), "models": []}), 502
 
 
 # ─────────────────────────────────────────
@@ -1812,7 +1829,7 @@ def test_llm():
         client, model = llm_client.get_llm_client()
         response = client.chat.completions.create(
             model=model,
-            messages=[{"role": "user", "content": "한 문장으로 대답하세요: 연결 테스트입니다. 현재 몇 가지 세계관 분류를 사용하나요?"}],
+            messages=[{"role": "user", "content": "1+1은 무엇인가요? 숫자만 답하세요."}],
             max_tokens=100,
             temperature=0,
         )

@@ -34,6 +34,7 @@ class UserLlmSettings(db.Model):
     llm_api_key = db.Column(db.Text, default="")
     llm_model = db.Column(db.String(200), default="")
     nai_model = db.Column(db.String(200), default="")
+    novelai_api_key = db.Column(db.Text, default="")
     embedding_enabled = db.Column(db.Boolean, default=False)
     embedding_base_url = db.Column(db.String(500), default="")
     embedding_api_key = db.Column(db.Text, default="")
@@ -49,7 +50,7 @@ class UserLlmSettings(db.Model):
         return s
 
     def to_dict(self):
-        return {"llm_base_url": self.llm_base_url or "", "llm_api_key_saved": bool(self.llm_api_key), "llm_model": self.llm_model or "", "nai_model": self.nai_model or "", "embedding_enabled": bool(self.embedding_enabled), "embedding_base_url": self.embedding_base_url or "", "embedding_api_key_saved": bool(self.embedding_api_key), "embedding_model": self.embedding_model or "nomic-embed-text", "rag_reference_limit": self.rag_reference_limit or 8}
+        return {"llm_base_url": self.llm_base_url or "", "llm_api_key_saved": bool(self.llm_api_key), "llm_model": self.llm_model or "", "nai_model": self.nai_model or "", "novelai_api_key_saved": bool(self.novelai_api_key), "embedding_enabled": bool(self.embedding_enabled), "embedding_base_url": self.embedding_base_url or "", "embedding_api_key_saved": bool(self.embedding_api_key), "embedding_model": self.embedding_model or "nomic-embed-text", "rag_reference_limit": self.rag_reference_limit or 8}
 
 
 class World(db.Model):

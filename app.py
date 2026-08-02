@@ -50,6 +50,7 @@ with app.app_context():
         ("simulation_runs",     "world_id",                "INTEGER"),
         ("simulation_runs",     "user_id",                 "INTEGER"),
         ("user_llm_settings",   "nai_model",               "TEXT DEFAULT ''"),
+        ("user_llm_settings",   "novelai_api_key",         "TEXT DEFAULT ''"),
         ("world_snapshots",     "world_id",                "INTEGER"),
         # 모델 선택 컬럼
         ("app_settings",        "llm_model_simulation",    "TEXT DEFAULT 'claude-sonnet-4.5'"),
@@ -523,7 +524,7 @@ def _enrich_entry(entry):
         tags = llm_client.generate_auto_tags(entry.title, entry.category, entry.content)
         if tags:
             entry.auto_tags_json = _json.dumps(tags, ensure_ascii=False)
-        settings = AppSettings.get()
+        settings = UserLlmSettings.get_for_user(current_user().id) if current_user() else AppSettings.get()
         if settings.embedding_enabled:
             text = f"{entry.title}\n{entry.category}\n{entry.content}\n태그: {entry.auto_tags_json}"
             entry.embedding_json = _json.dumps(llm_client.generate_embedding(text, settings.embedding_model))
@@ -679,7 +680,7 @@ def generate_image_nai(entry_id):
     import zipfile
     import io
 
-    NAI_TOKEN = os.environ.get("NOVELAI_API_KEY", "")
+    NAI_TOKEN = UserLlmSettings.get_for_user(current_user().id).novelai_api_key or os.environ.get("NOVELAI_API_KEY", "")
     if not NAI_TOKEN:
         return jsonify({"error": "NOVELAI_API_KEY 환경변수가 설정되지 않았습니다."}), 400
 
@@ -1133,6 +1134,8 @@ def update_settings():
     if data.get("clear_embedding_api_key"): us.embedding_api_key = ""
     if "llm_model_simulation" in data: us.llm_model = str(data["llm_model_simulation"]).strip()[:200]
     if "llm_model_nai" in data: us.nai_model = str(data["llm_model_nai"]).strip()[:200]
+    if str(data.get("novelai_api_key") or "").strip(): us.novelai_api_key = str(data["novelai_api_key"]).strip()
+    if data.get("clear_novelai_api_key"): us.novelai_api_key = ""
     if "embedding_enabled" in data: us.embedding_enabled = bool(data["embedding_enabled"])
     if "embedding_model" in data: us.embedding_model = str(data["embedding_model"]).strip()[:200]
     if "rag_reference_limit" in data: us.rag_reference_limit = max(1, min(50, int(data["rag_reference_limit"])))
@@ -1152,6 +1155,16 @@ def list_available_models():
         return jsonify({"models": ids})
     except Exception as e:
         return jsonify({"error": str(e), "models": []}), 502
+
+
+@app.route("/api/markdown/render", methods=["POST"])
+def render_markdown():
+    """허용 목록으로 정화된 Markdown HTML을 반환한다."""
+    import markdown, bleach
+    source = (request.json or {}).get("text", "")
+    html = markdown.markdown(str(source), extensions=["extra", "sane_lists", "nl2br"])
+    allowed_tags = list(bleach.sanitizer.ALLOWED_TAGS) + ["p", "h1", "h2", "h3", "h4", "hr", "br", "pre", "code", "table", "thead", "tbody", "tr", "th", "td", "blockquote"]
+    return jsonify({"html": bleach.clean(html, tags=allowed_tags, attributes={"a": ["href", "title"]}, protocols=["http", "https", "mailto"])})
 
 
 # ─────────────────────────────────────────
@@ -1853,6 +1866,54 @@ def chat_page():
     redir = _require_world_redirect()
     if redir: return redir
     return render_template("chat.html")
+
+
+@app.route("/world-design")
+def world_design_page():
+    redir = _require_world_redirect()
+    if redir: return redir
+    return render_template("world_design.html", categories=CATEGORIES)
+
+
+@app.route("/api/world-design/plan", methods=["POST"])
+def world_design_plan():
+    data = request.json or {}
+    context = (data.get("context") or "").strip()
+    if len(context) < 10:
+        return jsonify({"error": "큰 맥락을 10자 이상 입력하세요."}), 400
+    wid = get_world_id()
+    entries = [e.to_dict() for e in WorldEntry.query.filter_by(world_id=wid, is_active=True).filter(
+        db.or_(WorldEntry.is_superseded.is_(False), WorldEntry.is_superseded.is_(None))).limit(100).all()]
+    try:
+        import llm_client
+        result = llm_client.design_world(context, (data.get("answers") or "").strip(), entries)
+        result["entries"] = [e for e in result.get("entries", []) if e.get("category") in CATEGORIES and e.get("title") and e.get("content")]
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
+
+
+@app.route("/api/world-design/apply", methods=["POST"])
+def world_design_apply():
+    """미리보기로 확정한 항목만 DB에 저장한다."""
+    data = request.json or {}
+    proposed = data.get("entries") or []
+    if not isinstance(proposed, list) or not proposed:
+        return jsonify({"error": "저장할 엔트리가 없습니다."}), 400
+    wid = get_world_id()
+    existing = {e.title: e.id for e in WorldEntry.query.filter_by(world_id=wid).all()}
+    created = []
+    for item in proposed[:30]:
+        title, category, content = (str(item.get(k) or "").strip() for k in ("title", "category", "content"))
+        if not title or not content or category not in CATEGORIES: continue
+        refs = [existing[r] for r in item.get("references", []) if r in existing]
+        entry = WorldEntry(world_id=wid, title=title[:200], category=category, content=content, created_by="llm", tick_created=0, is_active=True)
+        entry.references = refs
+        db.session.add(entry); db.session.flush(); existing[entry.title] = entry.id; created.append(entry)
+    db.session.commit()
+    # 태그/임베딩은 생성 성공에 영향을 주지 않도록 저장 뒤 각각 보강한다.
+    for entry in created: _enrich_entry(entry)
+    return jsonify({"ok": True, "created": [e.to_dict() for e in created]})
 
 
 @app.route("/api/chat", methods=["POST"])

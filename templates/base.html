@@ -254,6 +254,9 @@
             <a class="nav-link {% if request.path == '/chat' %}active{% endif %}" href="/chat"><i class="bi bi-chat-dots me-1"></i>아이디어 대화</a>
           </li>
           <li class="nav-item">
+            <a class="nav-link {% if request.path == '/world-design' %}active{% endif %}" href="/world-design"><i class="bi bi-magic me-1"></i>세계관 설계</a>
+          </li>
+          <li class="nav-item">
             <a class="nav-link {% if request.path == '/export' %}active{% endif %}" href="/export"><i class="bi bi-box-arrow-up me-1"></i>Export</a>
           </li>
           <li class="nav-item">
@@ -355,6 +358,7 @@
           <div class="mb-3"><label class="form-label small">LLM OpenAI 호환 주소</label><div class="input-group"><input class="form-control" id="msLlmBaseUrl" placeholder="http://192.168.0.10:11434/v1"><button type="button" class="btn btn-outline-secondary" onclick="loadAvailableModels(this)"><i class="bi bi-arrow-repeat"></i> 모델 불러오기</button></div><div class="form-text">주소·키를 입력해 저장한 뒤 모델 불러오기를 누르세요.</div></div>
           <div class="mb-3"><label class="form-label small">사용할 모델명 (로컬 포함)</label><input class="form-control" id="msCustomModel" placeholder="예: qwen3:8b 또는 llama3.1:8b"><div class="form-text">입력하면 시뮬레이션·대화에 이 모델을 사용합니다.</div></div>
           <div class="mb-3"><label class="form-label small">LLM API 키 <span id="msLlmKeyState"></span></label><input type="password" class="form-control" id="msLlmApiKey" autocomplete="new-password" placeholder="변경할 때만 입력"><div class="form-text">Ollama처럼 인증이 없으면 비워도 됩니다.</div></div>
+          <div class="mb-3"><label class="form-label small">NovelAI API 키 <span id="msNovelAiKeyState"></span></label><input type="password" class="form-control" id="msNovelAiApiKey" autocomplete="new-password" placeholder="이미지 생성에 사용할 키, 변경할 때만 입력"></div>
           <div class="mb-3"><label class="form-label small">임베딩 OpenAI 호환 주소</label><input class="form-control" id="msEmbeddingBaseUrl" placeholder="LLM 주소와 같으면 비워도 됨"></div>
           <div class="mb-2"><label class="form-label small">임베딩 API 키 <span id="msEmbeddingKeyState"></span></label><input type="password" class="form-control" id="msEmbeddingApiKey" autocomplete="new-password" placeholder="변경할 때만 입력"></div>
 
@@ -387,6 +391,7 @@
               <option value="claude-opus-4.6">claude-opus-4.6</option>
               <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview</option>
             </select>
+            <input class="form-control mt-2" id="msCustomNaiModel" placeholder="목록에 없으면 NAI 프롬프트 생성 모델명을 직접 입력">
             <div class="form-text">NovelAI 프롬프트 자동생성에 사용할 모델.</div>
           </div>
         </div>
@@ -509,9 +514,12 @@
     document.getElementById('msCustomModel').value = s.llm_base_url ? (s.llm_model_simulation ?? '') : '';
     document.getElementById('msEmbeddingBaseUrl').value = s.embedding_base_url ?? '';
     document.getElementById('msLlmApiKey').value = '';
+    document.getElementById('msNovelAiApiKey').value = '';
     document.getElementById('msEmbeddingApiKey').value = '';
     document.getElementById('msLlmKeyState').textContent = s.llm_api_key_saved ? '(저장됨)' : '';
+    document.getElementById('msNovelAiKeyState').textContent = s.novelai_api_key_saved ? '(저장됨)' : '';
     document.getElementById('msEmbeddingKeyState').textContent = s.embedding_api_key_saved ? '(저장됨)' : '';
+    document.getElementById('msCustomNaiModel').value = s.llm_model_nai ?? '';
     masterSettingsModal.show();
   }
 
@@ -542,12 +550,13 @@
       max_user_entry_chars: parseInt(document.getElementById('msUserChars').value) || 0,
       rag_token_budget: parseInt(document.getElementById('msRagBudget').value) || 0,
       llm_model_simulation: document.getElementById('msCustomModel').value.trim() || document.getElementById('msModelSim').value,
-      llm_model_nai: document.getElementById('msModelNai').value,
+      llm_model_nai: document.getElementById('msCustomNaiModel').value.trim() || document.getElementById('msModelNai').value,
       embedding_enabled: document.getElementById('msEmbeddingEnabled').checked,
       embedding_model: document.getElementById('msEmbeddingModel').value,
       rag_reference_limit: parseInt(document.getElementById('msReferenceLimit').value) || 8,
       llm_base_url: document.getElementById('msLlmBaseUrl').value.trim(),
       llm_api_key: document.getElementById('msLlmApiKey').value,
+      novelai_api_key: document.getElementById('msNovelAiApiKey').value,
       embedding_base_url: document.getElementById('msEmbeddingBaseUrl').value.trim(),
       embedding_api_key: document.getElementById('msEmbeddingApiKey').value,
     };

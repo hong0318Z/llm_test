@@ -657,7 +657,7 @@ async function selectEntry(id) {
   showDetail();
 }
 
-function showDetail() {
+async function showDetail() {
   const e = currentEntry;
   document.getElementById('detailEmpty').style.display = 'none';
   document.getElementById('detailContent').style.display = 'block';
@@ -665,7 +665,9 @@ function showDetail() {
   document.getElementById('detailCategoryBadge').innerHTML = `<span class="category-badge cat-${e.category}">${e.category}</span>`;
   document.getElementById('detailCreatorBadge').innerHTML =
     `<span class="${e.created_by === 'llm' ? 'creator-badge-llm' : 'creator-badge-user'}">${e.created_by === 'llm' ? 'LLM 생성' : '유저 작성'}</span>`;
-  document.getElementById('detailContentText').textContent = e.content;
+  const contentEl = document.getElementById('detailContentText');
+  contentEl.textContent = e.content;
+  try { const r = await fetch('/api/markdown/render', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:e.content})}); const d=await r.json(); if(r.ok) contentEl.innerHTML=d.html; } catch (_) {}
   document.getElementById('detailTick').textContent = e.tick_created === 0 ? '초기 설정' : `틱 ${e.tick_created}`;
   // 버전 노트 배지
   const vNote = e.version_note || '';

@@ -268,6 +268,35 @@ TRANSLATE_PROMPT_TEMPLATE = """\
 }}
 """
 
+WORLD_DESIGN_PROMPT = """당신은 세계관 설계자입니다. 사용자의 큰 맥락을 분석해 세계관 DB 초안을 설계하세요.
+필요한 정보가 애매하면 먼저 질문하고, 답변이 충분하면 세력·인물·장소·사건·규칙/법·마법/기술 등 적절한 항목을 만드세요.
+이미 정해진 사실은 바꾸지 마세요. 없는 내용을 사실처럼 과도하게 단정하지 마세요.
+
+반드시 아래 JSON만 출력하세요.
+{
+  "summary": "이해한 세계관 요약",
+  "questions": ["추가로 결정하면 좋은 질문"],
+  "entries": [{"title": "이름", "category": "카테고리", "content": "DB에 저장할 구체적 설명", "references": ["연관 항목 제목"]}],
+  "ready": true
+}
+
+questions는 정말 중요한 미결정 사항만 최대 5개, entries는 3~12개로 작성하세요. 답변이 부족하면 questions를 채우고 ready를 false로 하세요.
+"""
+
+
+def design_world(context: str, answers: str = "", existing_entries: list = None) -> dict:
+    """큰 맥락을 DB 엔트리 초안과 보완 질문으로 변환한다. 저장은 호출자가 승인 후 수행한다."""
+    client, model = get_llm_client()
+    existing = serialize_world_state(existing_entries or [], max_chars=250) if existing_entries else "(아직 없음)"
+    prompt = f"=== 사용자의 큰 맥락 ===\n{context}\n\n=== 보완 답변 ===\n{answers or '(없음)'}\n\n=== 기존 DB (중복 생성 금지) ===\n{existing}"
+    response = client.chat.completions.create(model=model, messages=[
+        {"role": "system", "content": WORLD_DESIGN_PROMPT}, {"role": "user", "content": prompt}
+    ], temperature=0.55, max_tokens=3000)
+    raw = response.choices[0].message.content or ""
+    result = _parse_json_safe(raw, "world_design")
+    result["_raw"] = raw
+    return result
+
 
 def serialize_world_state(entries: list, max_chars: int = 500) -> str:
     """

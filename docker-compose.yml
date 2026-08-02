@@ -1,0 +1,16 @@
+services:
+  worldllm:
+    build: .
+    container_name: worldllm
+    ports:
+      - "4318:4318"
+    env_file: .env
+    environment:
+      PORT: "4318"
+      DATABASE_URL: sqlite:////data/worldbuilding.db
+      # NAS의 Ollama는 보통 host.docker.internal, 별도 서버는 LAN IP를 사용합니다.
+      # LLM_BASE_URL: http://host.docker.internal:11434/v1
+    volumes:
+      - ./data:/data
+      - ./storage:/app/storage
+    restart: unless-stopped

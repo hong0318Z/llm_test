@@ -97,8 +97,8 @@ GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 # https://novelai.net/ 에서 API 키 발급
 # NOVELAI_API_KEY=pst-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
-# 서버 포트 (기본값: 5001)
-# PORT=5001
+# 서버 포트 (Docker 기본값: 4318)
+# PORT=4318
 
 # Flask 시크릿 키 (세션 암호화용, 배포 시 반드시 변경)
 # SECRET_KEY=your-very-secret-key-change-this
@@ -123,6 +123,31 @@ python run.py
 ```
 
 브라우저에서 `http://localhost:5001` 접속.
+
+---
+
+## Synology Docker 배포 및 로컬 LLM
+
+Synology Container Manager에서 프로젝트 폴더를 Git으로 클론/업데이트한 뒤, 루트의 `docker-compose.yml`을 Compose 프로젝트로 실행하세요. 외부 포트는 **4318**이며 데이터베이스는 `./data/worldbuilding.db`, 이미지는 `./storage`에 보존됩니다.
+
+```bash
+docker compose up -d --build
+```
+
+접속 주소는 `http://NAS_IP:4318`입니다. 업데이트할 때는 `git pull` 뒤에 위 명령을 다시 실행하면 됩니다. `.env`와 `data/`는 Git에 올리지 마세요.
+
+Ollama/LM Studio/vLLM처럼 OpenAI 호환 API를 쓰려면 `.env`에 다음을 지정합니다. NAS Docker에서 호스트의 Ollama를 호출할 수 없으면 `host.docker.internal` 대신 Ollama가 설치된 장비의 LAN IP를 사용하세요.
+
+```env
+LLM_BASE_URL=http://192.168.0.10:11434/v1
+LLM_API_KEY=local-no-key
+LLM_MODEL=qwen3:8b
+EMBEDDING_BASE_URL=http://192.168.0.10:11434/v1
+EMBEDDING_MODEL=nomic-embed-text
+SECRET_KEY=긴_임의_문자열
+```
+
+웹의 **마스터 설정**에서 `임베딩 사용`을 켜고 모델명(예: `nomic-embed-text`) 및 틱당 참조 수를 설정할 수 있습니다. 임베딩은 기본적으로 꺼져 있어, 활성화하지 않으면 기존 키워드 RAG만 사용합니다. 이미 저장된 엔트리는 상세 화면의 임베딩 생성 API 또는 향후 수정 시 갱신됩니다.
 
 ---
 

@@ -12,7 +12,7 @@ from models import db, World, WorldEntry, SimulationConfig, SimulationRun, Simul
 from datetime import datetime
 
 app = Flask(__name__)
-app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///worldbuilding.db"
+app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL", "sqlite:///worldbuilding.db")
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret-key")
 
@@ -39,6 +39,9 @@ with app.app_context():
         ("world_entries",       "parent_entry_id",         "INTEGER"),
         ("world_entries",       "version_note",            "TEXT DEFAULT ''"),
         ("world_entries",       "is_superseded",           "BOOLEAN DEFAULT 0"),
+        ("world_entries",       "embedding_json",          "TEXT DEFAULT ''"),
+        ("world_entries",       "embedding_model",         "TEXT DEFAULT ''"),
+        ("world_entries",       "auto_tags_json",          "TEXT DEFAULT '[]'"),
         ("timelines",           "main_entry_id",           "INTEGER"),
         # 세계관 컨테이너 마이그레이션
         ("world_entries",       "world_id",                "INTEGER"),
@@ -49,6 +52,9 @@ with app.app_context():
         # 모델 선택 컬럼
         ("app_settings",        "llm_model_simulation",    "TEXT DEFAULT 'claude-sonnet-4.5'"),
         ("app_settings",        "llm_model_nai",           "TEXT DEFAULT 'claude-sonnet-4.5'"),
+        ("app_settings",        "embedding_enabled",       "BOOLEAN DEFAULT 0"),
+        ("app_settings",        "embedding_model",         "TEXT DEFAULT 'nomic-embed-text'"),
+        ("app_settings",        "rag_reference_limit",     "INTEGER DEFAULT 8"),
     ]
     with db.engine.connect() as conn:
         for table, col, col_def in _migrate_columns:
@@ -376,16 +382,7 @@ def create_entry():
     db.session.add(entry)
     db.session.commit()
 
-    # 키워드 자동 생성 (LLM 연결 있을 때만, 실패해도 무시)
-    if os.environ.get("GITHUB_TOKEN") and entry.content:
-        try:
-            from llm_client import generate_keywords
-            kws = generate_keywords(entry.title, entry.category, entry.content)
-            if kws:
-                entry.keywords = ", ".join(kws)
-                db.session.commit()
-        except Exception:
-            pass
+    _enrich_entry(entry)
 
     return jsonify(entry.to_dict()), 201
 
@@ -411,16 +408,8 @@ def update_entry(entry_id):
     entry.updated_at = datetime.utcnow()
     db.session.commit()
 
-    # 내용이 변경됐으면 키워드 재생성
-    if "content" in data and os.environ.get("GITHUB_TOKEN") and entry.content:
-        try:
-            from llm_client import generate_keywords
-            kws = generate_keywords(entry.title, entry.category, entry.content)
-            if kws:
-                entry.keywords = ", ".join(kws)
-                db.session.commit()
-        except Exception:
-            pass
+    if any(k in data for k in ("title", "category", "content")):
+        _enrich_entry(entry)
 
     return jsonify(entry.to_dict())
 
@@ -445,6 +434,69 @@ def refresh_entry_keywords(entry_id):
         return jsonify({"keywords": entry.keywords, "ok": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+def _enrich_entry(entry):
+    """자동 태그/키워드와 선택적 임베딩을 저장한다. LLM 실패는 엔트리 저장을 막지 않는다."""
+    try:
+        import llm_client
+        kws = llm_client.generate_keywords(entry.title, entry.category, entry.content)
+        if kws:
+            entry.keywords = ", ".join(kws)
+        tags = llm_client.generate_auto_tags(entry.title, entry.category, entry.content)
+        if tags:
+            entry.auto_tags_json = _json.dumps(tags, ensure_ascii=False)
+        settings = AppSettings.get()
+        if settings.embedding_enabled:
+            text = f"{entry.title}\n{entry.category}\n{entry.content}\n태그: {entry.auto_tags_json}"
+            entry.embedding_json = _json.dumps(llm_client.generate_embedding(text, settings.embedding_model))
+            entry.embedding_model = settings.embedding_model
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+
+@app.route("/api/entries/<int:entry_id>/embed", methods=["POST"])
+def embed_entry(entry_id):
+    entry = WorldEntry.query.get_or_404(entry_id)
+    settings = AppSettings.get()
+    if not settings.embedding_enabled:
+        return jsonify({"error": "임베딩이 비활성화되어 있습니다."}), 400
+    try:
+        import llm_client
+        entry.embedding_json = _json.dumps(llm_client.generate_embedding(
+            f"{entry.title}\n{entry.category}\n{entry.content}\n태그: {entry.auto_tags_json}", settings.embedding_model))
+        entry.embedding_model = settings.embedding_model
+        db.session.commit()
+        return jsonify({"ok": True, "entry": entry.to_dict()})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
+
+
+@app.route("/api/search/semantic", methods=["POST"])
+def semantic_search():
+    data = request.json or {}
+    query = (data.get("query") or "").strip()
+    if not query:
+        return jsonify({"error": "query는 필수입니다."}), 400
+    settings = AppSettings.get()
+    if not settings.embedding_enabled:
+        return jsonify({"error": "임베딩 검색이 비활성화되어 있습니다."}), 400
+    try:
+        import llm_client
+        qvec = llm_client.generate_embedding(query, settings.embedding_model)
+        entries = WorldEntry.query.filter_by(world_id=get_world_id(), is_active=True).all()
+        ranked = []
+        for entry in entries:
+            try:
+                vec = _json.loads(entry.embedding_json or "[]")
+                score = llm_client.cosine_similarity(qvec, vec)
+                if score >= 0: ranked.append((score, entry))
+            except Exception: pass
+        ranked.sort(key=lambda item: item[0], reverse=True)
+        return jsonify([dict(entry.to_dict(), score=round(score, 4)) for score, entry in ranked[:int(data.get("limit", settings.rag_reference_limit))]])
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
 
 
 @app.route("/api/entries/<int:entry_id>/versions", methods=["GET"])
@@ -981,14 +1033,13 @@ def update_settings():
         s.max_user_entry_chars = int(data["max_user_entry_chars"])
     if "rag_token_budget" in data:
         s.rag_token_budget = int(data["rag_token_budget"])
-    _ALLOWED_MODELS = {
-        "gemini-3.1-pro-preview", "claude-opus-4.6", "claude-sonnet-4.6",
-        "claude-opus-4.5", "claude-sonnet-4.5",
-    }
-    if "llm_model_simulation" in data and data["llm_model_simulation"] in _ALLOWED_MODELS:
-        s.llm_model_simulation = data["llm_model_simulation"]
-    if "llm_model_nai" in data and data["llm_model_nai"] in _ALLOWED_MODELS:
-        s.llm_model_nai = data["llm_model_nai"]
+    if "llm_model_simulation" in data and str(data["llm_model_simulation"]).strip():
+        s.llm_model_simulation = str(data["llm_model_simulation"]).strip()[:100]
+    if "llm_model_nai" in data and str(data["llm_model_nai"]).strip():
+        s.llm_model_nai = str(data["llm_model_nai"]).strip()[:100]
+    if "embedding_enabled" in data: s.embedding_enabled = bool(data["embedding_enabled"])
+    if "embedding_model" in data: s.embedding_model = str(data["embedding_model"]).strip()[:200]
+    if "rag_reference_limit" in data: s.rag_reference_limit = max(1, min(50, int(data["rag_reference_limit"])))
     db.session.commit()
     return jsonify(s.to_dict())
 
@@ -1684,6 +1735,36 @@ def test_llm():
         return jsonify({"ok": False, "error": str(e)}), 400
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/chat")
+def chat_page():
+    redir = _require_world_redirect()
+    if redir: return redir
+    return render_template("chat.html")
+
+
+@app.route("/api/chat", methods=["POST"])
+def chat():
+    """세계관 컨텍스트를 제한해 전달하는 아이디어 정의용 대화 API."""
+    data = request.json or {}
+    message = (data.get("message") or "").strip()
+    if not message: return jsonify({"error": "message는 필수입니다."}), 400
+    history = data.get("history") or []
+    history = history[-12:]
+    settings = AppSettings.get()
+    entries = WorldEntry.query.filter_by(world_id=get_world_id(), is_active=True).all()
+    context = [e.to_dict() for e in entries[:settings.rag_reference_limit]]
+    try:
+        import llm_client
+        model_override = os.environ.get("LLM_MODEL") if os.environ.get("LLM_BASE_URL") else (settings.llm_model_simulation or None)
+        client, model = llm_client.get_llm_client(model_override)
+        system = "당신은 세계관 기획 파트너입니다. 사용자가 아이디어를 명확히 정의하도록 질문·대안·일관성 점검을 돕습니다. 확정되지 않은 사실은 단정하지 마세요.\n\n현재 참조 데이터:\n" + llm_client.serialize_world_state(context, settings.max_llm_entry_chars or 500)
+        messages = [{"role": "system", "content": system}] + [{"role": m.get("role", "user"), "content": str(m.get("content", ""))} for m in history if m.get("role") in ("user", "assistant")] + [{"role": "user", "content": message}]
+        response = client.chat.completions.create(model=model, messages=messages, temperature=0.7, max_tokens=1200)
+        return jsonify({"reply": response.choices[0].message.content or "", "model": model, "reference_count": len(context)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
 
 
 # ─────────────────────────────────────────

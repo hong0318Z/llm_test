@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}아이디어 대화{% endblock %}
+{% block content %}
+<div class="row justify-content-center"><div class="col-lg-9 col-xl-8">
+  <div class="card" style="height:calc(100vh - 150px)">
+    <div class="card-header"><i class="bi bi-chat-dots me-2"></i>세계관 아이디어 대화 <span class="small ms-2" style="color:var(--text-muted)">현재 세계관의 제한된 참조 데이터를 바탕으로 대화합니다.</span></div>
+    <div class="card-body d-flex flex-column p-3">
+      <div id="messages" class="flex-grow-1 overflow-auto mb-3" style="white-space:pre-wrap"></div>
+      <form id="chatForm" class="d-flex gap-2"><textarea id="message" class="form-control" rows="2" placeholder="예: 이 세계의 마법 체계에서 갈등을 만들려면?"></textarea><button class="btn btn-primary" type="submit">보내기</button></form>
+    </div>
+  </div>
+</div></div>
+{% endblock %}
+{% block extra_scripts %}<script>
+const history=[]; const box=document.getElementById('messages');
+function add(role,text){ const d=document.createElement('div'); d.className='p-3 mb-2 rounded'; d.style.background=role==='user'?'rgba(139,127,247,.16)':'var(--bg-input)'; d.textContent=(role==='user'?'나':'LLM')+'\n'+text; box.appendChild(d); box.scrollTop=box.scrollHeight; }
+document.getElementById('chatForm').addEventListener('submit', async e=>{e.preventDefault();const input=document.getElementById('message'),message=input.value.trim();if(!message)return; input.value='';add('user',message);const btn=e.target.querySelector('button');btn.disabled=true;try{const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message,history})});const d=await r.json();if(!r.ok)throw Error(d.error);history.push({role:'user',content:message},{role:'assistant',content:d.reply});add('assistant',d.reply);}catch(err){add('assistant','오류: '+err.message)}finally{btn.disabled=false;input.focus()}});
+</script>{% endblock %}

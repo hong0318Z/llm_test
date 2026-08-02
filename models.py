@@ -50,6 +50,10 @@ class WorldEntry(db.Model):
     is_active = db.Column(db.Boolean, default=True)
     is_summarized = db.Column(db.Boolean, default=False)  # 요약으로 대체된 항목
     keywords = db.Column(db.Text, default="")  # 쉼표 구분 핵심 키워드 (최대 5개)
+    # 선택적 임베딩: 제공자와 모델이 바뀌면 다시 생성할 수 있도록 메타데이터도 저장
+    embedding_json = db.Column(db.Text, default="")
+    embedding_model = db.Column(db.String(200), default="")
+    auto_tags_json = db.Column(db.Text, default="[]")
     image_filename = db.Column(db.String(300), nullable=True)  # 첨부 이미지 경로
     # 버전 관리
     parent_entry_id = db.Column(db.Integer, db.ForeignKey("world_entries.id"), nullable=True)
@@ -70,6 +74,10 @@ class WorldEntry(db.Model):
         self.references_json = json.dumps(value or [])
 
     def to_dict(self):
+        try:
+            auto_tags = json.loads(self.auto_tags_json or "[]")
+        except Exception:
+            auto_tags = []
         return {
             "id": self.id,
             "title": self.title,
@@ -81,6 +89,9 @@ class WorldEntry(db.Model):
             "is_active": self.is_active,
             "is_summarized": self.is_summarized,
             "keywords": self.keywords or "",
+            "auto_tags": auto_tags,
+            "has_embedding": bool(self.embedding_json),
+            "embedding_model": self.embedding_model or "",
             "image_filename": self.image_filename or None,
             "parent_entry_id": self.parent_entry_id,
             "version_note": self.version_note or "",
@@ -132,6 +143,10 @@ class AppSettings(db.Model):
     # 모델 선택: 세계관 시뮬레이션용 / NAI 프롬프트 생성용
     llm_model_simulation = db.Column(db.String(100), default="claude-sonnet-4.5")
     llm_model_nai = db.Column(db.String(100), default="claude-sonnet-4.5")
+    # 임베딩은 비용/성능에 따라 선택적으로 사용한다.
+    embedding_enabled = db.Column(db.Boolean, default=False)
+    embedding_model = db.Column(db.String(200), default="nomic-embed-text")
+    rag_reference_limit = db.Column(db.Integer, default=8)
 
     @staticmethod
     def get():
@@ -149,6 +164,9 @@ class AppSettings(db.Model):
             "rag_token_budget": self.rag_token_budget if self.rag_token_budget is not None else 0,
             "llm_model_simulation": self.llm_model_simulation or "claude-sonnet-4.5",
             "llm_model_nai": self.llm_model_nai or "claude-sonnet-4.5",
+            "embedding_enabled": bool(self.embedding_enabled),
+            "embedding_model": self.embedding_model or "nomic-embed-text",
+            "rag_reference_limit": self.rag_reference_limit if self.rag_reference_limit is not None else 8,
         }
 
 

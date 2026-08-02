@@ -251,6 +251,9 @@
             <a class="nav-link {% if request.path == '/stats' %}active{% endif %}" href="/stats"><i class="bi bi-bar-chart-line me-1"></i>통계</a>
           </li>
           <li class="nav-item">
+            <a class="nav-link {% if request.path == '/chat' %}active{% endif %}" href="/chat"><i class="bi bi-chat-dots me-1"></i>아이디어 대화</a>
+          </li>
+          <li class="nav-item">
             <a class="nav-link {% if request.path == '/export' %}active{% endif %}" href="/export"><i class="bi bi-box-arrow-up me-1"></i>Export</a>
           </li>
           <li class="nav-item">
@@ -337,6 +340,14 @@
               <span style="color:#ffb86c;">0 = RAG 비활성화 (전체 엔트리 전달)</span>
             </div>
           </div>
+
+          <hr style="border-color:var(--border);">
+          <div class="form-check form-switch mb-3">
+            <input class="form-check-input" type="checkbox" id="msEmbeddingEnabled">
+            <label class="form-check-label" for="msEmbeddingEnabled"><i class="bi bi-vector-pen me-1"></i>임베딩 기반 벡터 검색 사용</label>
+            <div class="form-text">켜면 엔트리 저장/수정 시 임베딩을 요청하며, 틱마다 관련 참조만 선택합니다.</div>
+          </div>
+          <div class="row g-2 mb-2"><div class="col-md-8"><label class="form-label small">임베딩 모델</label><input class="form-control" id="msEmbeddingModel" placeholder="nomic-embed-text"></div><div class="col-md-4"><label class="form-label small">틱당 참조 수</label><input type="number" class="form-control" id="msReferenceLimit" min="1" max="50"></div></div>
 
           <hr style="border-color:var(--border);">
 
@@ -482,6 +493,9 @@
     document.getElementById('msRagBudget').value = s.rag_token_budget ?? 0;
     document.getElementById('msModelSim').value = s.llm_model_simulation ?? 'claude-sonnet-4.5';
     document.getElementById('msModelNai').value = s.llm_model_nai ?? 'claude-sonnet-4.5';
+    document.getElementById('msEmbeddingEnabled').checked = !!s.embedding_enabled;
+    document.getElementById('msEmbeddingModel').value = s.embedding_model ?? 'nomic-embed-text';
+    document.getElementById('msReferenceLimit').value = s.rag_reference_limit ?? 8;
     masterSettingsModal.show();
   }
 
@@ -492,6 +506,9 @@
       rag_token_budget: parseInt(document.getElementById('msRagBudget').value) || 0,
       llm_model_simulation: document.getElementById('msModelSim').value,
       llm_model_nai: document.getElementById('msModelNai').value,
+      embedding_enabled: document.getElementById('msEmbeddingEnabled').checked,
+      embedding_model: document.getElementById('msEmbeddingModel').value,
+      rag_reference_limit: parseInt(document.getElementById('msReferenceLimit').value) || 8,
     };
     const res = await fetch('/api/settings', {
       method: 'PUT',

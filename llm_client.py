@@ -18,6 +18,7 @@ CONTEXT_SUMMARY_THRESHOLD = 120_000
 
 
 def get_llm_client(model_override: str = None):
+
     """LLM API 클라이언트 반환.
 
     LLM_BASE_URL 환경변수가 설정되어 있으면 (예: mlx_lm.server 같은 로컬
@@ -40,18 +41,63 @@ def get_llm_client(model_override: str = None):
             ".env 파일에 GITHUB_TOKEN=your_token 을 추가하세요.\n"
             "또는 로컬 모델을 사용하려면 LLM_BASE_URL을 설정하세요 (예: http://localhost:8080/v1)."
         )
+
+    """Copilot 또는 OpenAI 호환 로컬/원격 서버 클라이언트 반환.
+
+    LLM_BASE_URL을 지정하면 Ollama, LM Studio, vLLM 등으로 전환된다.
+    """
+    base_url = os.environ.get("LLM_BASE_URL") or COPILOT_BASE_URL
+    api_key = os.environ.get("LLM_API_KEY") or os.environ.get("GITHUB_TOKEN")
+    if not api_key:
+        # Ollama 등 인증 없는 OpenAI 호환 서버도 OpenAI SDK에는 더미 키가 필요하다.
+        if os.environ.get("LLM_BASE_URL"):
+            api_key = "local-no-key"
+        else:
+            raise EnvironmentError("GITHUB_TOKEN 또는 LLM_API_KEY가 필요합니다.")
+
     model = model_override or os.environ.get("LLM_MODEL", DEFAULT_MODEL)
     client = OpenAI(
-        base_url=COPILOT_BASE_URL,
-        api_key=github_token,
-        default_headers={
+        base_url=base_url,
+        api_key=api_key,
+        default_headers=({
             "Editor-Version": "vscode/1.95.0",
             "Editor-Plugin-Version": "copilot-chat/0.22.0",
             "Copilot-Integration-Id": "vscode-chat",
             "Openai-Organization": "github-copilot",
-        },
+        } if not os.environ.get("LLM_BASE_URL") else {}),
     )
     return client, model
+
+
+def get_embedding_client():
+    """임베딩 전용 OpenAI 호환 endpoint. 미지정 시 LLM endpoint를 재사용한다."""
+    base_url = os.environ.get("EMBEDDING_BASE_URL") or os.environ.get("LLM_BASE_URL") or COPILOT_BASE_URL
+    api_key = os.environ.get("EMBEDDING_API_KEY") or os.environ.get("LLM_API_KEY") or os.environ.get("GITHUB_TOKEN") or "local-no-key"
+    return OpenAI(base_url=base_url, api_key=api_key)
+
+
+def generate_embedding(text: str, model: str) -> list:
+    response = get_embedding_client().embeddings.create(model=model, input=text)
+    return response.data[0].embedding
+
+
+def generate_auto_tags(title: str, category: str, content: str) -> list:
+    """벡터 검색 보조용 의미 태그. 실패해도 호출자는 기존 키워드를 계속 사용한다."""
+    client, model = get_llm_client()
+    prompt = ("세계관 검색용 태그를 5~10개 JSON 배열로만 반환하세요. "
+              "고유명사, 관계, 장소, 주제, 시대를 포함하세요.\n"
+              f"제목:{title}\n분류:{category}\n내용:{content[:1200]}")
+    raw = client.chat.completions.create(model=model, messages=[{"role": "user", "content": prompt}], temperature=0.1, max_tokens=160).choices[0].message.content or "[]"
+    parsed = _parse_json_safe(raw, "auto_tags")
+    tags = parsed if isinstance(parsed, list) else parsed.get("tags", [])
+    return [str(tag).strip() for tag in tags if str(tag).strip()][:10]
+
+
+def cosine_similarity(a: list, b: list) -> float:
+    if not a or not b or len(a) != len(b): return -1.0
+    import math
+    den = math.sqrt(sum(x*x for x in a)) * math.sqrt(sum(x*x for x in b))
+    return sum(x*y for x, y in zip(a, b)) / den if den else -1.0
 
 
 def estimate_tokens(text: str) -> int:

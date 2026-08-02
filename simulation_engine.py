@@ -61,7 +61,9 @@ def run_simulation(run_id: int, app):
         try:
             # 시뮬레이션 모델 설정 로드 (최초 1회)
             _sim_settings = AppSettings.get()
-            _model_sim = _sim_settings.llm_model_simulation or None
+            # 로컬 endpoint에서는 .env의 LLM_MODEL이 단일 진실 소스다.
+            import os
+            _model_sim = os.environ.get("LLM_MODEL") if os.environ.get("LLM_BASE_URL") else (_sim_settings.llm_model_simulation or None)
 
             for tick in range(1, run.total_ticks + 1):
                 # 매 틱 시작 전 취소 여부 확인
@@ -95,6 +97,26 @@ def run_simulation(run_id: int, app):
                 recent_context = " ".join(
                     l.description for l in reversed(recent_logs) if l.description
                 )
+
+                # 로컬 환경에서는 전체 DB를 한 번에 넣지 않는다. 임베딩이 켜진 경우
+                # 매 틱의 최근 맥락으로 벡터 검색해 코어(유저) + 상위 참조만 순차 호출한다.
+                if settings.embedding_enabled and recent_context:
+                    try:
+                        import json as _json
+                        qvec = llm_client.generate_embedding(recent_context, settings.embedding_model)
+                        core = [e for e in entries if e.get("created_by") == "user"]
+                        candidates = []
+                        for e in entries:
+                            row = WorldEntry.query.get(e["id"])
+                            vec = _json.loads((row.embedding_json if row else "") or "[]")
+                            score = llm_client.cosine_similarity(qvec, vec)
+                            if score >= 0 and e.get("created_by") != "user":
+                                candidates.append((score, e))
+                        candidates.sort(key=lambda item: item[0], reverse=True)
+                        entries = core + [e for _, e in candidates[:settings.rag_reference_limit]]
+                    except Exception:
+                        # 임베딩 서버가 일시적으로 꺼져도 기존 키워드 RAG로 계속 진행
+                        pass
 
                 # 일반 틱 실행 (스토리 비트 가이드 포함)
                 result = llm_client.run_tick(

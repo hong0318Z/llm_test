@@ -300,6 +300,43 @@ def design_world(context: str, answers: str = "", existing_entries: list = None,
     return result
 
 
+WORLD_STRUCTURE_PROMPT = """당신은 세계관 데이터베이스 설계자입니다. 큰 맥락을 바탕으로 DB에 추가할 항목의 '설계 목록'만 만드세요.
+본문을 길게 쓰지 말고, 이름·분류·핵심 속성·생성 이유를 명확히 제안하세요. 기존 항목과 같은 개념은 절대 제안하지 마세요.
+반드시 JSON만 출력하세요:
+{"summary":"설계 요약","questions":["정말 필요한 미결정 질문"],"items":[{"title":"항목명","category":"세력|인물|장소 등","attributes":["핵심 속성"],"purpose":"세계관에서 채우는 역할"}]}
+"""
+
+
+def plan_world_structure(context: str, target_count: int, answers: str, existing_entries: list) -> dict:
+    client, model = get_llm_client()
+    existing = serialize_world_state(existing_entries, max_chars=220) if existing_entries else "(없음)"
+    prompt = f"=== 큰 맥락 ===\n{context}\n\n=== 보완 답변 ===\n{answers or '(없음)'}\n\n=== 기존 DB ===\n{existing}\n\n정확히 최대 {target_count}개 이하의 서로 다른 설계 항목을 제안하세요."
+    raw = client.chat.completions.create(model=model, messages=[{"role":"system","content":WORLD_STRUCTURE_PROMPT},{"role":"user","content":prompt}], temperature=0.45, max_tokens=2200).choices[0].message.content or ""
+    result = _parse_json_safe(raw, "world_structure")
+    result["_raw"] = raw
+    return result
+
+
+WORLD_DETAIL_PROMPT = """당신은 세계관 DB 작성자입니다. 받은 설계 항목만 상세한 독립 DB 엔트리로 작성하세요.
+{length_rule}
+설계 목록 밖의 새 항목을 추가하지 말고, Markdown 제목은 쓰지 마세요.
+JSON만 출력: {"entries":[{"title":"", "category":"", "content":"", "references":[]}]}
+"""
+
+
+def generate_world_detail_batch(context: str, items: list, existing_entries: list, max_chars: int = 0) -> dict:
+    client, model = get_llm_client()
+    existing = serialize_world_state(existing_entries, max_chars=300) if existing_entries else "(없음)"
+    items_text = json.dumps(items, ensure_ascii=False)
+    length_rule = ("content 길이는 제한하지 마세요. 정보가 충분히 정리될 때까지 모델이 가능한 범위에서 충실하게 작성하세요." if not max_chars else f"각 content는 최대 {max_chars}자 이내로 작성하세요. 제한 안에서 정의·배경/역사·구조/특성·관계·갈등을 우선순위대로 충실히 담으세요.")
+    prompt = f"=== 큰 맥락 ===\n{context}\n\n=== 이번에 상세 작성할 설계 항목 ===\n{items_text}\n\n=== 기존 DB 참고 ===\n{existing}"
+    system_prompt = WORLD_DETAIL_PROMPT.replace("{length_rule}", length_rule)
+    raw = client.chat.completions.create(model=model, messages=[{"role":"system","content":system_prompt},{"role":"user","content":prompt}], temperature=0.6, max_tokens=8000).choices[0].message.content or ""
+    result = _parse_json_safe(raw, "world_detail_batch")
+    result["_raw"] = raw
+    return result
+
+
 def serialize_world_state(entries: list, max_chars: int = 500) -> str:
     """
     세계관 엔트리 목록을 LLM이 읽기 좋은 형태로 직렬화.

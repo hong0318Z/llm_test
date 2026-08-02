@@ -31,6 +31,7 @@ class UserLlmSettings(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), unique=True, nullable=False)
     llm_base_url = db.Column(db.String(500), default="")
+    llm_provider = db.Column(db.String(50), default="custom")
     llm_api_key = db.Column(db.Text, default="")
     llm_model = db.Column(db.String(200), default="")
     nai_model = db.Column(db.String(200), default="")
@@ -50,7 +51,7 @@ class UserLlmSettings(db.Model):
         return s
 
     def to_dict(self):
-        return {"llm_base_url": self.llm_base_url or "", "llm_api_key_saved": bool(self.llm_api_key), "llm_model": self.llm_model or "", "nai_model": self.nai_model or "", "novelai_api_key_saved": bool(self.novelai_api_key), "embedding_enabled": bool(self.embedding_enabled), "embedding_base_url": self.embedding_base_url or "", "embedding_api_key_saved": bool(self.embedding_api_key), "embedding_model": self.embedding_model or "nomic-embed-text", "rag_reference_limit": self.rag_reference_limit or 8}
+        return {"llm_provider": self.llm_provider or "custom", "llm_base_url": self.llm_base_url or "", "llm_api_key_saved": bool(self.llm_api_key), "llm_model": self.llm_model or "", "nai_model": self.nai_model or "", "novelai_api_key_saved": bool(self.novelai_api_key), "embedding_enabled": bool(self.embedding_enabled), "embedding_base_url": self.embedding_base_url or "", "embedding_api_key_saved": bool(self.embedding_api_key), "embedding_model": self.embedding_model or "nomic-embed-text", "rag_reference_limit": self.rag_reference_limit or 8}
 
 
 class World(db.Model):
@@ -221,6 +222,18 @@ class AppSettings(db.Model):
             "embedding_base_url": self.embedding_base_url or "",
             "embedding_api_key_saved": bool(self.embedding_api_key),
         }
+
+
+class EntryRelationship(db.Model):
+    """엔트리 간 명시적 관계. references는 그래프 호환을 위해 함께 유지한다."""
+    __tablename__ = "entry_relationships"
+    id = db.Column(db.Integer, primary_key=True)
+    world_id = db.Column(db.Integer, db.ForeignKey("worlds.id"), nullable=True)
+    source_entry_id = db.Column(db.Integer, db.ForeignKey("world_entries.id"), nullable=False)
+    target_entry_id = db.Column(db.Integer, db.ForeignKey("world_entries.id"), nullable=False)
+    relation_type = db.Column(db.String(100), default="관련")
+    description = db.Column(db.Text, default="")
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 
 class SimulationConfig(db.Model):

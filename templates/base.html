@@ -355,6 +355,7 @@
 
           <hr style="border-color:var(--border);">
           <div class="small mb-2" style="color:var(--text-secondary)"><i class="bi bi-hdd-network me-1"></i>연결 정보는 이 NAS의 내부 DB에 저장됩니다. API 키는 저장 여부만 표시되며 다시 읽어 오지 않습니다.</div>
+          <div class="mb-3"><label class="form-label small">LLM 제공자 프리셋</label><select id="msProvider" class="form-select" onchange="applyProviderPreset()"><option value="local">로컬 / Ollama / LM Studio</option><option value="openai">OpenAI (GPT)</option><option value="deepseek">DeepSeek</option><option value="openrouter">OpenRouter (Claude 등)</option><option value="copilot">GitHub Copilot</option><option value="custom">직접 입력 (OpenAI 호환)</option></select><div class="form-text">Claude 직접 API는 OpenAI 호환이 아니므로 OpenRouter 프리셋으로 Claude 모델을 선택합니다.</div></div>
           <div class="mb-3"><label class="form-label small">LLM OpenAI 호환 주소</label><div class="input-group"><input class="form-control" id="msLlmBaseUrl" placeholder="http://192.168.0.10:11434/v1"><button type="button" class="btn btn-outline-secondary" onclick="loadAvailableModels(this)"><i class="bi bi-arrow-repeat"></i> 모델 불러오기</button></div><div class="form-text">주소·키를 입력해 저장한 뒤 모델 불러오기를 누르세요.</div></div>
           <div class="mb-3"><label class="form-label small">사용할 모델명 (로컬 포함)</label><input class="form-control" id="msCustomModel" placeholder="예: qwen3:8b 또는 llama3.1:8b"><div class="form-text">입력하면 시뮬레이션·대화에 이 모델을 사용합니다.</div></div>
           <div class="mb-3"><label class="form-label small">LLM API 키 <span id="msLlmKeyState"></span></label><input type="password" class="form-control" id="msLlmApiKey" autocomplete="new-password" placeholder="변경할 때만 입력"><div class="form-text">Ollama처럼 인증이 없으면 비워도 됩니다.</div></div>
@@ -511,6 +512,7 @@
     document.getElementById('msEmbeddingModel').value = s.embedding_model ?? 'nomic-embed-text';
     document.getElementById('msReferenceLimit').value = s.rag_reference_limit ?? 8;
     document.getElementById('msLlmBaseUrl').value = s.llm_base_url ?? '';
+    document.getElementById('msProvider').value = s.llm_provider ?? 'custom';
     document.getElementById('msCustomModel').value = s.llm_base_url ? (s.llm_model_simulation ?? '') : '';
     document.getElementById('msEmbeddingBaseUrl').value = s.embedding_base_url ?? '';
     document.getElementById('msLlmApiKey').value = '';
@@ -527,6 +529,12 @@
     const el = document.getElementById(id);
     if (![...el.options].some(o => o.value === value)) el.add(new Option(value, value));
     el.value = value;
+  }
+
+  function applyProviderPreset() {
+    const preset = {local:['',''],openai:['https://api.openai.com/v1','gpt-4o-mini'],deepseek:['https://api.deepseek.com/v1','deepseek-chat'],openrouter:['https://openrouter.ai/api/v1','anthropic/claude-3.5-sonnet'],copilot:['https://api.githubcopilot.com','claude-sonnet-4.5'],custom:['','']}[document.getElementById('msProvider').value];
+    if (preset[0]) document.getElementById('msLlmBaseUrl').value=preset[0];
+    if (preset[1]) { document.getElementById('msCustomModel').value=preset[1]; setModelSelect('msModelSim',preset[1]); setModelSelect('msModelNai',preset[1]); }
   }
 
   async function loadAvailableModels(btn) {
@@ -555,6 +563,7 @@
       embedding_model: document.getElementById('msEmbeddingModel').value,
       rag_reference_limit: parseInt(document.getElementById('msReferenceLimit').value) || 8,
       llm_base_url: document.getElementById('msLlmBaseUrl').value.trim(),
+      llm_provider: document.getElementById('msProvider').value,
       llm_api_key: document.getElementById('msLlmApiKey').value,
       novelai_api_key: document.getElementById('msNovelAiApiKey').value,
       embedding_base_url: document.getElementById('msEmbeddingBaseUrl').value.trim(),

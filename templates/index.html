@@ -85,6 +85,9 @@
           <button class="btn btn-sm btn-outline-secondary" onclick="bulkToggleActive(false)" title="선택 항목 비활성화">
             <i class="bi bi-slash-circle me-1"></i>비활성화
           </button>
+          <button class="btn btn-sm btn-outline-secondary" onclick="connectSelected()" title="첫 선택 엔트리에서 나머지 선택 엔트리로 관계를 연결">
+            <i class="bi bi-diagram-3 me-1"></i>관계 연결
+          </button>
           <button class="btn btn-sm btn-outline-danger ms-auto" onclick="bulkDelete()">
             <i class="bi bi-trash me-1"></i>선택 삭제
           </button>
@@ -560,15 +563,24 @@ function filterSearch() { renderList(); }
 
 // ── 멀티선택 ──────────────────────────────────
 let selectedIds = new Set();
+let lastSelectedIndex = null;
 
-function toggleSelect(id, e) {
+function toggleSelect(id, e, index) {
   e.stopPropagation();
-  if (selectedIds.has(id)) selectedIds.delete(id);
+  if (e.shiftKey && lastSelectedIndex !== null) {
+    const start = Math.min(lastSelectedIndex, index), end = Math.max(lastSelectedIndex, index);
+    const visible = getVisibleEntries();
+    for (let i = start; i <= end; i++) selectedIds.add(visible[i].id);
+  } else if (selectedIds.has(id)) selectedIds.delete(id);
   else selectedIds.add(id);
+  lastSelectedIndex = index;
   updateBulkToolbar();
-  // 체크박스 시각 업데이트
-  const cb = document.querySelector(`.entry-checkbox[data-id="${id}"]`);
-  if (cb) cb.checked = selectedIds.has(id);
+  renderList();
+}
+
+function getVisibleEntries() {
+  const search = document.getElementById('searchInput').value.toLowerCase();
+  return allEntries.filter(e => (!currentCategory || e.category === currentCategory) && (!search || e.title.toLowerCase().includes(search) || e.content.toLowerCase().includes(search) || (e.keywords || '').toLowerCase().includes(search)));
 }
 
 function updateBulkToolbar() {
@@ -580,6 +592,7 @@ function updateBulkToolbar() {
 
 function clearSelection() {
   selectedIds.clear();
+  lastSelectedIndex = null;
   updateBulkToolbar();
   renderList();
 }
@@ -614,27 +627,21 @@ async function bulkToggleActive(isActive) {
 
 function renderList() {
   const search = document.getElementById('searchInput').value.toLowerCase();
-  let items = allEntries;
-  if (currentCategory) items = items.filter(e => e.category === currentCategory);
-  if (search) items = items.filter(e =>
-    e.title.toLowerCase().includes(search) ||
-    e.content.toLowerCase().includes(search) ||
-    (e.keywords || '').toLowerCase().includes(search)
-  );
+  let items = getVisibleEntries();
 
   const container = document.getElementById('entryList');
   if (items.length === 0) {
     container.innerHTML = '<p class="text-muted text-center small py-4">엔트리가 없습니다.</p>';
     return;
   }
-  container.innerHTML = items.map(e => `
+  container.innerHTML = items.map((e, index) => `
     <div class="entry-card mb-2 ${e.is_active ? '' : 'inactive'} ${selectedIds.has(e.id) ? 'selected' : ''}"
       onclick="selectEntry(${e.id})" style="position:relative;overflow:hidden;">
       ${e.image_filename ? `<img src="/storage/${e.image_filename}" alt=""
         style="width:100%;height:80px;object-fit:contain;background:var(--bg-input);border-radius:8px 8px 0 0;display:block;margin-bottom:8px;opacity:${e.is_active?1:0.4};">` : ''}
       <input type="checkbox" class="entry-checkbox"
         data-id="${e.id}" ${selectedIds.has(e.id) ? 'checked' : ''}
-        onclick="toggleSelect(${e.id}, event)"
+        onclick="toggleSelect(${e.id}, event, ${index})"
         style="position:absolute; top:8px; right:8px; width:15px; height:15px; cursor:pointer; accent-color:var(--accent);">
       <div class="d-flex align-items-center gap-2 mb-1" style="padding-right:24px;">
         <span class="category-badge cat-${e.category}">${e.category}</span>
@@ -649,6 +656,20 @@ function renderList() {
       ).join('')}</div>` : ''}
     </div>
   `).join('');
+}
+
+async function connectSelected() {
+  if (selectedIds.size < 2) return alert('관계를 연결할 엔트리를 2개 이상 선택하세요. 첫 선택 항목이 출발점입니다.');
+  const ids = [...selectedIds];
+  const sourceId = ids[0];
+  const type = prompt('관계 유형을 입력하세요. (예: 동맹, 적대, 소속, 위치, 원인)', '관련');
+  if (type === null) return;
+  const description = prompt('관계 설명 (선택)', '') || '';
+  const res = await fetch('/api/relationships', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({source_id:sourceId, target_ids:ids.slice(1), relation_type:type, description})});
+  const data = await res.json();
+  if (!res.ok) return alert(data.error || '관계 연결 실패');
+  alert(`${data.created_target_ids.length}개 관계를 연결했습니다.`);
+  await loadEntries();
 }
 
 async function selectEntry(id) {

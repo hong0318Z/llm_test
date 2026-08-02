@@ -8,7 +8,7 @@ import json as _json
 from collections import Counter
 from flask import Flask, jsonify, request, render_template, abort, Response, send_from_directory, session, redirect, url_for
 from werkzeug.utils import secure_filename
-from models import db, User, UserLlmSettings, World, WorldEntry, SimulationConfig, SimulationRun, SimulationLog, WorldSnapshot, AppSettings, LlmPromptConfig, Timeline, TimelineEvent, StoryBeat, CATEGORIES
+from models import db, User, UserLlmSettings, World, WorldEntry, EntryRelationship, SimulationConfig, SimulationRun, SimulationLog, WorldSnapshot, AppSettings, LlmPromptConfig, Timeline, TimelineEvent, StoryBeat, CATEGORIES
 from datetime import datetime
 
 app = Flask(__name__)
@@ -51,6 +51,7 @@ with app.app_context():
         ("simulation_runs",     "user_id",                 "INTEGER"),
         ("user_llm_settings",   "nai_model",               "TEXT DEFAULT ''"),
         ("user_llm_settings",   "novelai_api_key",         "TEXT DEFAULT ''"),
+        ("user_llm_settings",   "llm_provider",            "TEXT DEFAULT 'custom'"),
         ("world_snapshots",     "world_id",                "INTEGER"),
         # 모델 선택 컬럼
         ("app_settings",        "llm_model_simulation",    "TEXT DEFAULT 'claude-sonnet-4.5'"),
@@ -490,6 +491,27 @@ def update_entry(entry_id):
         _enrich_entry(entry)
 
     return jsonify(entry.to_dict())
+
+
+@app.route("/api/relationships", methods=["POST"])
+def create_relationship():
+    """선택 엔트리의 방향성 관계를 저장하고 기존 관계도에서도 보이도록 references를 동기화한다."""
+    data = request.json or {}
+    source_id, target_ids = data.get("source_id"), data.get("target_ids") or []
+    source = WorldEntry.query.get_or_404(source_id)
+    if source.world_id != get_world_id(): return jsonify({"error": "다른 세계관 엔트리입니다."}), 403
+    created = []
+    for target_id in target_ids:
+        if target_id == source.id: continue
+        target = WorldEntry.query.get(target_id)
+        if not target or target.world_id != source.world_id: continue
+        if not EntryRelationship.query.filter_by(source_entry_id=source.id, target_entry_id=target.id, relation_type=(data.get("relation_type") or "관련")[:100]).first():
+            db.session.add(EntryRelationship(world_id=source.world_id, source_entry_id=source.id, target_entry_id=target.id, relation_type=(data.get("relation_type") or "관련")[:100], description=(data.get("description") or "")[:2000]))
+            created.append(target.id)
+        refs = source.references
+        if target.id not in refs: source.references = refs + [target.id]
+    db.session.commit()
+    return jsonify({"ok": True, "created_target_ids": created})
 
 
 @app.route("/api/entries/<int:entry_id>", methods=["DELETE"])
@@ -1126,6 +1148,7 @@ def update_settings():
     if "embedding_model" in data: s.embedding_model = str(data["embedding_model"]).strip()[:200]
     if "rag_reference_limit" in data: s.rag_reference_limit = max(1, min(50, int(data["rag_reference_limit"])))
     if "llm_base_url" in data: us.llm_base_url = str(data["llm_base_url"]).strip()[:500]
+    if "llm_provider" in data: us.llm_provider = str(data["llm_provider"]).strip()[:50]
     if "embedding_base_url" in data: us.embedding_base_url = str(data["embedding_base_url"]).strip()[:500]
     # 빈 값은 기존 키 유지, clear_* 플래그로만 명시적으로 제거한다.
     if str(data.get("llm_api_key") or "").strip(): us.llm_api_key = str(data["llm_api_key"]).strip()
@@ -1884,20 +1907,58 @@ def world_design_plan():
     wid = get_world_id()
     entries = [e.to_dict() for e in WorldEntry.query.filter_by(world_id=wid, is_active=True).filter(
         db.or_(WorldEntry.is_superseded.is_(False), WorldEntry.is_superseded.is_(None))).limit(100).all()]
-    rounds = max(1, min(5, int(data.get("rounds", 3))))
+    target_count = max(1, min(30, int(data.get("target_count", 10))))
     try:
         import llm_client
-        all_entries, all_questions, summary = [], [], ""
-        for batch in range(1, rounds + 1):
-            result = llm_client.design_world(context, (data.get("answers") or "").strip(), entries, all_entries, batch)
-            if not summary: summary = result.get("summary", "")
-            all_questions.extend(result.get("questions", []))
-            for item in result.get("entries", []):
-                if item.get("category") in CATEGORIES and item.get("title") and item.get("content"):
-                    # 제목+분류 기준으로 같은 항목은 한 번만 유지한다.
-                    if not any(e["title"].strip().lower() == item["title"].strip().lower() and e["category"] == item["category"] for e in all_entries):
-                        all_entries.append(item)
-        return jsonify({"summary": summary, "questions": list(dict.fromkeys(str(q) for q in all_questions if q))[:10], "entries": all_entries, "ready": True, "batches": rounds})
+        result = llm_client.plan_world_structure(context, target_count, (data.get("answers") or "").strip(), entries)
+        items = [item for item in result.get("items", []) if item.get("title") and item.get("category") in CATEGORIES][:target_count]
+        # 임베딩이 켜졌다면 후보 제목/속성을 벡터화하여 유사한 기존 DB 항목을 제외한다.
+        settings = UserLlmSettings.get_for_user(current_user().id)
+        duplicate_titles = []
+        if settings.embedding_enabled:
+            rows = WorldEntry.query.filter_by(world_id=wid, is_active=True).all()
+            for item in list(items):
+                query = f"{item['title']}\n{item['category']}\n{' '.join(item.get('attributes', []))}\n{item.get('purpose', '')}"
+                try:
+                    vector = llm_client.generate_embedding(query, settings.embedding_model)
+                    matches = []
+                    for row in rows:
+                        score = llm_client.cosine_similarity(vector, _json.loads(row.embedding_json or "[]"))
+                        if score >= 0.88: matches.append(row.title)
+                    if matches:
+                        items.remove(item); duplicate_titles.append({"planned": item["title"], "existing": matches[:3]})
+                except Exception:
+                    break  # 임베딩 오류 시 제목 비교만 적용
+        existing_norm = {e["title"].strip().lower() for e in entries}
+        items = [i for i in items if i["title"].strip().lower() not in existing_norm]
+        return jsonify({"summary": result.get("summary", ""), "questions": result.get("questions", [])[:10], "items": items, "duplicate_matches": duplicate_titles})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
+
+
+@app.route("/api/world-design/generate", methods=["POST"])
+def world_design_generate():
+    """사용자가 확정한 설계 목록을 지정 횟수만큼 나눠 순차적으로 상세 생성한다."""
+    data = request.json or {}
+    context, items = (data.get("context") or "").strip(), data.get("items") or []
+    batches = max(1, min(15, int(data.get("batches", 5))))
+    items = [i for i in items if i.get("title") and i.get("category") in CATEGORIES][:30]
+    if not context or not items: return jsonify({"error": "큰 맥락과 설계 항목이 필요합니다."}), 400
+    wid = get_world_id()
+    existing = [e.to_dict() for e in WorldEntry.query.filter_by(world_id=wid, is_active=True).limit(100).all()]
+    chunk_size = max(1, (len(items) + batches - 1) // batches)
+    try:
+        import llm_client
+        entries = []
+        max_chars = AppSettings.get().max_llm_entry_chars or 0
+        for start in range(0, len(items), chunk_size):
+            chunk = items[start:start + chunk_size]
+            result = llm_client.generate_world_detail_batch(context, chunk, existing + entries, max_chars=max_chars)
+            wanted = {i["title"].strip().lower() for i in chunk}
+            for entry in result.get("entries", []):
+                if entry.get("title", "").strip().lower() in wanted and entry.get("category") in CATEGORIES and entry.get("content"):
+                    entries.append(entry)
+        return jsonify({"entries": entries, "batches": (len(items) + chunk_size - 1) // chunk_size, "per_batch": chunk_size})
     except Exception as e:
         return jsonify({"error": str(e)}), 502
 

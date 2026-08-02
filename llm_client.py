@@ -337,6 +337,24 @@ def generate_world_detail_batch(context: str, items: list, existing_entries: lis
     return result
 
 
+ENTRY_REVISION_PROMPT = """당신은 세계관 편집 파트너입니다. 사용자의 요청에 맞게 기존 엔트리를 수정하는 방안을 대화형으로 제안하세요.
+세계관의 이미 확정된 사실을 임의로 바꾸지 말고, 요청이 모호하면 questions에 확인 질문을 넣으세요. 저장은 절대 수행하지 않습니다.
+반드시 JSON만 출력하세요:
+{"reply":"사용자에게 보여 줄 설명","questions":["확인 질문"],"changes":["변경 요약"],"proposal":{"title":"수정 제목","category":"기존 또는 허용 분류","content":"수정 제안 전체 내용","references":[1]}}
+proposal은 충분히 수정안을 제시할 수 있을 때만 넣고, 아직 질문이 필요한 경우 null로 두세요.
+"""
+
+
+def propose_entry_revision(entry: dict, instruction: str, history: list = None) -> dict:
+    client, model = get_llm_client()
+    past = "\n".join(f"{m.get('role','user')}: {m.get('content','')}" for m in (history or [])[-8:]) or "(없음)"
+    prompt = f"=== 현재 엔트리 ===\nID: {entry.get('id')}\n제목: {entry.get('title')}\n분류: {entry.get('category')}\n내용:\n{entry.get('content')}\n참조: {entry.get('references', [])}\n\n=== 이전 대화 ===\n{past}\n\n=== 이번 요청 ===\n{instruction}"
+    raw = client.chat.completions.create(model=model, messages=[{"role":"system","content":ENTRY_REVISION_PROMPT},{"role":"user","content":prompt}], temperature=0.45, max_tokens=5000).choices[0].message.content or ""
+    result = _parse_json_safe(raw, "entry_revision")
+    if not isinstance(result, dict): result = {"reply": raw, "questions": [], "proposal": None}
+    return result
+
+
 def serialize_world_state(entries: list, max_chars: int = 500) -> str:
     """
     세계관 엔트리 목록을 LLM이 읽기 좋은 형태로 직렬화.

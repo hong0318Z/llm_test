@@ -119,6 +119,7 @@
           </div>
           <div class="d-flex gap-2 flex-wrap">
             <button class="btn btn-sm btn-outline-secondary" onclick="startEdit()"><i class="bi bi-pencil me-1"></i>편집</button>
+            <button class="btn btn-sm btn-outline-secondary" onclick="openAiRevision()"><i class="bi bi-stars me-1"></i>AI 수정</button>
             <button class="btn btn-sm btn-outline-secondary" id="toggleActiveBtn" onclick="toggleActive()"></button>
             <button class="btn btn-sm btn-outline-secondary" onclick="stripMarkdownEntry()" title="**굵게**, # 제목, > 인용 등 마크다운 기호 제거">
               <i class="bi bi-eraser me-1"></i>MD 제거
@@ -328,6 +329,13 @@
   </div>
 </div>
 {% endblock %}
+
+<!-- AI 수정 대화/승인 모달 -->
+<div class="modal fade" id="aiRevisionModal" tabindex="-1"><div class="modal-dialog modal-lg"><div class="modal-content">
+  <div class="modal-header"><h5 class="modal-title"><i class="bi bi-stars me-2"></i>AI 수정 제안</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+  <div class="modal-body"><div id="aiRevisionChat" class="mb-3" style="max-height:280px;overflow-y:auto"></div><textarea id="aiRevisionInstruction" class="form-control" rows="3" placeholder="예: 이 세력의 목적을 더 구체화하고, A 세력과의 갈등을 추가해줘."></textarea><div id="aiRevisionProposal" class="mt-3" style="display:none"></div></div>
+  <div class="modal-footer"><button class="btn btn-outline-secondary" data-bs-dismiss="modal">닫기</button><button class="btn btn-outline-secondary" id="aiRevisionSend" onclick="requestAiRevision()">대화·수정안 요청</button><button class="btn btn-primary" id="aiRevisionApprove" style="display:none" onclick="approveAiRevision()">이 수정안으로 저장</button></div>
+</div></div></div>
 
 {% block extra_scripts %}
 <style>
@@ -756,6 +764,27 @@ async function showDetail() {
 
   document.getElementById('viewMode').style.display = 'block';
   document.getElementById('editMode').style.display = 'none';
+}
+
+let aiRevisionHistory = [], aiRevisionProposal = null, aiRevisionModal;
+function openAiRevision() {
+  aiRevisionHistory = []; aiRevisionProposal = null;
+  document.getElementById('aiRevisionInstruction').value = '';
+  document.getElementById('aiRevisionChat').innerHTML = `<div class="small text-muted">‘${escHtml(currentEntry.title)}’ 엔트리를 바꾸고 싶은 내용을 입력하세요. 제안은 승인 전까지 저장되지 않습니다.</div>`;
+  document.getElementById('aiRevisionProposal').style.display = 'none';
+  document.getElementById('aiRevisionApprove').style.display = 'none';
+  aiRevisionModal = aiRevisionModal || new bootstrap.Modal(document.getElementById('aiRevisionModal'));
+  aiRevisionModal.show();
+}
+function addRevisionMessage(role, content) { const el=document.getElementById('aiRevisionChat'); el.innerHTML += `<div class="p-2 mt-2 rounded" style="background:${role==='user'?'rgba(139,127,247,.16)':'var(--bg-input)'}"><b>${role==='user'?'나':'AI'}</b><div style="white-space:pre-wrap">${escHtml(content)}</div></div>`; el.scrollTop=el.scrollHeight; }
+async function requestAiRevision() {
+  const input=document.getElementById('aiRevisionInstruction'), instruction=input.value.trim(); if(!instruction)return;
+  const btn=document.getElementById('aiRevisionSend'); btn.disabled=true; addRevisionMessage('user',instruction); input.value='';
+  try { const r=await fetch(`/api/entries/${currentEntry.id}/revision-plan`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({instruction,history:aiRevisionHistory})}); const d=await r.json(); if(!r.ok)throw Error(d.error); aiRevisionHistory.push({role:'user',content:instruction},{role:'assistant',content:d.reply||''}); addRevisionMessage('assistant',d.reply||'수정안을 검토했습니다.'); if(d.questions?.length) addRevisionMessage('assistant','확인 질문:\n'+d.questions.map((q,i)=>`${i+1}. ${q}`).join('\n')); aiRevisionProposal=d.proposal||null; if(aiRevisionProposal){const p=aiRevisionProposal;const box=document.getElementById('aiRevisionProposal');box.style.display='block';box.innerHTML=`<hr><b>저장 전 수정안</b><div class="small text-muted">변경: ${(d.changes||[]).map(escHtml).join(' · ')}</div><div class="mt-2"><b>[${escHtml(p.category)}] ${escHtml(p.title)}</b><div class="mt-1" style="white-space:pre-wrap">${escHtml(p.content)}</div></div>`;document.getElementById('aiRevisionApprove').style.display='inline-block';}} catch(e){addRevisionMessage('assistant','오류: '+e.message)} finally{btn.disabled=false;}
+}
+async function approveAiRevision() {
+  if(!aiRevisionProposal)return; const p=aiRevisionProposal;
+  const res=await fetch(`/api/entries/${currentEntry.id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:p.title,category:p.category,content:p.content,references:p.references||currentEntry.references||[]})}); const d=await res.json(); if(!res.ok)return alert(d.error||'저장 실패'); currentEntry=d; aiRevisionModal.hide(); showDetail(); loadEntries();
 }
 
 function startEdit() {

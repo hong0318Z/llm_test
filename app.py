@@ -493,6 +493,24 @@ def update_entry(entry_id):
     return jsonify(entry.to_dict())
 
 
+@app.route("/api/entries/<int:entry_id>/revision-plan", methods=["POST"])
+def entry_revision_plan(entry_id):
+    """수정 제안만 만들며 DB는 변경하지 않는다."""
+    entry = WorldEntry.query.get_or_404(entry_id)
+    if entry.world_id != get_world_id(): return jsonify({"error": "다른 세계관 엔트리입니다."}), 403
+    data = request.json or {}
+    instruction = (data.get("instruction") or "").strip()
+    if not instruction: return jsonify({"error": "수정 요청을 입력하세요."}), 400
+    try:
+        import llm_client
+        result = llm_client.propose_entry_revision(entry.to_dict(), instruction, data.get("history") or [])
+        proposal = result.get("proposal")
+        if proposal and proposal.get("category") not in CATEGORIES: proposal["category"] = entry.category
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
+
+
 @app.route("/api/relationships", methods=["POST"])
 def create_relationship():
     """선택 엔트리의 방향성 관계를 저장하고 기존 관계도에서도 보이도록 references를 동기화한다."""

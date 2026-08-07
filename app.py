@@ -8,7 +8,7 @@ import json as _json
 from collections import Counter
 from flask import Flask, jsonify, request, render_template, abort, Response, send_from_directory, session, redirect, url_for
 from werkzeug.utils import secure_filename
-from models import db, User, UserLlmSettings, World, WorldEntry, EntryRelationship, SimulationConfig, SimulationRun, SimulationLog, WorldSnapshot, AppSettings, LlmPromptConfig, Timeline, TimelineEvent, StoryBeat, CATEGORIES
+from models import db, User, UserLlmSettings, World, WorldEntry, EntryRelationship, WorldAttributeSchema, EntryAttributeValue, WorldSkillRegistry, EntrySkillLink, WorldGuideline, WorldEntryTemplate, NovelChapter, NovelEntityMention, WorldWritingStyle, EntryRevealState, SimulationConfig, SimulationRun, SimulationLog, WorldSnapshot, AppSettings, LlmPromptConfig, Timeline, TimelineEvent, StoryBeat, CATEGORIES
 from datetime import datetime
 
 app = Flask(__name__)
@@ -42,6 +42,9 @@ with app.app_context():
         ("world_entries",       "embedding_json",          "TEXT DEFAULT ''"),
         ("world_entries",       "embedding_model",         "TEXT DEFAULT ''"),
         ("world_entries",       "auto_tags_json",          "TEXT DEFAULT '[]'"),
+        ("world_entries",       "primary_year",            "TEXT DEFAULT ''"),
+        ("world_entries",       "year_notes_json",         "TEXT DEFAULT '[]'"),
+        ("world_entries",       "aliases_json",            "TEXT DEFAULT '[]'"),
         ("timelines",           "main_entry_id",           "INTEGER"),
         # 세계관 컨테이너 마이그레이션
         ("world_entries",       "world_id",                "INTEGER"),
@@ -63,6 +66,7 @@ with app.app_context():
         ("app_settings",        "llm_api_key",             "TEXT DEFAULT ''"),
         ("app_settings",        "embedding_base_url",      "TEXT DEFAULT ''"),
         ("app_settings",        "embedding_api_key",       "TEXT DEFAULT ''"),
+        ("app_settings",        "entries_per_tick",        "INTEGER DEFAULT 1"),
     ]
     with db.engine.connect() as conn:
         for table, col, col_def in _migrate_columns:
@@ -267,6 +271,31 @@ def _require_world_redirect():
     return None
 
 
+DEFAULT_ENTRY_TEMPLATE_FIELDS = {
+    "인물": [("종족",1,"종족/혈통"),("능력치",1,"세계관 능력치 스키마 참조"),("배경",1,"과거와 현재"),("이상/유대/결점",1,"TRPG 동기"),("소속",1,"세력/조직"),("스킬/특성",0,"레지스트리 링크"),("말투",0,"대사 스타일"),("예시 대사",0,"few-shot"),("비밀",0,"reveal 대상")],
+    "세력": [("power_tier",1,"1~5"),("목표",1,"장기/단기 목표"),("자원",1,"군사/재정/정보"),("지도자",0,""),("동맹/적대",0,""),("현재 계획",0,""),("약점",0,"")],
+    "장소": [("danger_level",1,"1~5"),("통치 세력",1,""),("분위기 태그",1,""),("인구",0,""),("접근 경로",0,""),("비밀",0,""),("모험 훅",0,"")],
+    "사건": [("발생 틱/연도",1,""),("원인→결과",1,""),("관련 대상",0,""),("파급범위",0,"개인/가문/제국")],
+    "관념": [("정의",1,"한 줄"),("사회적 영향력",1,"tier"),("기원",0,""),("신봉/반대 세력",0,""),("관련 사건",0,"")],
+    "물건": [("등급",1,"일반/희귀/유일"),("효과",1,""),("제작자/기원",0,""),("소유 이력",0,""),("대가/제약",0,"")],
+    "종족": [("신체 특성",1,""),("사회 구조",1,""),("평균 수명",0,""),("서식지",0,""),("타 종족 관계",0,""),("고유 능력",0,"")],
+    "마법/기술": [("희귀도",1,""),("효과",1,""),("원리",0,"계통"),("습득 조건",0,""),("리스크/대가",0,""),("관련 스킬",0,"")],
+    "신화/종교": [("주신/개념",1,""),("교리 요약",1,""),("신도 세력",0,""),("상징/의식",0,""),("진실과의 괴리",0,"reveal 대상")],
+    "역사/기록": [("시대 구간",1,""),("신뢰도",1,"공식/왜곡/은폐"),("기록 주체",0,""),("관련 사건/인물",0,"")],
+    "규칙/법": [("적용 범위",1,""),("조항 요약",1,""),("제정 주체",0,""),("처벌",0,""),("실효성",0,"")],
+    "연도": [("primary_year",1,""),("연도별 특기사항",0,"## 연도별 특기사항")],
+}
+
+def _ensure_world_metadata(world_id, commit=True):
+    if WorldEntryTemplate.query.filter_by(world_id=world_id).count() == 0:
+        for category in CATEGORIES:
+            fields = [{"field":f,"required":bool(req),"description":desc} for f,req,desc in DEFAULT_ENTRY_TEMPLATE_FIELDS.get(category, [])]
+            db.session.add(WorldEntryTemplate(world_id=world_id, category=category, fields_json=_json.dumps(fields, ensure_ascii=False)))
+    if not WorldGuideline.query.get(world_id): db.session.add(WorldGuideline(world_id=world_id))
+    if commit:
+        db.session.commit()
+
+
 # ─────────────────────────────────────────
 #  페이지 라우트
 # ─────────────────────────────────────────
@@ -324,6 +353,21 @@ def timeline_page():
     return render_template("timeline.html")
 
 
+@app.route("/metadata")
+def metadata_page():
+    redir = _require_world_redirect()
+    if redir: return redir
+    _ensure_world_metadata(get_world_id())
+    return render_template("metadata.html", categories=CATEGORIES)
+
+
+@app.route("/novel")
+def novel_page():
+    redir = _require_world_redirect()
+    if redir: return redir
+    return render_template("novel.html")
+
+
 @app.route("/storage/<path:filename>")
 def serve_storage(filename):
     """엔트리 이미지 정적 파일 서빙"""
@@ -349,6 +393,7 @@ def create_world():
     world = World(name=name, description=data.get("description", ""))
     db.session.add(world)
     db.session.commit()
+    _ensure_world_metadata(world.id)
     return jsonify(world.to_dict()), 201
 
 
@@ -371,12 +416,21 @@ def update_world(world_id):
 @app.route("/api/worlds/<int:world_id>", methods=["DELETE"])
 def delete_world(world_id):
     world = World.query.get_or_404(world_id)
-    # 소속 데이터 모두 삭제
-    WorldEntry.query.filter_by(world_id=world_id).delete()
-    Timeline.query.filter_by(world_id=world_id).delete()
-    SimulationConfig.query.filter_by(world_id=world_id).delete()
+    # 외래키의 자식부터 삭제한다.
+    entry_ids=[x.id for x in WorldEntry.query.filter_by(world_id=world_id).all()]
+    run_ids=[x.id for x in SimulationRun.query.filter_by(world_id=world_id).all()]
+    if run_ids:SimulationLog.query.filter(SimulationLog.run_id.in_(run_ids)).delete(synchronize_session=False)
     SimulationRun.query.filter_by(world_id=world_id).delete()
+    timeline_ids=[x.id for x in Timeline.query.filter_by(world_id=world_id).all()]
+    if timeline_ids:
+        TimelineEvent.query.filter(TimelineEvent.timeline_id.in_(timeline_ids)).delete(synchronize_session=False)
+        StoryBeat.query.filter(StoryBeat.timeline_id.in_(timeline_ids)).delete(synchronize_session=False)
     WorldSnapshot.query.filter_by(world_id=world_id).delete()
+    SimulationConfig.query.filter_by(world_id=world_id).delete()
+    _delete_world_extensions(world_id,entry_ids)
+    Timeline.query.filter_by(world_id=world_id).delete()
+    _delete_entry_dependents(entry_ids)
+    WorldEntry.query.filter_by(world_id=world_id).delete()
     db.session.delete(world)
     db.session.commit()
     # 현재 선택된 세계관이었다면 세션 클리어
@@ -458,6 +512,9 @@ def create_entry():
         is_active=True,
     )
     entry.references = data.get("references", [])
+    entry.primary_year = (data.get("primary_year") or "").strip()[:100]
+    entry.year_notes_json = _json.dumps(data.get("year_notes") or [], ensure_ascii=False)
+    entry.aliases_json = _json.dumps(data.get("aliases") or [], ensure_ascii=False)
     db.session.add(entry)
     db.session.commit()
 
@@ -484,6 +541,9 @@ def update_entry(entry_id):
         entry.is_active = data["is_active"]
     if "tick_created" in data:
         entry.tick_created = int(data["tick_created"])
+    if "primary_year" in data: entry.primary_year = str(data["primary_year"] or "").strip()[:100]
+    if "year_notes" in data: entry.year_notes_json = _json.dumps(data["year_notes"] or [], ensure_ascii=False)
+    if "aliases" in data: entry.aliases_json = _json.dumps(data["aliases"] or [], ensure_ascii=False)
     entry.updated_at = datetime.utcnow()
     db.session.commit()
 
@@ -535,6 +595,9 @@ def create_relationship():
 @app.route("/api/entries/<int:entry_id>", methods=["DELETE"])
 def delete_entry(entry_id):
     entry = WorldEntry.query.get_or_404(entry_id)
+    if entry.world_id != get_world_id():
+        return jsonify({"error": "다른 세계관 엔트리입니다."}), 403
+    _delete_entry_dependents([entry.id])
     db.session.delete(entry)
     db.session.commit()
     return jsonify({"ok": True})
@@ -877,16 +940,83 @@ def delete_all_entries():
     q = WorldEntry.query
     if wid:
         q = q.filter_by(world_id=wid)
-    q.delete()
+    entry_ids = [row.id for row in q.all()]
+    _delete_entry_dependents(entry_ids)
+    if entry_ids:
+        WorldEntry.query.filter(WorldEntry.id.in_(entry_ids)).delete(synchronize_session=False)
     db.session.commit()
     return jsonify({"ok": True})
 
+
+def _export_world_extensions(world_id):
+    entry_ids=[e.id for e in WorldEntry.query.filter_by(world_id=world_id).all()]
+    attrs=WorldAttributeSchema.query.filter_by(world_id=world_id).all();skills=WorldSkillRegistry.query.filter_by(world_id=world_id).all();chapters=NovelChapter.query.filter_by(world_id=world_id).all()
+    chapter_ids=[c.id for c in chapters]
+    return {
+        "attributes":[a.to_dict() for a in attrs],
+        "attribute_values":[{"entry_id":v.entry_id,"axis_id":v.axis_id,"value":v.value} for v in EntryAttributeValue.query.filter(EntryAttributeValue.entry_id.in_(entry_ids or [-1])).all()],
+        "skills":[s.to_dict() for s in skills],
+        "skill_links":[{"entry_id":x.entry_id,"skill_id":x.skill_id,"rank":x.rank} for x in EntrySkillLink.query.filter(EntrySkillLink.entry_id.in_(entry_ids or [-1])).all()],
+        "guideline":(WorldGuideline.query.get(world_id).to_dict() if WorldGuideline.query.get(world_id) else None),
+        "templates":[t.to_dict() for t in WorldEntryTemplate.query.filter_by(world_id=world_id).all()],
+        "chapters":[c.to_dict() for c in chapters],
+        "mentions":[m.to_dict() for m in NovelEntityMention.query.filter(NovelEntityMention.chapter_id.in_(chapter_ids or [-1])).all()],
+        "styles":[s.to_dict() for s in WorldWritingStyle.query.filter_by(world_id=world_id).all()],
+        "reveals":[r.to_dict() for r in EntryRevealState.query.filter(EntryRevealState.entry_id.in_(entry_ids or [-1])).all()],
+        "relationships":[{"source_entry_id":r.source_entry_id,"target_entry_id":r.target_entry_id,"relation_type":r.relation_type,"description":r.description or ""} for r in EntryRelationship.query.filter_by(world_id=world_id).all()],
+    }
+
+def _delete_world_extensions(world_id, entry_ids=None):
+    entry_ids=entry_ids if entry_ids is not None else [e.id for e in WorldEntry.query.filter_by(world_id=world_id).all()]
+    chapter_ids=[c.id for c in NovelChapter.query.filter_by(world_id=world_id).all()]
+    if entry_ids:
+        EntryRevealState.query.filter(EntryRevealState.entry_id.in_(entry_ids)).delete(synchronize_session=False);EntryAttributeValue.query.filter(EntryAttributeValue.entry_id.in_(entry_ids)).delete(synchronize_session=False);EntrySkillLink.query.filter(EntrySkillLink.entry_id.in_(entry_ids)).delete(synchronize_session=False)
+    if chapter_ids:NovelEntityMention.query.filter(NovelEntityMention.chapter_id.in_(chapter_ids)).delete(synchronize_session=False)
+    EntryRelationship.query.filter_by(world_id=world_id).delete();WorldWritingStyle.query.filter_by(world_id=world_id).delete();NovelChapter.query.filter_by(world_id=world_id).delete();WorldAttributeSchema.query.filter_by(world_id=world_id).delete();WorldSkillRegistry.query.filter_by(world_id=world_id).delete();WorldGuideline.query.filter_by(world_id=world_id).delete();WorldEntryTemplate.query.filter_by(world_id=world_id).delete()
+
+def _delete_entry_dependents(entry_ids):
+    """엔트리를 물리 삭제할 때 신규 메타데이터/소설 참조를 함께 정리한다."""
+    entry_ids = [int(x) for x in (entry_ids or [])]
+    if not entry_ids:
+        return
+    EntryRevealState.query.filter(EntryRevealState.entry_id.in_(entry_ids)).delete(synchronize_session=False)
+    EntryAttributeValue.query.filter(EntryAttributeValue.entry_id.in_(entry_ids)).delete(synchronize_session=False)
+    EntrySkillLink.query.filter(EntrySkillLink.entry_id.in_(entry_ids)).delete(synchronize_session=False)
+    NovelEntityMention.query.filter(NovelEntityMention.entry_id.in_(entry_ids)).delete(synchronize_session=False)
+    EntryRelationship.query.filter(db.or_(
+        EntryRelationship.source_entry_id.in_(entry_ids),
+        EntryRelationship.target_entry_id.in_(entry_ids),
+    )).delete(synchronize_session=False)
+
+def _restore_world_extensions(world_id, ext, entry_map):
+    axis_map={};skill_map={};chapter_map={}
+    for a in ext.get("attributes",[]):
+        row=WorldAttributeSchema(world_id=world_id,axis_name=a.get("axis_name","능력치"),axis_order=a.get("axis_order",0),min_tier=a.get("min_tier",1),max_tier=a.get("max_tier",5),tier_labels_json=_json.dumps(a.get("tier_labels",{}),ensure_ascii=False),is_active=a.get("is_active",True));db.session.add(row);db.session.flush();axis_map[a.get("id")]=row.id
+    for s in ext.get("skills",[]):
+        row=WorldSkillRegistry(world_id=world_id,type=s.get("type","스킬"),name=s.get("name",""),description=s.get("description",""),tags_json=_json.dumps(s.get("tags",[]),ensure_ascii=False),rarity=s.get("rarity","일반"),created_by=s.get("created_by","user"),tick_created=s.get("tick_created",0));db.session.add(row);db.session.flush();skill_map[s.get("id")]=row.id
+    g=ext.get("guideline")
+    if g:db.session.add(WorldGuideline(world_id=world_id,skill_generation_guide=g.get("skill_generation_guide",""),trait_generation_guide=g.get("trait_generation_guide","")))
+    for t in ext.get("templates",[]):db.session.add(WorldEntryTemplate(world_id=world_id,category=t.get("category","관념"),fields_json=_json.dumps(t.get("fields",[]),ensure_ascii=False),is_active=t.get("is_active",True)))
+    for v in ext.get("attribute_values",[]):
+        if v.get("entry_id") in entry_map and v.get("axis_id") in axis_map:db.session.add(EntryAttributeValue(entry_id=entry_map[v["entry_id"]],axis_id=axis_map[v["axis_id"]],value=v.get("value")))
+    for x in ext.get("skill_links",[]):
+        if x.get("entry_id") in entry_map and x.get("skill_id") in skill_map:db.session.add(EntrySkillLink(entry_id=entry_map[x["entry_id"]],skill_id=skill_map[x["skill_id"]],rank=x.get("rank")))
+    for c in ext.get("chapters",[]):
+        row=NovelChapter(world_id=world_id,title=c.get("title","새 챕터"),order_no=c.get("order_no",0),content=c.get("content",""),status=c.get("status","초안"));db.session.add(row);db.session.flush();chapter_map[c.get("id")]=row.id
+    for m in ext.get("mentions",[]):
+        if m.get("chapter_id") in chapter_map and m.get("entry_id") in entry_map:db.session.add(NovelEntityMention(chapter_id=chapter_map[m["chapter_id"]],entry_id=entry_map[m["entry_id"]],span_start=m.get("span_start",0),span_end=m.get("span_end",0),matched_text=m.get("matched_text",""),source=m.get("source","keyword")))
+    for s in ext.get("styles",[]):db.session.add(WorldWritingStyle(world_id=world_id,novel_id=s.get("novel_id"),chapter_id=chapter_map.get(s.get("chapter_id")),pov=s.get("pov",""),tone_guide=s.get("tone_guide",""),forbidden_expressions=s.get("forbidden_expressions",""),sample_text=s.get("sample_text","")))
+    for r in ext.get("reveals",[]):
+        if r.get("entry_id") in entry_map:db.session.add(EntryRevealState(entry_id=entry_map[r["entry_id"]],field_path=r.get("field_path","content"),reveal_chapter_id=chapter_map.get(r.get("reveal_chapter_id")),visibility=r.get("visibility","작가전용")))
+    for r in ext.get("relationships",[]):
+        if r.get("source_entry_id") in entry_map and r.get("target_entry_id") in entry_map:db.session.add(EntryRelationship(world_id=world_id,source_entry_id=entry_map[r["source_entry_id"]],target_entry_id=entry_map[r["target_entry_id"]],relation_type=r.get("relation_type","관련"),description=r.get("description","")))
+    if not ext.get("templates"):_ensure_world_metadata(world_id,commit=False)
 
 @app.route("/api/backup", methods=["GET"])
 def backup_db():
     """전체 DB (모든 세계관) JSON 백업"""
     data = {
-        "version": 3,
+        "version": 4,
         "type": "full",
         "exported_at": datetime.utcnow().isoformat() + 'Z',
         "worlds": [w.to_dict() for w in World.query.order_by(World.id).all()],
@@ -894,6 +1024,7 @@ def backup_db():
         "configs": [c.to_dict() for c in SimulationConfig.query.order_by(SimulationConfig.id).all()],
         "snapshots": [s.to_dict(include_entries=True) for s in WorldSnapshot.query.order_by(WorldSnapshot.id).all()],
         "settings": AppSettings.get().to_dict(),
+        "extensions": {str(w.id):_export_world_extensions(w.id) for w in World.query.all()},
     }
     filename = f"worldllm_full_backup_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
     return Response(
@@ -911,6 +1042,22 @@ def restore_db():
     entries_data = data.get("entries", [])
     configs_data = data.get("configs", [])
     settings_data = data.get("settings", {})
+    extensions_data = data.get("extensions", {})
+
+    for existing_world in World.query.all():
+        _delete_world_extensions(existing_world.id)
+
+    # 하위 테이블부터 비운 뒤 세계관을 교체한다. SQLite 외래키가 켜져 있어도 안전한 순서다.
+    SimulationLog.query.delete()
+    SimulationRun.query.delete()
+    SimulationConfig.query.delete()
+    WorldSnapshot.query.delete()
+    TimelineEvent.query.delete()
+    StoryBeat.query.delete()
+    Timeline.query.delete()
+    _delete_entry_dependents([row.id for row in WorldEntry.query.all()])
+    WorldEntry.query.delete()
+    db.session.flush()
 
     # 세계관 복원
     if worlds_data:
@@ -925,8 +1072,6 @@ def restore_db():
             db.session.add(world)
 
     # 엔트리 복원
-    WorldEntry.query.delete()
-    db.session.flush()
     for e in entries_data:
         entry = WorldEntry(
             id=e.get("id"),
@@ -937,6 +1082,9 @@ def restore_db():
             references_json=_json.dumps(e.get("references", [])),
             created_by=e.get("created_by", "user"),
             tick_created=e.get("tick_created", 0),
+            primary_year=e.get("primary_year", ""),
+            year_notes_json=_json.dumps(e.get("year_notes", []),ensure_ascii=False),
+            aliases_json=_json.dumps(e.get("aliases", []),ensure_ascii=False),
             is_active=e.get("is_active", True),
             is_summarized=e.get("is_summarized", False),
             keywords=e.get("keywords", ""),
@@ -946,10 +1094,14 @@ def restore_db():
         )
         db.session.add(entry)
 
+    db.session.flush()
+    entry_identity={e.get("id"):e.get("id") for e in entries_data if e.get("id") is not None}
+    for world_row in worlds_data:
+        wid=world_row.get("id")
+        _restore_world_extensions(wid,extensions_data.get(str(wid),{}),entry_identity)
+
     # 시뮬레이션 설정 복원
     if configs_data:
-        SimulationConfig.query.delete()
-        db.session.flush()
         for c in configs_data:
             cfg = SimulationConfig(
                 id=c.get("id"),
@@ -971,6 +1123,11 @@ def restore_db():
             s.max_user_entry_chars = settings_data["max_user_entry_chars"]
         if "rag_token_budget" in settings_data:
             s.rag_token_budget = settings_data["rag_token_budget"]
+        for field in ("entries_per_tick", "llm_model_simulation", "llm_model_nai",
+                      "embedding_enabled", "embedding_model", "rag_reference_limit",
+                      "llm_base_url", "embedding_base_url"):
+            if field in settings_data:
+                setattr(s, field, settings_data[field])
 
     db.session.commit()
     # 세션의 world_id 초기화 (복원 후 재선택 유도)
@@ -990,7 +1147,7 @@ def backup_world(world_id):
     snapshots = WorldSnapshot.query.filter_by(world_id=world_id).order_by(WorldSnapshot.id).all()
     timelines = Timeline.query.filter_by(world_id=world_id).order_by(Timeline.id).all()
     data = {
-        "version": 3,
+        "version": 4,
         "type": "world",
         "exported_at": datetime.utcnow().isoformat() + 'Z',
         "world": world.to_dict(),
@@ -998,6 +1155,7 @@ def backup_world(world_id):
         "configs": [c.to_dict() for c in configs],
         "snapshots": [s.to_dict(include_entries=True) for s in snapshots],
         "timelines": [t.to_dict(include_events=True) for t in timelines],
+        "extensions": _export_world_extensions(world_id),
     }
     safe_name = world.name.replace(" ", "_")[:20]
     filename = f"world_{safe_name}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
@@ -1015,6 +1173,7 @@ def restore_world(world_id):
     data = request.json or {}
 
     # 기존 세계관 데이터 삭제
+    _delete_world_extensions(world_id)
     WorldEntry.query.filter_by(world_id=world_id).delete()
     SimulationConfig.query.filter_by(world_id=world_id).delete()
     WorldSnapshot.query.filter_by(world_id=world_id).delete()
@@ -1037,6 +1196,9 @@ def restore_world(world_id):
             references_json=_json.dumps(e.get("references", [])),
             created_by=e.get("created_by", "user"),
             tick_created=e.get("tick_created", 0),
+            primary_year=e.get("primary_year", ""),
+            year_notes_json=_json.dumps(e.get("year_notes", []),ensure_ascii=False),
+            aliases_json=_json.dumps(e.get("aliases", []),ensure_ascii=False),
             is_active=e.get("is_active", True),
             is_summarized=e.get("is_summarized", False),
             keywords=e.get("keywords", ""),
@@ -1053,6 +1215,9 @@ def restore_world(world_id):
         old_parent = e.get("parent_entry_id")
         if old_parent and old_parent in id_map:
             entry.parent_entry_id = id_map[old_parent].id
+        entry.references=[id_map[x].id for x in e.get("references",[]) if x in id_map]
+
+    _restore_world_extensions(world_id,data.get("extensions",{}),{old:new.id for old,new in id_map.items()})
 
     # 시뮬레이션 설정 복원
     for c in configs_data:
@@ -1137,6 +1302,245 @@ def delete_config(config_id):
 #  마스터 설정 API
 # ─────────────────────────────────────────
 
+@app.route("/api/metadata", methods=["GET"])
+def get_metadata():
+    wid=get_world_id(); _ensure_world_metadata(wid)
+    attrs=WorldAttributeSchema.query.filter_by(world_id=wid).order_by(WorldAttributeSchema.axis_order).all()
+    skills=WorldSkillRegistry.query.filter_by(world_id=wid).order_by(WorldSkillRegistry.name).all()
+    templates=WorldEntryTemplate.query.filter_by(world_id=wid).order_by(WorldEntryTemplate.category).all()
+    guide=WorldGuideline.query.get(wid)
+    characters=WorldEntry.query.filter_by(world_id=wid,category="인물",is_active=True).all()
+    values=EntryAttributeValue.query.filter(EntryAttributeValue.entry_id.in_([e.id for e in characters] or [-1])).all()
+    return jsonify({"attributes":[a.to_dict() for a in attrs],"skills":[s.to_dict() for s in skills],"templates":[t.to_dict() for t in templates],"guideline":guide.to_dict(),"characters":[e.to_dict() for e in characters],"attribute_values":[{"entry_id":v.entry_id,"axis_id":v.axis_id,"value":v.value} for v in values]})
+
+@app.route("/api/metadata/attributes", methods=["PUT"])
+def save_attributes():
+    wid=get_world_id(); data=request.json or {}; seen=[]
+    for order,item in enumerate(data.get("attributes") or []):
+        row=WorldAttributeSchema.query.filter_by(id=item.get("id"),world_id=wid).first() if item.get("id") else WorldAttributeSchema(world_id=wid)
+        row.axis_name=str(item.get("axis_name") or "새 능력치")[:100]; row.axis_order=order; row.min_tier=max(0,int(item.get("min_tier",1))); row.max_tier=max(row.min_tier,int(item.get("max_tier",5))); row.tier_labels_json=_json.dumps(item.get("tier_labels") or {},ensure_ascii=False); row.is_active=bool(item.get("is_active",True)); db.session.add(row); db.session.flush(); seen.append(row.id)
+    removed=[x.id for x in WorldAttributeSchema.query.filter_by(world_id=wid).filter(~WorldAttributeSchema.id.in_(seen or [-1])).all()]
+    if removed:EntryAttributeValue.query.filter(EntryAttributeValue.axis_id.in_(removed)).delete(synchronize_session=False)
+    WorldAttributeSchema.query.filter_by(world_id=wid).filter(~WorldAttributeSchema.id.in_(seen or [-1])).delete(synchronize_session=False); db.session.commit()
+    return jsonify({"ok":True})
+
+@app.route("/api/metadata/attribute-values", methods=["PUT"])
+def save_attribute_values():
+    wid=get_world_id()
+    for item in (request.json or {}).get("values",[]):
+        entry=WorldEntry.query.get(item.get("entry_id")); axis=WorldAttributeSchema.query.get(item.get("axis_id"))
+        if not entry or not axis or entry.world_id!=wid or axis.world_id!=wid: continue
+        row=EntryAttributeValue.query.get((entry.id,axis.id)) or EntryAttributeValue(entry_id=entry.id,axis_id=axis.id)
+        row.value=max(axis.min_tier,min(axis.max_tier,int(item.get("value",axis.min_tier)))); db.session.add(row)
+    db.session.commit(); return jsonify({"ok":True})
+
+@app.route("/api/metadata/skills", methods=["POST"])
+def create_skill():
+    wid=get_world_id(); d=request.json or {}; name=str(d.get("name") or "").strip()
+    if not name:return jsonify({"error":"name은 필수입니다."}),400
+    row=WorldSkillRegistry(world_id=wid,type=d.get("type") if d.get("type") in ("스킬","특성") else "스킬",name=name[:150],description=d.get("description","") ,tags_json=_json.dumps(d.get("tags") or [],ensure_ascii=False),rarity=d.get("rarity","일반"),created_by="user")
+    db.session.add(row); db.session.commit()
+    try:
+        settings=UserLlmSettings.get_for_user(current_user().id)
+        if settings.embedding_enabled:
+            import llm_client
+            row.embedding_json=_json.dumps(llm_client.generate_embedding(f"{row.type} {row.name} {row.description} {' '.join(_json.loads(row.tags_json))}",settings.embedding_model));db.session.commit()
+    except Exception: db.session.rollback()
+    return jsonify(row.to_dict()),201
+
+@app.route("/api/metadata/skills/<int:skill_id>", methods=["PUT","DELETE"])
+def change_skill(skill_id):
+    row=WorldSkillRegistry.query.get_or_404(skill_id)
+    if row.world_id!=get_world_id():abort(403)
+    if request.method=="DELETE": EntrySkillLink.query.filter_by(skill_id=row.id).delete();db.session.delete(row);db.session.commit();return jsonify({"ok":True})
+    d=request.json or {}; row.type=d.get("type",row.type);row.name=str(d.get("name",row.name))[:150];row.description=d.get("description",row.description);row.tags_json=_json.dumps(d.get("tags",[]),ensure_ascii=False);row.rarity=d.get("rarity",row.rarity);db.session.commit();return jsonify(row.to_dict())
+
+@app.route("/api/metadata/guideline", methods=["PUT"])
+def save_guideline():
+    wid=get_world_id(); row=WorldGuideline.query.get(wid) or WorldGuideline(world_id=wid);d=request.json or {};row.skill_generation_guide=d.get("skill_generation_guide","");row.trait_generation_guide=d.get("trait_generation_guide","");db.session.add(row);db.session.commit();return jsonify(row.to_dict())
+
+@app.route("/api/metadata/templates/<int:template_id>", methods=["PUT"])
+def save_entry_template(template_id):
+    row=WorldEntryTemplate.query.get_or_404(template_id)
+    if row.world_id!=get_world_id():abort(403)
+    d=request.json or {};row.fields_json=_json.dumps(d.get("fields") or [],ensure_ascii=False);row.is_active=bool(d.get("is_active",True));db.session.commit();return jsonify(row.to_dict())
+
+@app.route("/api/metadata/migration-plan", methods=["POST"])
+def metadata_migration_plan():
+    wid=get_world_id();ids=(request.json or {}).get("entry_ids") or []
+    q=WorldEntry.query.filter_by(world_id=wid,is_active=True)
+    if ids:q=q.filter(WorldEntry.id.in_(ids))
+    entries=[e.to_dict() for e in q.limit(30).all()]
+    try:
+        import llm_client
+        return jsonify(llm_client.propose_metadata_migration(entries,llm_client._world_metadata_rules(wid)))
+    except Exception as e:return jsonify({"error":str(e)}),502
+
+@app.route("/api/metadata/migration-apply", methods=["POST"])
+def metadata_migration_apply():
+    wid=get_world_id();count=0
+    for item in (request.json or {}).get("entries",[]):
+        entry=WorldEntry.query.get(item.get("entry_id"))
+        if not entry or entry.world_id!=wid:continue
+        for name,value in (item.get("attributes") or {}).items():
+            axis=WorldAttributeSchema.query.filter_by(world_id=wid,axis_name=name,is_active=True).first()
+            if axis:
+                row=EntryAttributeValue.query.get((entry.id,axis.id)) or EntryAttributeValue(entry_id=entry.id,axis_id=axis.id);row.value=max(axis.min_tier,min(axis.max_tier,int(value)));db.session.add(row);count+=1
+        for sid in item.get("reused_skill_ids") or []:
+            if WorldSkillRegistry.query.filter_by(id=sid,world_id=wid).first() and not EntrySkillLink.query.get((entry.id,sid)):db.session.add(EntrySkillLink(entry_id=entry.id,skill_id=sid))
+    db.session.commit();return jsonify({"ok":True,"applied":count})
+
+@app.route("/api/entries/<int:entry_id>/skills", methods=["GET","PUT"])
+def entry_skills(entry_id):
+    entry=WorldEntry.query.get_or_404(entry_id)
+    if entry.world_id!=get_world_id():abort(403)
+    if request.method=="PUT":
+        EntrySkillLink.query.filter_by(entry_id=entry.id).delete()
+        for x in (request.json or {}).get("skills",[]):
+            skill=WorldSkillRegistry.query.get(x.get("skill_id"))
+            if skill and skill.world_id==entry.world_id:db.session.add(EntrySkillLink(entry_id=entry.id,skill_id=skill.id,rank=x.get("rank")))
+        db.session.commit()
+    links=EntrySkillLink.query.filter_by(entry_id=entry.id).all(); return jsonify([{"skill":WorldSkillRegistry.query.get(x.skill_id).to_dict(),"rank":x.rank} for x in links if WorldSkillRegistry.query.get(x.skill_id)])
+
+@app.route("/api/entries/<int:entry_id>/stat-block", methods=["GET"])
+def entry_stat_block(entry_id):
+    entry=WorldEntry.query.get_or_404(entry_id)
+    if entry.world_id!=get_world_id():abort(403)
+    values=EntryAttributeValue.query.filter_by(entry_id=entry.id).all();attributes=[]
+    for v in values:
+        axis=WorldAttributeSchema.query.get(v.axis_id)
+        if axis:
+            try:labels=_json.loads(axis.tier_labels_json or "{}")
+            except Exception:labels={}
+            attributes.append({"axis_id":axis.id,"axis_name":axis.axis_name,"value":v.value,"label":labels.get(str(v.value),"")})
+    links=EntrySkillLink.query.filter_by(entry_id=entry.id).all();skills=[]
+    for link in links:
+        skill=WorldSkillRegistry.query.get(link.skill_id)
+        if skill:skills.append({"skill":skill.to_dict(),"rank":link.rank})
+    return jsonify({"attributes":attributes,"skills":skills})
+
+@app.route("/api/entries/<int:entry_id>/skill-proposals", methods=["POST"])
+def skill_proposals(entry_id):
+    entry=WorldEntry.query.get_or_404(entry_id);wid=get_world_id()
+    if entry.world_id!=wid:abort(403)
+    skills=WorldSkillRegistry.query.filter_by(world_id=wid).all();settings=UserLlmSettings.get_for_user(current_user().id)
+    query_words=set(re.findall(r"[0-9A-Za-z가-힣_]{2,}",(entry.title+" "+entry.category+" "+entry.content[:2000]).lower()))
+    def keyword_score(skill):
+        try: tags=" ".join(_json.loads(skill.tags_json or "[]"))
+        except Exception: tags=""
+        words=set(re.findall(r"[0-9A-Za-z가-힣_]{2,}",(skill.name+" "+skill.description+" "+tags).lower()))
+        return len(query_words & words)
+    candidates=sorted(skills,key=lambda s:(keyword_score(s),s.name),reverse=True)[:30]
+    if settings.embedding_enabled:
+        try:
+            import llm_client
+            vec=llm_client.generate_embedding(entry.title+" "+entry.content[:1000],settings.embedding_model);scored=[]
+            for s in skills:
+                score=llm_client.cosine_similarity(vec,_json.loads(s.embedding_json or "[]"));scored.append((score,s))
+            candidates=[s for _,s in sorted(scored,key=lambda x:x[0],reverse=True)[:20]]
+        except Exception:pass
+    guide=WorldGuideline.query.get(wid) or WorldGuideline(world_id=wid)
+    try:
+        import llm_client
+        return jsonify(llm_client.propose_entry_skills(entry.to_dict(),[s.to_dict() for s in candidates],guide.to_dict()))
+    except Exception as e:return jsonify({"error":str(e)}),502
+
+def _tag_chapter_entities(chapter):
+    NovelEntityMention.query.filter_by(chapter_id=chapter.id,source="keyword").delete()
+    entries=WorldEntry.query.filter_by(world_id=chapter.world_id,is_active=True).all(); content=chapter.content or "";folded=content.casefold()
+    trie={}
+    for entry in entries:
+        try: aliases=_json.loads(entry.aliases_json or "[]")
+        except Exception: aliases=[]
+        for name in [entry.title]+aliases:
+            if not name:continue
+            node=trie
+            for char in str(name).casefold():node=node.setdefault(char,{})
+            node.setdefault("_matches",[]).append((entry.id,len(str(name))))
+    occupied=[];found=[]
+    for start in range(len(folded)):
+        node=trie;end=start;best=None
+        while end<len(folded) and folded[end] in node:
+            node=node[folded[end]];end+=1
+            for eid,length in node.get("_matches",[]):
+                best=(start,end,eid,length)
+        if best:found.append(best)
+    for start,end,eid,_ in sorted(found,key=lambda x:(x[0],-(x[1]-x[0]))):
+        if any(start<b and end>a for a,b in occupied):continue
+        occupied.append((start,end));db.session.add(NovelEntityMention(chapter_id=chapter.id,entry_id=eid,span_start=start,span_end=end,matched_text=content[start:end],source="keyword"))
+
+@app.route("/api/novel/chapters", methods=["GET","POST"])
+def novel_chapters():
+    wid=get_world_id()
+    if request.method=="GET":return jsonify([c.to_dict() for c in NovelChapter.query.filter_by(world_id=wid).order_by(NovelChapter.order_no).all()])
+    d=request.json or {};order=db.session.query(db.func.max(NovelChapter.order_no)).filter_by(world_id=wid).scalar() or 0;c=NovelChapter(world_id=wid,title=d.get("title","새 챕터"),order_no=order+1,content=d.get("content",""),status=d.get("status","초안"));db.session.add(c);db.session.commit();return jsonify(c.to_dict()),201
+
+@app.route("/api/novel/chapters/<int:chapter_id>", methods=["GET","PUT","DELETE"])
+def novel_chapter(chapter_id):
+    c=NovelChapter.query.get_or_404(chapter_id)
+    if c.world_id!=get_world_id():abort(403)
+    if request.method=="DELETE":NovelEntityMention.query.filter_by(chapter_id=c.id).delete();EntryRevealState.query.filter_by(reveal_chapter_id=c.id).update({"reveal_chapter_id":None});db.session.delete(c);db.session.commit();return jsonify({"ok":True})
+    if request.method=="PUT":
+        d=request.json or {};c.title=d.get("title",c.title);c.content=d.get("content",c.content);c.status=d.get("status",c.status);c.order_no=int(d.get("order_no",c.order_no));c.reveal_chapter_ref=d.get("reveal_chapter_ref",c.reveal_chapter_ref);_tag_chapter_entities(c);db.session.commit()
+    mentions=NovelEntityMention.query.filter_by(chapter_id=c.id).all();out=c.to_dict();enriched=[]
+    for m in mentions:
+        item=m.to_dict();entry=WorldEntry.query.get(m.entry_id)
+        item["entry_title"]=entry.title if entry else item.get("matched_text","");item["category"]=entry.category if entry else "관념";enriched.append(item)
+    out["mentions"]=enriched;return jsonify(out)
+
+@app.route("/api/novel/style", methods=["GET","PUT"])
+def novel_style():
+    wid=get_world_id();d=request.json or {} if request.method=="PUT" else {};chapter_id=(d.get("chapter_id") if request.method=="PUT" else request.args.get("chapter_id",type=int))
+    if chapter_id:
+        chapter=NovelChapter.query.get(chapter_id)
+        if not chapter or chapter.world_id!=wid:abort(403)
+    row=WorldWritingStyle.query.filter_by(world_id=wid,chapter_id=chapter_id).first()
+    if request.method=="GET":return jsonify(row.to_dict() if row else {"world_id":wid,"chapter_id":chapter_id,"pov":"3인칭 관찰자","tone_guide":"","forbidden_expressions":"","sample_text":""})
+    row=row or WorldWritingStyle(world_id=wid,chapter_id=chapter_id);row.pov=d.get("pov","3인칭 관찰자");row.tone_guide=d.get("tone_guide","");row.forbidden_expressions=d.get("forbidden_expressions","");row.sample_text=d.get("sample_text","");db.session.add(row);db.session.commit();return jsonify(row.to_dict())
+
+@app.route("/api/novel/chapters/<int:chapter_id>/mentions", methods=["POST"])
+def add_manual_mention(chapter_id):
+    c=NovelChapter.query.get_or_404(chapter_id);d=request.json or {};e=WorldEntry.query.get_or_404(d.get("entry_id"))
+    if c.world_id!=get_world_id() or e.world_id!=c.world_id:abort(403)
+    source=d.get("source") if d.get("source") in ("manual","llm") else "manual";row=NovelEntityMention(chapter_id=c.id,entry_id=e.id,span_start=int(d.get("span_start",0)),span_end=int(d.get("span_end",0)),matched_text=d.get("matched_text",""),source=source);db.session.add(row);db.session.commit();return jsonify(row.to_dict()),201
+
+@app.route("/api/novel/chapters/<int:chapter_id>/mention-proposals", methods=["POST"])
+def mention_proposals(chapter_id):
+    c=NovelChapter.query.get_or_404(chapter_id)
+    if c.world_id!=get_world_id():abort(403)
+    try:
+        import llm_client
+        entries=[e.to_dict() for e in WorldEntry.query.filter_by(world_id=c.world_id,is_active=True).limit(100).all()]
+        return jsonify(llm_client.propose_novel_mentions(c.content or "",entries))
+    except Exception as e:return jsonify({"error":str(e)}),502
+
+@app.route("/api/entries/<int:entry_id>/reveal", methods=["GET","PUT"])
+def entry_reveal(entry_id):
+    entry=WorldEntry.query.get_or_404(entry_id)
+    if entry.world_id!=get_world_id():abort(403)
+    if request.method=="PUT":
+        EntryRevealState.query.filter_by(entry_id=entry.id).delete()
+        for x in (request.json or {}).get("states",[]):
+            visibility=x.get("visibility","작가전용")
+            if visibility not in ("작가전용","챕터공개","완전공개"):continue
+            reveal_chapter_id=x.get("reveal_chapter_id") if visibility=="챕터공개" else None
+            chapter=NovelChapter.query.get(reveal_chapter_id) if reveal_chapter_id else None
+            if reveal_chapter_id and (not chapter or chapter.world_id!=entry.world_id):continue
+            field_path=str(x.get("field_path") or "content").strip()[:150]
+            db.session.add(EntryRevealState(entry_id=entry.id,field_path=field_path,reveal_chapter_id=reveal_chapter_id,visibility=visibility))
+        db.session.commit()
+    return jsonify([x.to_dict() for x in EntryRevealState.query.filter_by(entry_id=entry.id).all()])
+
+@app.route("/api/novel/generate", methods=["POST"])
+def novel_generate():
+    d=request.json or {};chapter=NovelChapter.query.get(d.get("chapter_id")) if d.get("chapter_id") else None
+    try:
+        import llm_client
+        result=llm_client.generate_novel_text(get_world_id(),d.get("instruction",""),chapter.to_dict() if chapter else None,d.get("entry_ids") or [])
+        result["new_entity_proposals"]=[x for x in result.get("new_entity_proposals",[]) if x.get("title") and x.get("content") and x.get("category") in CATEGORIES]
+        return jsonify(result)
+    except Exception as e:return jsonify({"error":str(e)}),502
+
 @app.route("/api/settings", methods=["GET"])
 def get_settings():
     base = AppSettings.get().to_dict()
@@ -1154,6 +1558,8 @@ def update_settings():
     us = UserLlmSettings.get_for_user(current_user().id)
     if "max_llm_entry_chars" in data:
         s.max_llm_entry_chars = int(data["max_llm_entry_chars"])
+    if "entries_per_tick" in data:
+        s.entries_per_tick = max(0, min(20, int(data["entries_per_tick"])))
     if "max_user_entry_chars" in data:
         s.max_user_entry_chars = int(data["max_user_entry_chars"])
     if "rag_token_budget" in data:
@@ -1998,6 +2404,20 @@ def world_design_apply():
         entry = WorldEntry(world_id=wid, title=title[:200], category=category, content=content, created_by="llm", tick_created=0, is_active=True)
         entry.references = refs
         db.session.add(entry); db.session.flush(); existing[entry.title] = entry.id; created.append(entry)
+        for axis_name,value in (item.get("attributes") or {}).items():
+            axis=WorldAttributeSchema.query.filter_by(world_id=wid,axis_name=axis_name,is_active=True).first()
+            if axis: db.session.add(EntryAttributeValue(entry_id=entry.id,axis_id=axis.id,value=max(axis.min_tier,min(axis.max_tier,int(value)))))
+        for skill_id in item.get("reused_skill_ids") or []:
+            skill=WorldSkillRegistry.query.filter_by(id=skill_id,world_id=wid).first()
+            if skill: db.session.add(EntrySkillLink(entry_id=entry.id,skill_id=skill.id))
+        for proposal in item.get("new_skill_proposals") or []:
+            name=str(proposal.get("name") or "").strip()
+            if not name:continue
+            skill=WorldSkillRegistry.query.filter_by(world_id=wid,name=name).first()
+            if not skill:
+                skill=WorldSkillRegistry(world_id=wid,type=proposal.get("type") if proposal.get("type") in ("스킬","특성") else "스킬",name=name[:150],description=proposal.get("description",""),tags_json=_json.dumps(proposal.get("tags") or [],ensure_ascii=False),created_by="llm")
+                db.session.add(skill);db.session.flush()
+            db.session.add(EntrySkillLink(entry_id=entry.id,skill_id=skill.id))
     db.session.commit()
     # 태그/임베딩은 생성 성공에 영향을 주지 않도록 저장 뒤 각각 보강한다.
     for entry in created: _enrich_entry(entry)
@@ -2240,9 +2660,14 @@ def bulk_delete_entries():
     ids = request.json.get("ids", [])
     if not ids:
         return jsonify({"error": "ids가 필요합니다."}), 400
-    WorldEntry.query.filter(WorldEntry.id.in_(ids)).delete(synchronize_session=False)
+    valid_ids = [row.id for row in WorldEntry.query.filter(
+        WorldEntry.world_id == get_world_id(), WorldEntry.id.in_(ids)
+    ).all()]
+    _delete_entry_dependents(valid_ids)
+    if valid_ids:
+        WorldEntry.query.filter(WorldEntry.id.in_(valid_ids)).delete(synchronize_session=False)
     db.session.commit()
-    return jsonify({"ok": True, "deleted": len(ids)})
+    return jsonify({"ok": True, "deleted": len(valid_ids)})
 
 
 @app.route("/api/entries/bulk-toggle-active", methods=["POST"])

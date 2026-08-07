@@ -92,6 +92,9 @@ class WorldEntry(db.Model):
     references_json = db.Column(db.Text, default="[]")
     created_by = db.Column(db.String(20), default=CREATOR_USER)
     tick_created = db.Column(db.Integer, default=0)
+    primary_year = db.Column(db.String(100), default="")
+    year_notes_json = db.Column(db.Text, default="[]")
+    aliases_json = db.Column(db.Text, default="[]")
     is_active = db.Column(db.Boolean, default=True)
     is_summarized = db.Column(db.Boolean, default=False)  # 요약으로 대체된 항목
     keywords = db.Column(db.Text, default="")  # 쉼표 구분 핵심 키워드 (최대 5개)
@@ -123,6 +126,14 @@ class WorldEntry(db.Model):
             auto_tags = json.loads(self.auto_tags_json or "[]")
         except Exception:
             auto_tags = []
+        try:
+            year_notes = json.loads(self.year_notes_json or "[]")
+        except Exception:
+            year_notes = []
+        try:
+            aliases = json.loads(self.aliases_json or "[]")
+        except Exception:
+            aliases = []
         return {
             "id": self.id,
             "title": self.title,
@@ -131,6 +142,9 @@ class WorldEntry(db.Model):
             "references": self.references,
             "created_by": self.created_by,
             "tick_created": self.tick_created,
+            "primary_year": self.primary_year or "",
+            "year_notes": year_notes,
+            "aliases": aliases,
             "is_active": self.is_active,
             "is_summarized": self.is_summarized,
             "keywords": self.keywords or "",
@@ -181,6 +195,7 @@ class AppSettings(db.Model):
     id = db.Column(db.Integer, primary_key=True, default=1)
     # LLM이 생성하는 엔트리 1개당 최대 글자수 (0 = 제한 없음)
     max_llm_entry_chars = db.Column(db.Integer, default=500)
+    entries_per_tick = db.Column(db.Integer, default=1)
     # 유저 입력 엔트리 1개당 최대 글자수 (UI 카운터용, 0 = 제한 없음)
     max_user_entry_chars = db.Column(db.Integer, default=1000)
     # RAG 토큰 예산: 세계관이 이 값의 50%를 초과하면 관련 엔트리만 선택 (0 = RAG 비활성화)
@@ -210,6 +225,7 @@ class AppSettings(db.Model):
     def to_dict(self):
         return {
             "max_llm_entry_chars": self.max_llm_entry_chars if self.max_llm_entry_chars is not None else 500,
+            "entries_per_tick": self.entries_per_tick if self.entries_per_tick is not None else 1,
             "max_user_entry_chars": self.max_user_entry_chars if self.max_user_entry_chars is not None else 1000,
             "rag_token_budget": self.rag_token_budget if self.rag_token_budget is not None else 0,
             "llm_model_simulation": self.llm_model_simulation or "claude-sonnet-4.5",
@@ -234,6 +250,128 @@ class EntryRelationship(db.Model):
     relation_type = db.Column(db.String(100), default="관련")
     description = db.Column(db.Text, default="")
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+class WorldAttributeSchema(db.Model):
+    __tablename__ = "world_attribute_schema"
+    id = db.Column(db.Integer, primary_key=True)
+    world_id = db.Column(db.Integer, db.ForeignKey("worlds.id"), nullable=False, index=True)
+    axis_name = db.Column(db.String(100), nullable=False)
+    axis_order = db.Column(db.Integer, default=0)
+    min_tier = db.Column(db.Integer, default=1)
+    max_tier = db.Column(db.Integer, default=5)
+    tier_labels_json = db.Column(db.Text, default="{}")
+    is_active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    def to_dict(self):
+        try: labels = json.loads(self.tier_labels_json or "{}")
+        except Exception: labels = {}
+        return {"id":self.id,"world_id":self.world_id,"axis_name":self.axis_name,"axis_order":self.axis_order,"min_tier":self.min_tier,"max_tier":self.max_tier,"tier_labels":labels,"is_active":bool(self.is_active)}
+
+
+class EntryAttributeValue(db.Model):
+    __tablename__ = "entry_attribute_value"
+    entry_id = db.Column(db.Integer, db.ForeignKey("world_entries.id"), primary_key=True)
+    axis_id = db.Column(db.Integer, db.ForeignKey("world_attribute_schema.id"), primary_key=True)
+    value = db.Column(db.Integer)
+
+
+class WorldSkillRegistry(db.Model):
+    __tablename__ = "world_skill_registry"
+    id = db.Column(db.Integer, primary_key=True)
+    world_id = db.Column(db.Integer, db.ForeignKey("worlds.id"), nullable=False, index=True)
+    type = db.Column(db.String(20), default="스킬")
+    name = db.Column(db.String(150), nullable=False)
+    description = db.Column(db.Text, default="")
+    tags_json = db.Column(db.Text, default="[]")
+    rarity = db.Column(db.String(30), default="일반")
+    embedding_json = db.Column(db.Text, default="")
+    created_by = db.Column(db.String(20), default="user")
+    tick_created = db.Column(db.Integer, default=0)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    def to_dict(self):
+        try: tags=json.loads(self.tags_json or "[]")
+        except Exception: tags=[]
+        return {"id":self.id,"world_id":self.world_id,"type":self.type,"name":self.name,"description":self.description or "","tags":tags,"rarity":self.rarity or "일반","created_by":self.created_by,"tick_created":self.tick_created,"has_embedding":bool(self.embedding_json)}
+
+
+class EntrySkillLink(db.Model):
+    __tablename__ = "entry_skill_link"
+    entry_id = db.Column(db.Integer, db.ForeignKey("world_entries.id"), primary_key=True)
+    skill_id = db.Column(db.Integer, db.ForeignKey("world_skill_registry.id"), primary_key=True)
+    rank = db.Column(db.Integer)
+
+
+class WorldGuideline(db.Model):
+    __tablename__ = "world_guideline"
+    world_id = db.Column(db.Integer, db.ForeignKey("worlds.id"), primary_key=True)
+    skill_generation_guide = db.Column(db.Text, default="")
+    trait_generation_guide = db.Column(db.Text, default="")
+    def to_dict(self): return {"world_id":self.world_id,"skill_generation_guide":self.skill_generation_guide or "","trait_generation_guide":self.trait_generation_guide or ""}
+
+
+class WorldEntryTemplate(db.Model):
+    __tablename__ = "world_entry_template"
+    id = db.Column(db.Integer, primary_key=True)
+    world_id = db.Column(db.Integer, db.ForeignKey("worlds.id"), nullable=False, index=True)
+    category = db.Column(db.String(50), nullable=False)
+    fields_json = db.Column(db.Text, default="[]")
+    is_active = db.Column(db.Boolean, default=True)
+    def to_dict(self):
+        try: fields=json.loads(self.fields_json or "[]")
+        except Exception: fields=[]
+        return {"id":self.id,"world_id":self.world_id,"category":self.category,"fields":fields,"is_active":bool(self.is_active)}
+
+
+class NovelChapter(db.Model):
+    __tablename__ = "novel_chapter"
+    id = db.Column(db.Integer, primary_key=True)
+    world_id = db.Column(db.Integer, db.ForeignKey("worlds.id"), nullable=False, index=True)
+    title = db.Column(db.String(250), default="새 챕터")
+    order_no = db.Column(db.Integer, default=0)
+    content = db.Column(db.Text, default="")
+    status = db.Column(db.String(20), default="초안")
+    reveal_chapter_ref = db.Column(db.Integer, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    def to_dict(self, include_content=True):
+        d={"id":self.id,"world_id":self.world_id,"title":self.title,"order_no":self.order_no,"status":self.status,"reveal_chapter_ref":self.reveal_chapter_ref,"created_at":self.created_at.isoformat()+"Z" if self.created_at else None}
+        if include_content: d["content"]=self.content or ""
+        return d
+
+
+class NovelEntityMention(db.Model):
+    __tablename__ = "novel_entity_mention"
+    id = db.Column(db.Integer, primary_key=True)
+    chapter_id = db.Column(db.Integer, db.ForeignKey("novel_chapter.id"), nullable=False, index=True)
+    entry_id = db.Column(db.Integer, db.ForeignKey("world_entries.id"), nullable=False)
+    span_start = db.Column(db.Integer, default=0)
+    span_end = db.Column(db.Integer, default=0)
+    matched_text = db.Column(db.String(250), default="")
+    source = db.Column(db.String(20), default="keyword")
+    def to_dict(self): return {"id":self.id,"chapter_id":self.chapter_id,"entry_id":self.entry_id,"span_start":self.span_start,"span_end":self.span_end,"matched_text":self.matched_text,"source":self.source}
+
+
+class WorldWritingStyle(db.Model):
+    __tablename__ = "world_writing_style"
+    id = db.Column(db.Integer, primary_key=True)
+    world_id = db.Column(db.Integer, db.ForeignKey("worlds.id"), nullable=False, index=True)
+    novel_id = db.Column(db.Integer, nullable=True)
+    chapter_id = db.Column(db.Integer, db.ForeignKey("novel_chapter.id"), nullable=True)
+    pov = db.Column(db.String(100), default="3인칭 관찰자")
+    tone_guide = db.Column(db.Text, default="")
+    forbidden_expressions = db.Column(db.Text, default="")
+    sample_text = db.Column(db.Text, default="")
+    def to_dict(self): return {"id":self.id,"world_id":self.world_id,"novel_id":self.novel_id,"chapter_id":self.chapter_id,"pov":self.pov or "","tone_guide":self.tone_guide or "","forbidden_expressions":self.forbidden_expressions or "","sample_text":self.sample_text or ""}
+
+
+class EntryRevealState(db.Model):
+    __tablename__ = "entry_reveal_state"
+    id = db.Column(db.Integer, primary_key=True)
+    entry_id = db.Column(db.Integer, db.ForeignKey("world_entries.id"), nullable=False, index=True)
+    field_path = db.Column(db.String(250), nullable=False)
+    reveal_chapter_id = db.Column(db.Integer, db.ForeignKey("novel_chapter.id"), nullable=True)
+    visibility = db.Column(db.String(20), default="작가전용")
+    def to_dict(self): return {"id":self.id,"entry_id":self.entry_id,"field_path":self.field_path,"reveal_chapter_id":self.reveal_chapter_id,"visibility":self.visibility}
 
 
 class SimulationConfig(db.Model):

@@ -271,6 +271,8 @@
               <i class="bi bi-gear me-1"></i>마스터 설정
             </button>
           </li>
+          <li class="nav-item"><a class="nav-link {% if request.path == '/metadata' %}active{% endif %}" href="/metadata"><i class="bi bi-grid-3x3-gap me-1"></i>메타데이터 설정</a></li>
+          <li class="nav-item"><a class="nav-link {% if request.path == '/novel' %}active{% endif %}" href="/novel"><i class="bi bi-book me-1"></i>소설</a></li>
           <li class="nav-item ms-1">
             <button class="btn btn-sm" id="llmTestBtn"
               style="border:1px solid var(--border); color:var(--text-secondary); background:transparent;"
@@ -314,6 +316,12 @@
               또한 세계관을 LLM에 전달할 때 이 크기로 잘라 전송합니다.<br>
               <span style="color:#ffb86c;">0 = 제한 없음</span>
             </div>
+          </div>
+
+          <div class="mb-4">
+            <label class="form-label"><i class="bi bi-collection me-1" style="color:var(--accent);"></i>틱당 새 엔트리 생성 수</label>
+            <input type="number" class="form-control" id="msEntriesPerTick" min="0" max="20" placeholder="예: 1">
+            <div class="form-text">시뮬레이션에서 한 틱에 LLM이 새로 만들 수 있는 최대 엔트리 수입니다. <span style="color:#ffb86c;">0 = 모델이 꼭 필요하다고 판단한 수만 생성</span></div>
           </div>
 
           <div class="mb-4">
@@ -504,6 +512,7 @@
     const res = await fetch('/api/settings');
     const s = await res.json();
     document.getElementById('msLlmChars').value = s.max_llm_entry_chars ?? 500;
+    document.getElementById('msEntriesPerTick').value = s.entries_per_tick ?? 1;
     document.getElementById('msUserChars').value = s.max_user_entry_chars ?? 1000;
     document.getElementById('msRagBudget').value = s.rag_token_budget ?? 0;
     setModelSelect('msModelSim', s.llm_model_simulation ?? 'claude-sonnet-4.5');
@@ -555,6 +564,7 @@
   async function saveMasterSettings(silent = false) {
     const body = {
       max_llm_entry_chars: parseInt(document.getElementById('msLlmChars').value) || 0,
+      entries_per_tick: parseInt(document.getElementById('msEntriesPerTick').value) || 0,
       max_user_entry_chars: parseInt(document.getElementById('msUserChars').value) || 0,
       rag_token_budget: parseInt(document.getElementById('msRagBudget').value) || 0,
       llm_model_simulation: document.getElementById('msCustomModel').value.trim() || document.getElementById('msModelSim').value,

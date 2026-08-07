@@ -120,6 +120,9 @@
           <div class="d-flex gap-2 flex-wrap">
             <button class="btn btn-sm btn-outline-secondary" onclick="startEdit()"><i class="bi bi-pencil me-1"></i>편집</button>
             <button class="btn btn-sm btn-outline-secondary" onclick="openAiRevision()"><i class="bi bi-stars me-1"></i>AI 수정</button>
+            <button class="btn btn-sm btn-outline-secondary" onclick="chooseRegistrySkills()"><i class="bi bi-lightning me-1"></i>스킬 선택</button>
+            <button class="btn btn-sm btn-outline-secondary" onclick="proposeSkills()"><i class="bi bi-magic me-1"></i>스킬 제안</button>
+            <button class="btn btn-sm btn-outline-secondary" onclick="editRevealState()"><i class="bi bi-eye-slash me-1"></i>공개 범위</button>
             <button class="btn btn-sm btn-outline-secondary" id="toggleActiveBtn" onclick="toggleActive()"></button>
             <button class="btn btn-sm btn-outline-secondary" onclick="stripMarkdownEntry()" title="**굵게**, # 제목, > 인용 등 마크다운 기호 제거">
               <i class="bi bi-eraser me-1"></i>MD 제거
@@ -175,6 +178,7 @@
               </label>
               <div id="detailKeywords"></div>
             </div>
+            <div class="mb-3" id="detailStatSection" style="display:none"><label class="form-label small text-muted">능력치·스킬 시트</label><div id="detailStatBlock" class="p-2 rounded" style="background:var(--bg-input)"></div></div>
             <div class="mb-3">
               <label class="form-label small text-muted">참조 엔트리</label>
               <div id="detailReferences"></div>
@@ -247,9 +251,15 @@
               <label class="form-label small">참조 엔트리 ID (콤마로 구분)</label>
               <input type="text" class="form-control" id="editReferences" placeholder="예: 1, 3, 7">
             </div>
+            <div class="mb-3"><label class="form-label small">별칭 (콤마로 구분)</label><input type="text" class="form-control" id="editAliases" placeholder="통칭, 이명, 가명"></div>
             <div class="mb-3">
               <label class="form-label small">생성 틱 번호</label>
               <input type="number" class="form-control" id="editTickCreated" min="0" placeholder="0 = 초기 설정">
+            </div>
+            <div class="mb-3">
+              <label class="form-label small">대표 연도</label>
+              <input type="text" class="form-control" id="editPrimaryYear" placeholder="예: 1427년 / 제3시대 18년">
+              <div class="form-text">연도 카테고리 엔트리와 같은 표기를 사용하세요. 해당 연도 특기사항은 내용의 ‘연도별 특기사항’에 기록합니다.</div>
             </div>
             <div class="mb-3 form-check">
               <input type="checkbox" class="form-check-input" id="editIsActive">
@@ -296,10 +306,15 @@
           <label class="form-label small">참조 엔트리 ID (콤마로 구분)</label>
           <input type="text" class="form-control" id="newReferences" placeholder="예: 1, 3, 7">
         </div>
+        <div class="mb-3"><label class="form-label small">별칭 (콤마로 구분)</label><input type="text" class="form-control" id="newAliases" placeholder="통칭, 이명, 가명"></div>
         <div class="mb-3">
           <label class="form-label small">생성 틱 번호</label>
           <input type="number" class="form-control" id="newTickCreated" min="0" value="0" placeholder="0 = 초기 설정">
           <div class="form-text small" style="font-size:0.72rem;">0 = 초기 설정 / 1 이상 = 해당 틱에 등장</div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label small">대표 연도</label>
+          <input type="text" class="form-control" id="newPrimaryYear" placeholder="예: 1427년 / 제3시대 18년">
         </div>
       </div>
       <div class="modal-footer">
@@ -698,6 +713,7 @@ async function showDetail() {
   contentEl.textContent = e.content;
   try { const r = await fetch('/api/markdown/render', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:e.content})}); const d=await r.json(); if(r.ok) contentEl.innerHTML=d.html; } catch (_) {}
   document.getElementById('detailTick').textContent = e.tick_created === 0 ? '초기 설정' : `틱 ${e.tick_created}`;
+  if (e.primary_year) document.getElementById('detailTick').textContent += ` · 연도: ${e.primary_year}`;
   // 버전 노트 배지
   const vNote = e.version_note || '';
   const vNoteHtml = vNote
@@ -711,6 +727,7 @@ async function showDetail() {
   // 버전 히스토리 + 타임라인 에피소드 비동기 로드
   loadEntryVersions(e.id);
   loadEntryEpisodes(e.id);
+  loadStatBlock(e.id);
 
   // 비활성화/활성화 버튼 텍스트 갱신
   const toggleBtn = document.getElementById('toggleActiveBtn');
@@ -767,6 +784,9 @@ async function showDetail() {
 }
 
 let aiRevisionHistory = [], aiRevisionProposal = null, aiRevisionModal;
+async function chooseRegistrySkills(){const m=await(await fetch('/api/metadata')).json();const current=await(await fetch(`/api/entries/${currentEntry.id}/skills`)).json();const list=m.skills.map(s=>`${s.id}: [${s.type}] ${s.name}`).join('\n');const value=prompt('연결할 스킬 ID를 쉼표로 입력하세요.\n'+list,current.map(x=>x.skill.id).join(','));if(value===null)return;const ids=value.split(',').map(x=>+x.trim()).filter(Boolean);await fetch(`/api/entries/${currentEntry.id}/skills`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({skills:ids.map(skill_id=>({skill_id}))})});alert('스킬 링크를 저장했습니다.')}
+async function proposeSkills(){const r=await fetch(`/api/entries/${currentEntry.id}/skill-proposals`,{method:'POST'});const d=await r.json();if(!r.ok)return alert(d.error);const text=`기존 재사용 ID: ${(d.reused_skill_ids||[]).join(', ')||'없음'}\n\n신규 제안:\n${(d.new_skill_proposals||[]).map(x=>`[${x.type}] ${x.name}: ${x.description}`).join('\n')||'없음'}\n\n승인하여 레지스트리와 캐릭터에 연결할까요?`;if(!confirm(text))return;const ids=[...(d.reused_skill_ids||[])];for(const p of d.new_skill_proposals||[]){const cr=await fetch('/api/metadata/skills',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});if(cr.ok)ids.push((await cr.json()).id)}await fetch(`/api/entries/${currentEntry.id}/skills`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({skills:ids.map(skill_id=>({skill_id}))})});alert('승인한 스킬/특성을 저장했습니다.')}
+async function editRevealState(){const chapters=await(await fetch('/api/novel/chapters')).json();const states=await(await fetch(`/api/entries/${currentEntry.id}/reveal`)).json();const initial=(states.length?states:[{field_path:'content',visibility:'작가전용',reveal_chapter_id:null}]).map(x=>`${x.field_path}|${x.visibility}|${x.reveal_chapter_id||''}`).join('\n');const chapterHelp=chapters.map(c=>`${c.id}: ${c.title}`).join(', ');const raw=prompt(`필드별 공개 범위를 한 줄씩 입력하세요.\n형식: 필드경로|작가전용/챕터공개/완전공개|공개챕터ID\n챕터: ${chapterHelp||'없음'}`,initial);if(raw===null)return;const allowed=['작가전용','챕터공개','완전공개'];const next=raw.split('\n').map(line=>{const [field_path,visibility,reveal]=line.split('|').map(x=>(x||'').trim());return {field_path,visibility,reveal_chapter_id:visibility==='챕터공개'?(+reveal||null):null}}).filter(x=>x.field_path&&allowed.includes(x.visibility));if(!next.length)return alert('올바른 공개 범위를 한 개 이상 입력하세요.');await fetch(`/api/entries/${currentEntry.id}/reveal`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({states:next})});alert('필드별 공개 범위를 저장했습니다.')}
 function openAiRevision() {
   aiRevisionHistory = []; aiRevisionProposal = null;
   document.getElementById('aiRevisionInstruction').value = '';
@@ -787,13 +807,17 @@ async function approveAiRevision() {
   const res=await fetch(`/api/entries/${currentEntry.id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:p.title,category:p.category,content:p.content,references:p.references||currentEntry.references||[]})}); const d=await res.json(); if(!res.ok)return alert(d.error||'저장 실패'); currentEntry=d; aiRevisionModal.hide(); showDetail(); loadEntries();
 }
 
+async function loadStatBlock(id){try{const d=await(await fetch(`/api/entries/${id}/stat-block`)).json();const section=document.getElementById('detailStatSection');if(!d.attributes?.length&&!d.skills?.length){section.style.display='none';return}section.style.display='block';detailStatBlock.innerHTML=`${d.attributes?.length?`<div class="mb-2">${d.attributes.map(a=>`<span class="badge bg-secondary me-1" title="${escHtml(a.label)}">${escHtml(a.axis_name)} ${a.value}${a.label?' · '+escHtml(a.label):''}</span>`).join('')}</div>`:''}${d.skills?.map(x=>`<span class="badge me-1" style="background:rgba(139,127,247,.2);color:var(--accent)" title="${escHtml(x.skill.description)}">${escHtml(x.skill.name)}${x.rank?' '+x.rank:''}</span>`).join('')||''}`}catch(e){}}
+
 function startEdit() {
   const e = currentEntry;
   document.getElementById('editTitle').value = e.title;
   document.getElementById('editCategory').value = e.category;
   document.getElementById('editContent').value = e.content;
   document.getElementById('editReferences').value = (e.references || []).join(', ');
+  document.getElementById('editAliases').value = (e.aliases || []).join(', ');
   document.getElementById('editTickCreated').value = e.tick_created ?? 0;
+  document.getElementById('editPrimaryYear').value = e.primary_year || '';
   document.getElementById('editIsActive').checked = e.is_active;
   document.getElementById('viewMode').style.display = 'none';
   document.getElementById('editMode').style.display = 'block';
@@ -813,7 +837,9 @@ async function saveEdit() {
     category: document.getElementById('editCategory').value,
     content: document.getElementById('editContent').value.trim(),
     references: refs,
+    aliases: document.getElementById('editAliases').value.split(',').map(x=>x.trim()).filter(Boolean),
     tick_created: parseInt(document.getElementById('editTickCreated').value) || 0,
+    primary_year: document.getElementById('editPrimaryYear').value.trim(),
     is_active: document.getElementById('editIsActive').checked,
   };
   const res = await fetch(`/api/entries/${currentEntry.id}`, {
@@ -1098,7 +1124,9 @@ async function createEntry() {
     category: document.getElementById('newCategory').value,
     content: document.getElementById('newContent').value.trim(),
     references: refs,
+    aliases: document.getElementById('newAliases').value.split(',').map(x=>x.trim()).filter(Boolean),
     tick_created: parseInt(document.getElementById('newTickCreated').value) || 0,
+    primary_year: document.getElementById('newPrimaryYear').value.trim(),
   };
   if (!body.title || !body.content) { alert('제목과 내용을 입력하세요.'); return; }
   const res = await fetch('/api/entries', {

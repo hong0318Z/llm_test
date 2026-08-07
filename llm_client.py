@@ -165,6 +165,12 @@ SYSTEM_PROMPT_TEMPLATE = """\
 당신은 세계관 자율 진화 엔진입니다.
 주어진 세계관 엔트리들을 기반으로 논리적으로 일관된 사건과 변화를 생성합니다.
 
+TRPG 작성 규칙:
+- [인물]은 D&D 스타일 캐릭터 시트로 작성: 정체성/종족·직업·레벨, 능력치(STR DEX CON INT WIS CHA), HP/AC, 배경·성향, 기술·장비, 목표·관계·약점.
+- [장소]는 TRPG 장소 시트로 작성: 유형·지형·규모, 분위기, 주요 구역, 세력/주민, 자원·위험, 비밀·훅, 접근 경로.
+- [세력]은 목표·조직·자원·지도자·동맹/적대·현재 계획·약점을, [사건]은 발생 연도·원인·전개·결과·영향을 포함하세요.
+- primary_year가 있는 엔트리는 그 연도에 벌어진 특기사항을 우선하며, 인물/장소/세력의 content에 "## 연도별 특기사항"으로 연도와 사건을 기록하세요.
+
 === 세계관 기반 법칙 (Level 1) ===
 {prompt_level_1}
 
@@ -184,6 +190,8 @@ SYSTEM_PROMPT_TEMPLATE = """\
   이 엔트리들은 사용자가 설정한 세계관 코어이며 수정/비활성화가 금지됩니다.
 - 유저 엔트리에서 파생된 변화를 표현해야 한다면, 반드시 new_entries로 새 엔트리를 생성하고
   references 필드에 원본 유저 엔트리 ID를 포함하세요.
+- 이번 틱의 new_entries는 최대 {entries_per_tick}개입니다. 값이 0이면 꼭 필요한 수만 생성하세요.
+- 엔트리 내용 길이: {entry_length_rule}
 """
 
 USER_PROMPT_TEMPLATE = """\
@@ -216,6 +224,7 @@ USER_PROMPT_TEMPLATE = """\
       "title": "새 인물/개념/사물 이름",
       "category": "인물",
       "content": "내용",
+      "primary_year": "사건이 집중되는 연도 (없으면 빈 문자열)",
       "references": [1, 2]
     }}
   ],
@@ -319,9 +328,28 @@ def plan_world_structure(context: str, target_count: int, answers: str, existing
 
 WORLD_DETAIL_PROMPT = """당신은 세계관 DB 작성자입니다. 받은 설계 항목만 상세한 독립 DB 엔트리로 작성하세요.
 {length_rule}
+{metadata_rules}
+Markdown으로 읽기 쉬운 TRPG 시트를 작성하세요.
+- 인물: D&D 스타일(정체성, 종족/직업/레벨, STR·DEX·CON·INT·WIS·CHA, HP/AC, 배경·성향, 기술·장비, 목표·관계·약점, 연도별 특기사항)
+- 장소: 유형/지형/규모, 분위기, 주요 구역, 주민/세력, 자원·위험, 비밀·모험 훅, 접근 경로, 연도별 변화
+- 세력: 목표·조직·자원·지도자·동맹/적대·현재 계획·약점·연도별 사건
+- 사건/연도: 발생 연도, 원인, 전개, 결과, 세계관 영향, 관련 인물·장소·세력
+연도와 관련된 항목은 "## 연도별 특기사항"에 해당 시점 사건을 기록하세요.
 설계 목록 밖의 새 항목을 추가하지 말고, Markdown 제목은 쓰지 마세요.
-JSON만 출력: {"entries":[{"title":"", "category":"", "content":"", "references":[]}]}
+JSON만 출력: {"entries":[{"title":"", "category":"", "content":"", "references":[], "attributes":{"축이름":1}, "reused_skill_ids":[], "new_skill_proposals":[{"name":"","description":"","type":"스킬","tags":[]}]}]}
 """
+
+def _world_metadata_rules(world_id):
+    if not world_id: return ""
+    try:
+        from models import WorldAttributeSchema, WorldSkillRegistry, WorldGuideline, WorldEntryTemplate
+        attrs=[a.to_dict() for a in WorldAttributeSchema.query.filter_by(world_id=world_id,is_active=True).order_by(WorldAttributeSchema.axis_order).all()]
+        skills=[s.to_dict() for s in WorldSkillRegistry.query.filter_by(world_id=world_id).limit(80).all()]
+        templates=[t.to_dict() for t in WorldEntryTemplate.query.filter_by(world_id=world_id,is_active=True).all()]
+        guide=WorldGuideline.query.get(world_id)
+        return "=== 세계관 고정 메타데이터 ===\n능력치 축(숫자 티어만 반환): "+json.dumps(attrs,ensure_ascii=False)+"\n카테고리 템플릿(필수 필드 준수): "+json.dumps(templates,ensure_ascii=False)+"\n기존 스킬/특성(맞으면 ID 재사용): "+json.dumps(skills,ensure_ascii=False)+"\n스킬 가이드: "+(guide.skill_generation_guide if guide else "")+"\n특성 가이드: "+(guide.trait_generation_guide if guide else "")
+    except Exception:
+        return ""
 
 
 def generate_world_detail_batch(context: str, items: list, existing_entries: list, max_chars: int = 0) -> dict:
@@ -330,11 +358,48 @@ def generate_world_detail_batch(context: str, items: list, existing_entries: lis
     items_text = json.dumps(items, ensure_ascii=False)
     length_rule = ("content 길이는 제한하지 마세요. 정보가 충분히 정리될 때까지 모델이 가능한 범위에서 충실하게 작성하세요." if not max_chars else f"각 content는 최대 {max_chars}자 이내로 작성하세요. 제한 안에서 정의·배경/역사·구조/특성·관계·갈등을 우선순위대로 충실히 담으세요.")
     prompt = f"=== 큰 맥락 ===\n{context}\n\n=== 이번에 상세 작성할 설계 항목 ===\n{items_text}\n\n=== 기존 DB 참고 ===\n{existing}"
-    system_prompt = WORLD_DETAIL_PROMPT.replace("{length_rule}", length_rule)
+    world_id = next((e.get("world_id") for e in existing_entries if e.get("world_id")), None)
+    system_prompt = WORLD_DETAIL_PROMPT.replace("{length_rule}", length_rule).replace("{metadata_rules}", _world_metadata_rules(world_id))
     raw = client.chat.completions.create(model=model, messages=[{"role":"system","content":system_prompt},{"role":"user","content":prompt}], temperature=0.6, max_tokens=8000).choices[0].message.content or ""
     result = _parse_json_safe(raw, "world_detail_batch")
     result["_raw"] = raw
     return result
+
+
+def generate_novel_text(world_id: int, instruction: str, chapter: dict = None, entry_ids: list = None) -> dict:
+    from models import WorldEntry, WorldWritingStyle, NovelChapter, EntryAttributeValue, WorldAttributeSchema, EntrySkillLink, WorldSkillRegistry
+    client, model=get_llm_client()
+    base_style=WorldWritingStyle.query.filter_by(world_id=world_id,chapter_id=None).first();chapter_style=WorldWritingStyle.query.filter_by(world_id=world_id,chapter_id=(chapter or {}).get("id")).first()
+    base=base_style.to_dict() if base_style else {"pov":"3인칭 관찰자","tone_guide":"","forbidden_expressions":"","sample_text":""};over=chapter_style.to_dict() if chapter_style else {}
+    style={k:(over.get(k) or base.get(k,"")) for k in ("pov","tone_guide","forbidden_expressions","sample_text")}
+    entries_q=WorldEntry.query.filter_by(world_id=world_id,is_active=True)
+    if entry_ids: entries_q=entries_q.filter(WorldEntry.id.in_(entry_ids))
+    entry_rows=entries_q.limit(30).all();entries=[e.to_dict() for e in entry_rows];stat_lines=[]
+    for e in entry_rows:
+        attrs=[]
+        for v in EntryAttributeValue.query.filter_by(entry_id=e.id).all():
+            axis=WorldAttributeSchema.query.get(v.axis_id)
+            if axis:attrs.append(f"{axis.axis_name}:{v.value}")
+        skills=[]
+        for link in EntrySkillLink.query.filter_by(entry_id=e.id).all():
+            skill=WorldSkillRegistry.query.get(link.skill_id)
+            if skill:skills.append(skill.name+(f"({link.rank})" if link.rank else ""))
+        if attrs or skills:stat_lines.append(f"{e.title} | 능력치 {', '.join(attrs)} | 스킬/특성 {', '.join(skills)}")
+    all_past=NovelChapter.query.filter_by(world_id=world_id).all();query_words=_extract_context_words(instruction+" "+(chapter or {}).get("content","")[-1500:])
+    past=sorted(all_past,key=lambda c:len(_extract_context_words(c.title+" "+c.content)&query_words),reverse=True)[:3]
+    style_text=json.dumps(style,ensure_ascii=False)
+    prompt=f"문체 설정: {style_text}\n\n등장 엔트리:\n{serialize_world_state(entries,700)}\n\n능력치/스킬 시트:\n"+"\n".join(stat_lines)+"\n\n관련 과거 챕터:\n"+"\n".join(f"[{c.title}] {c.content[-1200:]}" for c in past)+f"\n\n현재 본문:\n{(chapter or {}).get('content','')}\n\n요청:\n{instruction}"
+    system="세계관 설정과 공개 범위를 존중하는 소설 작가입니다. 금지 표현과 인물 말투를 지키세요. 기존 DB에 없는 새 고유명사를 발견/창작하면 별도 후보로 분리하세요. JSON만 출력: {\"content\":\"Markdown 본문\",\"new_entity_proposals\":[{\"title\":\"\",\"category\":\"인물/장소/세력 등\",\"content\":\"등록 초안\"}]}"
+    response=client.chat.completions.create(model=model,messages=[{"role":"system","content":system},{"role":"user","content":prompt}],temperature=.75,max_tokens=6000)
+    raw=response.choices[0].message.content or "";parsed=_parse_json_safe(raw,"novel_generate")
+    return {"proposal":parsed.get("content",raw) if isinstance(parsed,dict) else raw,"new_entity_proposals":parsed.get("new_entity_proposals",[]) if isinstance(parsed,dict) else [],"model":model}
+
+
+def propose_novel_mentions(content: str, entries: list) -> dict:
+    client,model=get_llm_client();catalog=[{"id":e["id"],"title":e["title"],"aliases":e.get("aliases",[])} for e in entries]
+    prompt="본문에서 대명사나 문맥 지칭이 어떤 엔트리를 뜻하는지 제안하세요. 정확한 본문 문자열과 0-based start/end를 반환하세요. 확실하지 않으면 제외. JSON만 출력: {\"mentions\":[{\"entry_id\":1,\"matched_text\":\"그 여자\",\"span_start\":0,\"span_end\":4}]}\n엔트리:"+json.dumps(catalog,ensure_ascii=False)+"\n본문:"+content
+    raw=client.chat.completions.create(model=model,messages=[{"role":"user","content":prompt}],temperature=.2,max_tokens=1500).choices[0].message.content or ""
+    return _parse_json_safe(raw,"novel_mentions")
 
 
 ENTRY_REVISION_PROMPT = """당신은 세계관 편집 파트너입니다. 사용자의 요청에 맞게 기존 엔트리를 수정하는 방안을 대화형으로 제안하세요.
@@ -353,6 +418,19 @@ def propose_entry_revision(entry: dict, instruction: str, history: list = None) 
     result = _parse_json_safe(raw, "entry_revision")
     if not isinstance(result, dict): result = {"reply": raw, "questions": [], "proposal": None}
     return result
+
+
+def propose_entry_skills(entry: dict, candidates: list, guideline: dict) -> dict:
+    client,model=get_llm_client()
+    prompt="캐릭터에 맞는 스킬/특성을 제안하세요. 기존 목록이 맞으면 ID를 재사용하고 없을 때만 신규 제안하세요. JSON만 출력: {\"reused_skill_ids\":[],\"new_skill_proposals\":[{\"name\":\"\",\"description\":\"\",\"type\":\"스킬\",\"tags\":[],\"rarity\":\"일반\"}]}\n\n엔트리:"+json.dumps(entry,ensure_ascii=False)+"\n후보:"+json.dumps(candidates,ensure_ascii=False)+"\n가이드:"+json.dumps(guideline,ensure_ascii=False)
+    raw=client.chat.completions.create(model=model,messages=[{"role":"user","content":prompt}],temperature=.4,max_tokens=1500).choices[0].message.content or ""
+    return _parse_json_safe(raw,"skill_proposal")
+
+
+def propose_metadata_migration(entries: list, metadata_rules: str) -> dict:
+    client,model=get_llm_client();prompt="기존 엔트리를 아래 메타데이터 스키마로 역변환하세요. 원문을 수정하지 말고 제안만 반환. 능력치는 숫자 티어만, 기존 스킬은 ID 재사용. JSON만 출력: {\"entries\":[{\"entry_id\":1,\"attributes\":{\"축\":2},\"reused_skill_ids\":[]}]}\n"+metadata_rules+"\n엔트리:"+json.dumps(entries,ensure_ascii=False)
+    raw=client.chat.completions.create(model=model,messages=[{"role":"user","content":prompt}],temperature=.2,max_tokens=4000).choices[0].message.content or ""
+    return _parse_json_safe(raw,"metadata_migration")
 
 
 def serialize_world_state(entries: list, max_chars: int = 500) -> str:
@@ -378,7 +456,8 @@ def serialize_world_state(entries: list, max_chars: int = 500) -> str:
             version_tag = f" [{item['version_note']}]" if item.get("version_note") else ""
             # 세계관 설계의 아직 DB에 저장되지 않은 임시 엔트리는 id가 없을 수 있다.
             item_id = item.get("id", "임시")
-            lines.append(f"  ID={item_id} | {item['title']}{creator_tag}{version_tag}{ref_str}")
+            year_tag = f" [연도: {item.get('primary_year')}]" if item.get("primary_year") else ""
+            lines.append(f"  ID={item_id} | {item['title']}{creator_tag}{version_tag}{year_tag}{ref_str}")
             lines.append(f"    {content}")
 
     return "\n".join(lines)
@@ -396,6 +475,8 @@ def estimate_world_tokens(entries: list, config: dict = None) -> dict:
             prompt_level_1=config.get("prompt_level_1") or "없음",
             prompt_level_2=config.get("prompt_level_2") or "없음",
             prompt_level_3=config.get("prompt_level_3") or "없음",
+            entries_per_tick=config.get("entries_per_tick", 1),
+            entry_length_rule=("제한 없음. 정보가 충분할 때까지 작성" if not max_chars else f"항목당 최대 {max_chars}자"),
         )
         prompt_tokens = estimate_tokens(system) + estimate_tokens(USER_PROMPT_TEMPLATE)
 
@@ -460,7 +541,7 @@ def run_tick(config: dict, tick_number: int, entries: list, recent_context: str 
              model_override: str = None) -> dict:
     """단일 틱 실행. LLM을 호출해 세계관 변화를 반환."""
     client, model = get_llm_client(model_override)
-    max_chars = config.get("max_content_chars") or 500
+    max_chars = config.get("max_content_chars") if config.get("max_content_chars") is not None else 500
     rag_budget = config.get("rag_token_budget") or 0
     overrides = prompt_overrides or {}
 
@@ -478,6 +559,8 @@ def run_tick(config: dict, tick_number: int, entries: list, recent_context: str 
         prompt_level_1=config.get("prompt_level_1") or "없음",
         prompt_level_2=config.get("prompt_level_2") or "없음",
         prompt_level_3=config.get("prompt_level_3") or "없음",
+        entries_per_tick=config.get("entries_per_tick", 1),
+        entry_length_rule=("제한 없음. 정보가 충분할 때까지 작성" if not max_chars else f"항목당 최대 {max_chars}자"),
     )
     world_state = serialize_world_state(entries, max_chars=max_chars)
     story_beat_section = build_story_beat_section(story_beats or [], tick_number)

@@ -83,9 +83,9 @@ def run_simulation(run_id: int, app):
                 embedding_enabled = _user_settings.embedding_enabled if _user_settings else settings.embedding_enabled
                 embedding_model = _user_settings.embedding_model if _user_settings else settings.embedding_model
                 reference_limit = _user_settings.rag_reference_limit if _user_settings else settings.rag_reference_limit
-                max_chars = settings.max_llm_entry_chars or 500
+                max_chars = settings.max_llm_entry_chars if settings.max_llm_entry_chars is not None else 500
                 rag_budget = settings.rag_token_budget or 0
-                cfg_dict = {**config.to_dict(), "max_content_chars": max_chars, "rag_token_budget": rag_budget}
+                cfg_dict = {**config.to_dict(), "max_content_chars": max_chars, "rag_token_budget": rag_budget, "entries_per_tick": settings.entries_per_tick if settings.entries_per_tick is not None else 1}
                 if llm_client.needs_summary(entries, max_chars=max_chars):
                     _run_auto_summary(run, tick, entries, cfg_dict, prompt_overrides, model_override=_model_sim)
                     db.session.commit()
@@ -321,6 +321,7 @@ def _apply_tick_result(run: SimulationRun, tick: int, result: dict):
             content=new.get("content", ""),
             created_by=CREATOR_LLM,
             tick_created=tick,
+            primary_year=(new.get("primary_year") or "")[:100],
             is_active=True,
         )
         entry.references = new.get("references", [])

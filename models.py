@@ -260,13 +260,14 @@ class WorldAttributeSchema(db.Model):
     axis_order = db.Column(db.Integer, default=0)
     min_tier = db.Column(db.Integer, default=1)
     max_tier = db.Column(db.Integer, default=5)
+    description = db.Column(db.Text, default="")
     tier_labels_json = db.Column(db.Text, default="{}")
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     def to_dict(self):
         try: labels = json.loads(self.tier_labels_json or "{}")
         except Exception: labels = {}
-        return {"id":self.id,"world_id":self.world_id,"axis_name":self.axis_name,"axis_order":self.axis_order,"min_tier":self.min_tier,"max_tier":self.max_tier,"tier_labels":labels,"is_active":bool(self.is_active)}
+        return {"id":self.id,"world_id":self.world_id,"axis_name":self.axis_name,"axis_order":self.axis_order,"min_tier":self.min_tier,"max_tier":self.max_tier,"description":self.description or "","tier_labels":labels,"is_active":bool(self.is_active)}
 
 
 class EntryAttributeValue(db.Model):
@@ -274,6 +275,7 @@ class EntryAttributeValue(db.Model):
     entry_id = db.Column(db.Integer, db.ForeignKey("world_entries.id"), primary_key=True)
     axis_id = db.Column(db.Integer, db.ForeignKey("world_attribute_schema.id"), primary_key=True)
     value = db.Column(db.Integer)
+    description = db.Column(db.Text, default="")
 
 
 class WorldSkillRegistry(db.Model):

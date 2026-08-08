@@ -167,6 +167,7 @@ SYSTEM_PROMPT_TEMPLATE = """\
 
 TRPG 작성 규칙:
 - [인물]은 D&D 스타일 캐릭터 시트로 작성: 정체성/종족·직업·레벨, 능력치(STR DEX CON INT WIS CHA), HP/AC, 배경·성향, 기술·장비, 목표·관계·약점.
+- [인물] 본문은 정규식 뷰가 인식하도록 **정체성**, **종족/직업/레벨**, **능력치**, **HP/AC**, **배경·성향**, **기술·장비**, **목표·관계·약점**, **연도별 특기사항** 표기를 일관되게 사용하세요.
 - [장소]는 TRPG 장소 시트로 작성: 유형·지형·규모, 분위기, 주요 구역, 세력/주민, 자원·위험, 비밀·훅, 접근 경로.
 - [세력]은 목표·조직·자원·지도자·동맹/적대·현재 계획·약점을, [사건]은 발생 연도·원인·전개·결과·영향을 포함하세요.
 - primary_year가 있는 엔트리는 그 연도에 벌어진 특기사항을 우선하며, 인물/장소/세력의 content에 "## 연도별 특기사항"으로 연도와 사건을 기록하세요.
@@ -331,12 +332,13 @@ WORLD_DETAIL_PROMPT = """당신은 세계관 DB 작성자입니다. 받은 설�
 {metadata_rules}
 Markdown으로 읽기 쉬운 TRPG 시트를 작성하세요.
 - 인물: D&D 스타일(정체성, 종족/직업/레벨, STR·DEX·CON·INT·WIS·CHA, HP/AC, 배경·성향, 기술·장비, 목표·관계·약점, 연도별 특기사항)
+- 인물 본문은 정규식 기반 시트 뷰를 위해 **정체성**, **종족/직업/레벨**, **능력치**, **HP/AC**, **배경·성향**, **기술·장비**, **목표·관계·약점**, **연도별 특기사항**을 각각 독립된 굵은 구획명으로 사용하세요.
 - 장소: 유형/지형/규모, 분위기, 주요 구역, 주민/세력, 자원·위험, 비밀·모험 훅, 접근 경로, 연도별 변화
 - 세력: 목표·조직·자원·지도자·동맹/적대·현재 계획·약점·연도별 사건
 - 사건/연도: 발생 연도, 원인, 전개, 결과, 세계관 영향, 관련 인물·장소·세력
 연도와 관련된 항목은 "## 연도별 특기사항"에 해당 시점 사건을 기록하세요.
 설계 목록 밖의 새 항목을 추가하지 말고, Markdown 제목은 쓰지 마세요.
-JSON만 출력: {"entries":[{"title":"", "category":"", "content":"", "references":[], "attributes":{"축이름":1}, "reused_skill_ids":[], "new_skill_proposals":[{"name":"","description":"","type":"스킬","tags":[]}]}]}
+JSON만 출력: {"entries":[{"title":"", "category":"", "content":"", "references":[], "attributes":{"축이름":{"value":1,"description":"이 인물에게 이 수치가 갖는 구체적 의미"}}, "reused_skill_ids":[], "new_skill_proposals":[{"name":"","description":"","type":"스킬","tags":[]}]}]}
 """
 
 def _world_metadata_rules(world_id):
@@ -347,7 +349,7 @@ def _world_metadata_rules(world_id):
         skills=[s.to_dict() for s in WorldSkillRegistry.query.filter_by(world_id=world_id).limit(80).all()]
         templates=[t.to_dict() for t in WorldEntryTemplate.query.filter_by(world_id=world_id,is_active=True).all()]
         guide=WorldGuideline.query.get(world_id)
-        return "=== 세계관 고정 메타데이터 ===\n능력치 축(숫자 티어만 반환): "+json.dumps(attrs,ensure_ascii=False)+"\n카테고리 템플릿(필수 필드 준수): "+json.dumps(templates,ensure_ascii=False)+"\n기존 스킬/특성(맞으면 ID 재사용): "+json.dumps(skills,ensure_ascii=False)+"\n스킬 가이드: "+(guide.skill_generation_guide if guide else "")+"\n특성 가이드: "+(guide.trait_generation_guide if guide else "")
+        return "=== 세계관 고정 메타데이터 ===\n능력치 축(범위 안의 숫자와 인물별 구체적 설명 반환): "+json.dumps(attrs,ensure_ascii=False)+"\n카테고리 템플릿(필수 필드 준수): "+json.dumps(templates,ensure_ascii=False)+"\n기존 스킬/특성(맞으면 ID 재사용): "+json.dumps(skills,ensure_ascii=False)+"\n스킬 가이드: "+(guide.skill_generation_guide if guide else "")+"\n특성 가이드: "+(guide.trait_generation_guide if guide else "")
     except Exception:
         return ""
 
@@ -427,9 +429,14 @@ def propose_entry_skills(entry: dict, candidates: list, guideline: dict) -> dict
     return _parse_json_safe(raw,"skill_proposal")
 
 
-def propose_metadata_migration(entries: list, metadata_rules: str) -> dict:
-    client,model=get_llm_client();prompt="기존 엔트리를 아래 메타데이터 스키마로 역변환하세요. 원문을 수정하지 말고 제안만 반환. 능력치는 숫자 티어만, 기존 스킬은 ID 재사용. JSON만 출력: {\"entries\":[{\"entry_id\":1,\"attributes\":{\"축\":2},\"reused_skill_ids\":[]}]}\n"+metadata_rules+"\n엔트리:"+json.dumps(entries,ensure_ascii=False)
-    raw=client.chat.completions.create(model=model,messages=[{"role":"user","content":prompt}],temperature=.2,max_tokens=4000).choices[0].message.content or ""
+def propose_metadata_migration(entries: list, metadata_rules: str, instruction: str = "") -> dict:
+    client,model=get_llm_client();prompt="""기존 인물 엔트리를 분석해 D&D/TRPG용 메타데이터 보강안을 만드세요. 원문과 DB는 수정하지 말고 제안만 반환하세요.
+기존 능력치 축이 없거나 설명이 부족하면 세계관에 맞는 축을 제안하고, 각 축의 용도·수치 범위·모든 티어의 의미를 상세히 작성하세요.
+각 인물에는 축 범위 안의 정수 수치와, 본문의 어떤 설정 때문에 그 수치인지 구체적인 설명을 작성하세요. 기존 스킬은 ID를 재사용하세요.
+JSON만 출력:
+{"attribute_schemas":[{"axis_name":"힘","min_tier":1,"max_tier":20,"description":"축의 판정 용도와 의미","tier_labels":{"1":"매우 약함","20":"초인적"}}],"entries":[{"entry_id":1,"attributes":{"힘":{"value":14,"description":"훈련된 용병이라 평균보다 강하다."}},"reused_skill_ids":[]}]}
+"""+metadata_rules+"\n추가 요청:"+(instruction or "세계관 설정과 인물 본문을 근거로 빠짐없이 작성")+"\n인물 엔트리:"+json.dumps(entries,ensure_ascii=False)
+    raw=client.chat.completions.create(model=model,messages=[{"role":"user","content":prompt}],temperature=.2,max_tokens=8000).choices[0].message.content or ""
     return _parse_json_safe(raw,"metadata_migration")
 
 

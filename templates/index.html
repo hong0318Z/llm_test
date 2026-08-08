@@ -164,8 +164,15 @@
             </div>
 
             <div class="mb-3">
-              <label class="form-label small text-muted">내용</label>
+              <div class="d-flex align-items-center justify-content-between mb-2">
+                <label class="form-label small text-muted mb-0">내용</label>
+                <div id="characterViewSwitch" class="btn-group btn-group-sm" style="display:none">
+                  <button id="normalViewBtn" class="btn btn-outline-secondary active" onclick="setEntryView('normal')"><i class="bi bi-file-text me-1"></i>일반 보기</button>
+                  <button id="dndViewBtn" class="btn btn-outline-secondary" onclick="setEntryView('dnd')"><i class="bi bi-dice-20 me-1"></i>D&amp;D 시트</button>
+                </div>
+              </div>
               <div id="detailContentText" style="white-space: pre-wrap; font-size: 0.9rem; line-height: 1.7;"></div>
+              <div id="detailDndSheet" class="dnd-sheet" style="display:none"></div>
             </div>
             <div class="mb-3">
               <label class="form-label small text-muted">
@@ -363,6 +370,20 @@
   border: 1px solid rgba(139,127,247,0.25);
   border-radius: 8px;
 }
+.dnd-sheet{border:1px solid rgba(193,154,87,.45);border-radius:12px;padding:16px;background:linear-gradient(145deg,rgba(86,55,32,.18),rgba(30,24,20,.35));color:var(--text-primary)}
+.dnd-sheet-head{border-bottom:2px solid #b98a4c;padding-bottom:10px;margin-bottom:12px}
+.dnd-sheet-subtitle{color:#d4b078;font-size:.82rem}
+.dnd-core-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:8px;margin:12px 0}
+.dnd-core-item,.dnd-ability{background:rgba(15,15,18,.42);border:1px solid rgba(193,154,87,.3);border-radius:8px;padding:8px;text-align:center}
+.dnd-core-item small,.dnd-ability small{display:block;color:#c6ad88;font-size:.68rem;text-transform:uppercase}
+.dnd-core-item strong,.dnd-ability strong{font-size:1.08rem}
+.dnd-abilities{display:grid;grid-template-columns:repeat(6,minmax(62px,1fr));gap:7px;margin-bottom:14px}
+.dnd-section-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px}
+.dnd-section{border-left:3px solid #b98a4c;background:rgba(15,15,18,.28);padding:10px 12px;border-radius:4px 8px 8px 4px;min-width:0}
+.dnd-section h6{color:#dfbd82;margin:0 0 7px;font-size:.85rem}
+.dnd-section-body{white-space:pre-wrap;font-size:.82rem;line-height:1.55;overflow-wrap:anywhere}
+.dnd-meta-description{color:var(--text-muted);font-size:.72rem;line-height:1.35;margin-top:4px}
+@media(max-width:767px){.dnd-abilities{grid-template-columns:repeat(3,1fr)}}
 </style>
 <script>
 let allEntries = [];
@@ -371,6 +392,7 @@ let currentCategory = null;
 let createModal;
 let snapshotModal;
 let simMaxChars = 1000; // 유저 입력 글자 제한 (마스터 설정)
+let currentStatBlock = {attributes:[], skills:[]};
 
 async function loadSimMaxChars() {
   try {
@@ -703,6 +725,7 @@ async function selectEntry(id) {
 
 async function showDetail() {
   const e = currentEntry;
+  currentStatBlock = {attributes:[], skills:[]};
   document.getElementById('detailEmpty').style.display = 'none';
   document.getElementById('detailContent').style.display = 'block';
   document.getElementById('detailTitle').textContent = e.title;
@@ -712,6 +735,8 @@ async function showDetail() {
   const contentEl = document.getElementById('detailContentText');
   contentEl.textContent = e.content;
   try { const r = await fetch('/api/markdown/render', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:e.content})}); const d=await r.json(); if(r.ok) contentEl.innerHTML=d.html; } catch (_) {}
+  document.getElementById('characterViewSwitch').style.display = e.category === '인물' ? 'inline-flex' : 'none';
+  setEntryView('normal');
   document.getElementById('detailTick').textContent = e.tick_created === 0 ? '초기 설정' : `틱 ${e.tick_created}`;
   if (e.primary_year) document.getElementById('detailTick').textContent += ` · 연도: ${e.primary_year}`;
   // 버전 노트 배지
@@ -807,7 +832,52 @@ async function approveAiRevision() {
   const res=await fetch(`/api/entries/${currentEntry.id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:p.title,category:p.category,content:p.content,references:p.references||currentEntry.references||[]})}); const d=await res.json(); if(!res.ok)return alert(d.error||'저장 실패'); currentEntry=d; aiRevisionModal.hide(); showDetail(); loadEntries();
 }
 
-async function loadStatBlock(id){try{const d=await(await fetch(`/api/entries/${id}/stat-block`)).json();const section=document.getElementById('detailStatSection');if(!d.attributes?.length&&!d.skills?.length){section.style.display='none';return}section.style.display='block';detailStatBlock.innerHTML=`${d.attributes?.length?`<div class="mb-2">${d.attributes.map(a=>`<span class="badge bg-secondary me-1" title="${escHtml(a.label)}">${escHtml(a.axis_name)} ${a.value}${a.label?' · '+escHtml(a.label):''}</span>`).join('')}</div>`:''}${d.skills?.map(x=>`<span class="badge me-1" style="background:rgba(139,127,247,.2);color:var(--accent)" title="${escHtml(x.skill.description)}">${escHtml(x.skill.name)}${x.rank?' '+x.rank:''}</span>`).join('')||''}`}catch(e){}}
+async function loadStatBlock(id){try{const d=await(await fetch(`/api/entries/${id}/stat-block`)).json();if(!currentEntry||currentEntry.id!==id)return;currentStatBlock=d;const section=document.getElementById('detailStatSection');if(!d.attributes?.length&&!d.skills?.length){section.style.display='none';renderDndSheet();return}section.style.display='block';detailStatBlock.innerHTML=`${d.attributes?.length?`<div class="mb-2">${d.attributes.map(a=>`<span class="badge bg-secondary me-1" title="${escHtml(a.description||a.label||a.axis_description)}">${escHtml(a.axis_name)} ${a.value}${a.label?' · '+escHtml(a.label):''}</span>`).join('')}</div>`:''}${d.skills?.map(x=>`<span class="badge me-1" style="background:rgba(139,127,247,.2);color:var(--accent)" title="${escHtml(x.skill.description)}">${escHtml(x.skill.name)}${x.rank?' '+x.rank:''}</span>`).join('')||''}`;renderDndSheet()}catch(e){}}
+
+function setEntryView(mode){
+  const isDnd=mode==='dnd'&&currentEntry?.category==='인물';
+  document.getElementById('detailContentText').style.display=isDnd?'none':'block';
+  document.getElementById('detailDndSheet').style.display=isDnd?'block':'none';
+  document.getElementById('normalViewBtn')?.classList.toggle('active',!isDnd);
+  document.getElementById('dndViewBtn')?.classList.toggle('active',isDnd);
+  if(isDnd)renderDndSheet();
+}
+
+function firstDndValue(text,names){
+  const key=names.map(x=>x.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).join('|');
+  const match=text.match(new RegExp(`(?:^|\\n)\\s*\\|?\\s*(?:[-*]\\s*)?(?:\\*\\*)?(?:${key})(?:\\*\\*)?\\s*[:：|]\\s*([^\\n|]+)`,'i'));
+  return match?match[1].replace(/[*_`]/g,'').trim():'';
+}
+
+function parseDndSections(text){
+  const sections=[];let current={title:'개요',lines:[]};
+  for(const raw of String(text||'').replace(/\r/g,'').split('\n')){
+    const heading=raw.match(/^\s*#{1,6}\s+(.+?)\s*#*$/)||raw.match(/^\s*\*\*([^*:：]+)\*\*\s*$/);
+    if(heading){if(current.lines.some(x=>x.trim()))sections.push(current);current={title:heading[1].replace(/[*_`]/g,'').trim(),lines:[]}}
+    else current.lines.push(raw);
+  }
+  if(current.lines.some(x=>x.trim()))sections.push(current);
+  return sections;
+}
+
+function renderDndSheet(){
+  const box=document.getElementById('detailDndSheet');if(!box||!currentEntry||currentEntry.category!=='인물')return;
+  const text=currentEntry.content||'', stats={};
+  const aliases={STR:['STR','힘'],DEX:['DEX','민첩'],CON:['CON','건강','체질'],INT:['INT','지능'],WIS:['WIS','지혜'],CHA:['CHA','매력']};
+  for(const [abbr,names] of Object.entries(aliases)){
+    const key=names.join('|');const m=text.match(new RegExp(`(?:${key})\\s*(?:[:：|]|은|는)?\\s*(-?\\d+)(?:\\s*\\(([+-]?\\d+)\\))?`,'i'));
+    if(m)stats[abbr]={value:m[1],mod:m[2]};
+  }
+  const combined=firstDndValue(text,['종족/직업/레벨','종족·직업·레벨']).split(/\s*[\/·|]\s*/).filter(Boolean);
+  const identity=[['종족',firstDndValue(text,['종족','혈통'])||combined[0]],['직업',firstDndValue(text,['직업','클래스'])||combined[1]],['레벨',firstDndValue(text,['레벨','Level','LV'])||combined[2]],['HP',firstDndValue(text,['HP','체력'])],['AC',firstDndValue(text,['AC','방어도'])],['성향',firstDndValue(text,['성향','Alignment'])]].filter(x=>x[1]);
+  const sections=parseDndSections(text).filter(s=>!/^능력치|기본 능력치$/i.test(s.title));
+  const metadata=(currentStatBlock.attributes||[]).map(a=>`<div class="dnd-section"><h6>${escHtml(a.axis_name)} · ${a.value}${a.label?' / '+escHtml(a.label):''}</h6><div class="dnd-meta-description">${escHtml(a.description||a.axis_description||'상세 설명 없음')}</div></div>`).join('');
+  const skills=(currentStatBlock.skills||[]).map(x=>`<div><b>${escHtml(x.skill.name)}${x.rank?' '+x.rank:''}</b>${x.skill.description?`<div class="dnd-meta-description">${escHtml(x.skill.description)}</div>`:''}</div>`).join('');
+  box.innerHTML=`<div class="dnd-sheet-head"><div class="h4 mb-1">${escHtml(currentEntry.title)}</div><div class="dnd-sheet-subtitle">D&amp;D / TRPG CHARACTER SHEET</div></div>
+    ${identity.length?`<div class="dnd-core-grid">${identity.map(x=>`<div class="dnd-core-item"><small>${escHtml(x[0])}</small><strong>${escHtml(x[1])}</strong></div>`).join('')}</div>`:''}
+    ${Object.keys(stats).length?`<div class="dnd-abilities">${Object.entries(stats).map(([k,v])=>`<div class="dnd-ability"><small>${k}</small><strong>${escHtml(v.value)}</strong>${v.mod?`<div class="dnd-meta-description">${/^[+-]/.test(v.mod)?'':'+'}${escHtml(v.mod)}</div>`:''}</div>`).join('')}</div>`:''}
+    <div class="dnd-section-grid">${sections.map(s=>`<div class="dnd-section"><h6>${escHtml(s.title)}</h6><div class="dnd-section-body">${escHtml(s.lines.join('\n').replace(/^\s*[-*]\s*/gm,'• ').trim())}</div></div>`).join('')}${metadata}${skills?`<div class="dnd-section"><h6>스킬 / 특성</h6><div class="dnd-section-body">${skills}</div></div>`:''}</div>`;
+}
 
 function startEdit() {
   const e = currentEntry;

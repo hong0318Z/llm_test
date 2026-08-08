@@ -67,6 +67,8 @@ with app.app_context():
         ("app_settings",        "embedding_base_url",      "TEXT DEFAULT ''"),
         ("app_settings",        "embedding_api_key",       "TEXT DEFAULT ''"),
         ("app_settings",        "entries_per_tick",        "INTEGER DEFAULT 1"),
+        ("world_attribute_schema", "description",          "TEXT DEFAULT ''"),
+        ("entry_attribute_value",  "description",          "TEXT DEFAULT ''"),
     ]
     with db.engine.connect() as conn:
         for table, col, col_def in _migrate_columns:
@@ -954,7 +956,7 @@ def _export_world_extensions(world_id):
     chapter_ids=[c.id for c in chapters]
     return {
         "attributes":[a.to_dict() for a in attrs],
-        "attribute_values":[{"entry_id":v.entry_id,"axis_id":v.axis_id,"value":v.value} for v in EntryAttributeValue.query.filter(EntryAttributeValue.entry_id.in_(entry_ids or [-1])).all()],
+        "attribute_values":[{"entry_id":v.entry_id,"axis_id":v.axis_id,"value":v.value,"description":v.description or ""} for v in EntryAttributeValue.query.filter(EntryAttributeValue.entry_id.in_(entry_ids or [-1])).all()],
         "skills":[s.to_dict() for s in skills],
         "skill_links":[{"entry_id":x.entry_id,"skill_id":x.skill_id,"rank":x.rank} for x in EntrySkillLink.query.filter(EntrySkillLink.entry_id.in_(entry_ids or [-1])).all()],
         "guideline":(WorldGuideline.query.get(world_id).to_dict() if WorldGuideline.query.get(world_id) else None),
@@ -991,14 +993,14 @@ def _delete_entry_dependents(entry_ids):
 def _restore_world_extensions(world_id, ext, entry_map):
     axis_map={};skill_map={};chapter_map={}
     for a in ext.get("attributes",[]):
-        row=WorldAttributeSchema(world_id=world_id,axis_name=a.get("axis_name","능력치"),axis_order=a.get("axis_order",0),min_tier=a.get("min_tier",1),max_tier=a.get("max_tier",5),tier_labels_json=_json.dumps(a.get("tier_labels",{}),ensure_ascii=False),is_active=a.get("is_active",True));db.session.add(row);db.session.flush();axis_map[a.get("id")]=row.id
+        row=WorldAttributeSchema(world_id=world_id,axis_name=a.get("axis_name","능력치"),axis_order=a.get("axis_order",0),min_tier=a.get("min_tier",1),max_tier=a.get("max_tier",5),description=a.get("description",""),tier_labels_json=_json.dumps(a.get("tier_labels",{}),ensure_ascii=False),is_active=a.get("is_active",True));db.session.add(row);db.session.flush();axis_map[a.get("id")]=row.id
     for s in ext.get("skills",[]):
         row=WorldSkillRegistry(world_id=world_id,type=s.get("type","스킬"),name=s.get("name",""),description=s.get("description",""),tags_json=_json.dumps(s.get("tags",[]),ensure_ascii=False),rarity=s.get("rarity","일반"),created_by=s.get("created_by","user"),tick_created=s.get("tick_created",0));db.session.add(row);db.session.flush();skill_map[s.get("id")]=row.id
     g=ext.get("guideline")
     if g:db.session.add(WorldGuideline(world_id=world_id,skill_generation_guide=g.get("skill_generation_guide",""),trait_generation_guide=g.get("trait_generation_guide","")))
     for t in ext.get("templates",[]):db.session.add(WorldEntryTemplate(world_id=world_id,category=t.get("category","관념"),fields_json=_json.dumps(t.get("fields",[]),ensure_ascii=False),is_active=t.get("is_active",True)))
     for v in ext.get("attribute_values",[]):
-        if v.get("entry_id") in entry_map and v.get("axis_id") in axis_map:db.session.add(EntryAttributeValue(entry_id=entry_map[v["entry_id"]],axis_id=axis_map[v["axis_id"]],value=v.get("value")))
+        if v.get("entry_id") in entry_map and v.get("axis_id") in axis_map:db.session.add(EntryAttributeValue(entry_id=entry_map[v["entry_id"]],axis_id=axis_map[v["axis_id"]],value=v.get("value"),description=v.get("description","")))
     for x in ext.get("skill_links",[]):
         if x.get("entry_id") in entry_map and x.get("skill_id") in skill_map:db.session.add(EntrySkillLink(entry_id=entry_map[x["entry_id"]],skill_id=skill_map[x["skill_id"]],rank=x.get("rank")))
     for c in ext.get("chapters",[]):
@@ -1311,14 +1313,14 @@ def get_metadata():
     guide=WorldGuideline.query.get(wid)
     characters=WorldEntry.query.filter_by(world_id=wid,category="인물",is_active=True).all()
     values=EntryAttributeValue.query.filter(EntryAttributeValue.entry_id.in_([e.id for e in characters] or [-1])).all()
-    return jsonify({"attributes":[a.to_dict() for a in attrs],"skills":[s.to_dict() for s in skills],"templates":[t.to_dict() for t in templates],"guideline":guide.to_dict(),"characters":[e.to_dict() for e in characters],"attribute_values":[{"entry_id":v.entry_id,"axis_id":v.axis_id,"value":v.value} for v in values]})
+    return jsonify({"attributes":[a.to_dict() for a in attrs],"skills":[s.to_dict() for s in skills],"templates":[t.to_dict() for t in templates],"guideline":guide.to_dict(),"characters":[e.to_dict() for e in characters],"attribute_values":[{"entry_id":v.entry_id,"axis_id":v.axis_id,"value":v.value,"description":v.description or ""} for v in values]})
 
 @app.route("/api/metadata/attributes", methods=["PUT"])
 def save_attributes():
     wid=get_world_id(); data=request.json or {}; seen=[]
     for order,item in enumerate(data.get("attributes") or []):
         row=WorldAttributeSchema.query.filter_by(id=item.get("id"),world_id=wid).first() if item.get("id") else WorldAttributeSchema(world_id=wid)
-        row.axis_name=str(item.get("axis_name") or "새 능력치")[:100]; row.axis_order=order; row.min_tier=max(0,int(item.get("min_tier",1))); row.max_tier=max(row.min_tier,int(item.get("max_tier",5))); row.tier_labels_json=_json.dumps(item.get("tier_labels") or {},ensure_ascii=False); row.is_active=bool(item.get("is_active",True)); db.session.add(row); db.session.flush(); seen.append(row.id)
+        row.axis_name=str(item.get("axis_name") or "새 능력치")[:100]; row.axis_order=order; row.min_tier=max(0,int(item.get("min_tier",1))); row.max_tier=max(row.min_tier,int(item.get("max_tier",5))); row.description=str(item.get("description") or "")[:2000]; row.tier_labels_json=_json.dumps(item.get("tier_labels") or {},ensure_ascii=False); row.is_active=bool(item.get("is_active",True)); db.session.add(row); db.session.flush(); seen.append(row.id)
     removed=[x.id for x in WorldAttributeSchema.query.filter_by(world_id=wid).filter(~WorldAttributeSchema.id.in_(seen or [-1])).all()]
     if removed:EntryAttributeValue.query.filter(EntryAttributeValue.axis_id.in_(removed)).delete(synchronize_session=False)
     WorldAttributeSchema.query.filter_by(world_id=wid).filter(~WorldAttributeSchema.id.in_(seen or [-1])).delete(synchronize_session=False); db.session.commit()
@@ -1331,7 +1333,7 @@ def save_attribute_values():
         entry=WorldEntry.query.get(item.get("entry_id")); axis=WorldAttributeSchema.query.get(item.get("axis_id"))
         if not entry or not axis or entry.world_id!=wid or axis.world_id!=wid: continue
         row=EntryAttributeValue.query.get((entry.id,axis.id)) or EntryAttributeValue(entry_id=entry.id,axis_id=axis.id)
-        row.value=max(axis.min_tier,min(axis.max_tier,int(item.get("value",axis.min_tier)))); db.session.add(row)
+        row.value=max(axis.min_tier,min(axis.max_tier,int(item.get("value",axis.min_tier)))); row.description=str(item.get("description") or "")[:4000]; db.session.add(row)
     db.session.commit(); return jsonify({"ok":True})
 
 @app.route("/api/metadata/skills", methods=["POST"])
@@ -1367,25 +1369,33 @@ def save_entry_template(template_id):
 
 @app.route("/api/metadata/migration-plan", methods=["POST"])
 def metadata_migration_plan():
-    wid=get_world_id();ids=(request.json or {}).get("entry_ids") or []
-    q=WorldEntry.query.filter_by(world_id=wid,is_active=True)
+    wid=get_world_id();data=request.json or {};ids=data.get("entry_ids") or []
+    q=WorldEntry.query.filter_by(world_id=wid,is_active=True,category="인물")
     if ids:q=q.filter(WorldEntry.id.in_(ids))
     entries=[e.to_dict() for e in q.limit(30).all()]
     try:
         import llm_client
-        return jsonify(llm_client.propose_metadata_migration(entries,llm_client._world_metadata_rules(wid)))
+        return jsonify(llm_client.propose_metadata_migration(entries,llm_client._world_metadata_rules(wid),str(data.get("instruction") or "")[:2000]))
     except Exception as e:return jsonify({"error":str(e)}),502
 
 @app.route("/api/metadata/migration-apply", methods=["POST"])
 def metadata_migration_apply():
-    wid=get_world_id();count=0
-    for item in (request.json or {}).get("entries",[]):
+    wid=get_world_id();data=request.json or {};count=0
+    for order,item in enumerate(data.get("attribute_schemas") or []):
+        name=str(item.get("axis_name") or "").strip()[:100]
+        if not name:continue
+        row=WorldAttributeSchema.query.filter_by(world_id=wid,axis_name=name).first() or WorldAttributeSchema(world_id=wid,axis_name=name)
+        row.axis_order=order;row.min_tier=max(0,int(item.get("min_tier",1)));row.max_tier=max(row.min_tier,int(item.get("max_tier",5)));row.description=str(item.get("description") or "")[:2000];row.tier_labels_json=_json.dumps(item.get("tier_labels") or {},ensure_ascii=False);row.is_active=True;db.session.add(row)
+    db.session.flush()
+    for item in data.get("entries",[]):
         entry=WorldEntry.query.get(item.get("entry_id"))
         if not entry or entry.world_id!=wid:continue
-        for name,value in (item.get("attributes") or {}).items():
+        for name,value_data in (item.get("attributes") or {}).items():
             axis=WorldAttributeSchema.query.filter_by(world_id=wid,axis_name=name,is_active=True).first()
             if axis:
-                row=EntryAttributeValue.query.get((entry.id,axis.id)) or EntryAttributeValue(entry_id=entry.id,axis_id=axis.id);row.value=max(axis.min_tier,min(axis.max_tier,int(value)));db.session.add(row);count+=1
+                value=value_data.get("value",axis.min_tier) if isinstance(value_data,dict) else value_data
+                description=value_data.get("description","") if isinstance(value_data,dict) else ""
+                row=EntryAttributeValue.query.get((entry.id,axis.id)) or EntryAttributeValue(entry_id=entry.id,axis_id=axis.id);row.value=max(axis.min_tier,min(axis.max_tier,int(value)));row.description=str(description or "")[:4000];db.session.add(row);count+=1
         for sid in item.get("reused_skill_ids") or []:
             if WorldSkillRegistry.query.filter_by(id=sid,world_id=wid).first() and not EntrySkillLink.query.get((entry.id,sid)):db.session.add(EntrySkillLink(entry_id=entry.id,skill_id=sid))
     db.session.commit();return jsonify({"ok":True,"applied":count})
@@ -1412,7 +1422,7 @@ def entry_stat_block(entry_id):
         if axis:
             try:labels=_json.loads(axis.tier_labels_json or "{}")
             except Exception:labels={}
-            attributes.append({"axis_id":axis.id,"axis_name":axis.axis_name,"value":v.value,"label":labels.get(str(v.value),"")})
+            attributes.append({"axis_id":axis.id,"axis_name":axis.axis_name,"value":v.value,"label":labels.get(str(v.value),""),"description":v.description or "","axis_description":axis.description or "","min_tier":axis.min_tier,"max_tier":axis.max_tier})
     links=EntrySkillLink.query.filter_by(entry_id=entry.id).all();skills=[]
     for link in links:
         skill=WorldSkillRegistry.query.get(link.skill_id)
@@ -2404,9 +2414,12 @@ def world_design_apply():
         entry = WorldEntry(world_id=wid, title=title[:200], category=category, content=content, created_by="llm", tick_created=0, is_active=True)
         entry.references = refs
         db.session.add(entry); db.session.flush(); existing[entry.title] = entry.id; created.append(entry)
-        for axis_name,value in (item.get("attributes") or {}).items():
+        for axis_name,value_data in (item.get("attributes") or {}).items():
             axis=WorldAttributeSchema.query.filter_by(world_id=wid,axis_name=axis_name,is_active=True).first()
-            if axis: db.session.add(EntryAttributeValue(entry_id=entry.id,axis_id=axis.id,value=max(axis.min_tier,min(axis.max_tier,int(value)))))
+            if axis:
+                value=value_data.get("value",axis.min_tier) if isinstance(value_data,dict) else value_data
+                description=value_data.get("description","") if isinstance(value_data,dict) else ""
+                db.session.add(EntryAttributeValue(entry_id=entry.id,axis_id=axis.id,value=max(axis.min_tier,min(axis.max_tier,int(value))),description=str(description or "")[:4000]))
         for skill_id in item.get("reused_skill_ids") or []:
             skill=WorldSkillRegistry.query.filter_by(id=skill_id,world_id=wid).first()
             if skill: db.session.add(EntrySkillLink(entry_id=entry.id,skill_id=skill.id))

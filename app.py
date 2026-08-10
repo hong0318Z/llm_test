@@ -8,7 +8,7 @@ import json as _json
 from collections import Counter
 from flask import Flask, jsonify, request, render_template, abort, Response, send_from_directory, session, redirect, url_for
 from werkzeug.utils import secure_filename
-from models import db, User, UserLlmSettings, World, WorldEntry, EntryRelationship, WorldAttributeSchema, EntryAttributeValue, WorldSkillRegistry, EntrySkillLink, WorldGuideline, WorldEntryTemplate, NovelChapter, NovelEntityMention, WorldWritingStyle, EntryRevealState, SimulationConfig, SimulationRun, SimulationLog, WorldSnapshot, AppSettings, LlmPromptConfig, Timeline, TimelineEvent, StoryBeat, CATEGORIES
+from models import db, User, UserLlmSettings, World, WorldEntry, EntryRelationship, WorldAttributeSchema, EntryAttributeValue, WorldSkillRegistry, EntrySkillLink, WorldGuideline, WorldEntryTemplate, NovelPart, NovelChapter, NovelEntityMention, WorldWritingStyle, EntryRevealState, SimulationConfig, SimulationRun, SimulationLog, WorldSnapshot, AppSettings, LlmPromptConfig, Timeline, TimelineEvent, StoryBeat, CATEGORIES
 from datetime import datetime
 
 app = Flask(__name__)
@@ -71,6 +71,9 @@ with app.app_context():
         ("app_settings",        "llm_max_output_tokens",   "INTEGER DEFAULT 262144"),
         ("world_attribute_schema", "description",          "TEXT DEFAULT ''"),
         ("entry_attribute_value",  "description",          "TEXT DEFAULT ''"),
+        ("novel_chapter",          "part_id",              "INTEGER"),
+        ("novel_chapter",          "is_public",            "BOOLEAN DEFAULT 0"),
+        ("novel_chapter",          "public_token",         "TEXT"),
     ]
     with db.engine.connect() as conn:
         for table, col, col_def in _migrate_columns:
@@ -203,7 +206,7 @@ def current_user():
 @app.before_request
 def require_login():
     allowed = {"login", "register", "logout", "static"}
-    if request.endpoint in allowed or request.path.startswith("/storage/"):
+    if request.endpoint in allowed or request.path.startswith("/storage/") or request.path.startswith("/read/"):
         return None
     user = current_user()
     if user and user.is_approved:
@@ -1136,6 +1139,7 @@ def _export_world_extensions(world_id):
         "skill_links":[{"entry_id":x.entry_id,"skill_id":x.skill_id,"rank":x.rank} for x in EntrySkillLink.query.filter(EntrySkillLink.entry_id.in_(entry_ids or [-1])).all()],
         "guideline":(WorldGuideline.query.get(world_id).to_dict() if WorldGuideline.query.get(world_id) else None),
         "templates":[t.to_dict() for t in WorldEntryTemplate.query.filter_by(world_id=world_id).all()],
+        "novel_parts":[p.to_dict() for p in NovelPart.query.filter_by(world_id=world_id).all()],
         "chapters":[c.to_dict() for c in chapters],
         "mentions":[m.to_dict() for m in NovelEntityMention.query.filter(NovelEntityMention.chapter_id.in_(chapter_ids or [-1])).all()],
         "styles":[s.to_dict() for s in WorldWritingStyle.query.filter_by(world_id=world_id).all()],
@@ -1150,7 +1154,7 @@ def _delete_world_extensions(world_id, entry_ids=None):
     if entry_ids:
         EntryRevealState.query.filter(EntryRevealState.entry_id.in_(entry_ids)).delete(synchronize_session=False);EntryAttributeValue.query.filter(EntryAttributeValue.entry_id.in_(entry_ids)).delete(synchronize_session=False);EntrySkillLink.query.filter(EntrySkillLink.entry_id.in_(entry_ids)).delete(synchronize_session=False)
     if chapter_ids:NovelEntityMention.query.filter(NovelEntityMention.chapter_id.in_(chapter_ids)).delete(synchronize_session=False)
-    EntryRelationship.query.filter_by(world_id=world_id).delete();WorldWritingStyle.query.filter_by(world_id=world_id).delete();NovelChapter.query.filter_by(world_id=world_id).delete();WorldAttributeSchema.query.filter_by(world_id=world_id).delete();WorldSkillRegistry.query.filter_by(world_id=world_id).delete();WorldGuideline.query.filter_by(world_id=world_id).delete();WorldEntryTemplate.query.filter_by(world_id=world_id).delete()
+    EntryRelationship.query.filter_by(world_id=world_id).delete();WorldWritingStyle.query.filter_by(world_id=world_id).delete();NovelChapter.query.filter_by(world_id=world_id).delete();NovelPart.query.filter_by(world_id=world_id).delete();WorldAttributeSchema.query.filter_by(world_id=world_id).delete();WorldSkillRegistry.query.filter_by(world_id=world_id).delete();WorldGuideline.query.filter_by(world_id=world_id).delete();WorldEntryTemplate.query.filter_by(world_id=world_id).delete()
 
 def _delete_entry_dependents(entry_ids):
     """엔트리를 물리 삭제할 때 신규 메타데이터/소설 참조를 함께 정리한다."""
@@ -1167,7 +1171,7 @@ def _delete_entry_dependents(entry_ids):
     )).delete(synchronize_session=False)
 
 def _restore_world_extensions(world_id, ext, entry_map):
-    axis_map={};skill_map={};chapter_map={}
+    axis_map={};skill_map={};part_map={};chapter_map={}
     for a in ext.get("attributes",[]):
         row=WorldAttributeSchema(world_id=world_id,axis_name=a.get("axis_name","능력치"),axis_order=a.get("axis_order",0),min_tier=a.get("min_tier",1),max_tier=a.get("max_tier",5),description=a.get("description",""),tier_labels_json=_json.dumps(a.get("tier_labels",{}),ensure_ascii=False),is_active=a.get("is_active",True));db.session.add(row);db.session.flush();axis_map[a.get("id")]=row.id
     for s in ext.get("skills",[]):
@@ -1179,11 +1183,20 @@ def _restore_world_extensions(world_id, ext, entry_map):
         if v.get("entry_id") in entry_map and v.get("axis_id") in axis_map:db.session.add(EntryAttributeValue(entry_id=entry_map[v["entry_id"]],axis_id=axis_map[v["axis_id"]],value=v.get("value"),description=v.get("description","")))
     for x in ext.get("skill_links",[]):
         if x.get("entry_id") in entry_map and x.get("skill_id") in skill_map:db.session.add(EntrySkillLink(entry_id=entry_map[x["entry_id"]],skill_id=skill_map[x["skill_id"]],rank=x.get("rank")))
+    for p in ext.get("novel_parts",[]):
+        token=p.get("public_token")
+        if token and NovelPart.query.filter_by(public_token=token).first():token=None
+        row=NovelPart(world_id=world_id,title=p.get("title","기본 이야기"),description=p.get("description",""),order_no=p.get("order_no",0),is_public=bool(p.get("is_public",False)),public_token=token);db.session.add(row);db.session.flush();part_map[p.get("id")]=row.id
+    default_part=None
+    if not part_map and ext.get("chapters"):
+        default_part=NovelPart(world_id=world_id,title="기본 이야기",order_no=1);db.session.add(default_part);db.session.flush()
     for c in ext.get("chapters",[]):
-        row=NovelChapter(world_id=world_id,title=c.get("title","새 챕터"),order_no=c.get("order_no",0),content=c.get("content",""),status=c.get("status","초안"));db.session.add(row);db.session.flush();chapter_map[c.get("id")]=row.id
+        token=c.get("public_token")
+        if token and NovelChapter.query.filter_by(public_token=token).first():token=None
+        row=NovelChapter(world_id=world_id,part_id=part_map.get(c.get("part_id")) or (default_part.id if default_part else None),title=c.get("title","새 챕터"),order_no=c.get("order_no",0),content=c.get("content",""),status=c.get("status","초안"),is_public=bool(c.get("is_public",False)),public_token=token);db.session.add(row);db.session.flush();chapter_map[c.get("id")]=row.id
     for m in ext.get("mentions",[]):
         if m.get("chapter_id") in chapter_map and m.get("entry_id") in entry_map:db.session.add(NovelEntityMention(chapter_id=chapter_map[m["chapter_id"]],entry_id=entry_map[m["entry_id"]],span_start=m.get("span_start",0),span_end=m.get("span_end",0),matched_text=m.get("matched_text",""),source=m.get("source","keyword")))
-    for s in ext.get("styles",[]):db.session.add(WorldWritingStyle(world_id=world_id,novel_id=s.get("novel_id"),chapter_id=chapter_map.get(s.get("chapter_id")),pov=s.get("pov",""),tone_guide=s.get("tone_guide",""),forbidden_expressions=s.get("forbidden_expressions",""),sample_text=s.get("sample_text","")))
+    for s in ext.get("styles",[]):db.session.add(WorldWritingStyle(world_id=world_id,novel_id=part_map.get(s.get("novel_id")),chapter_id=chapter_map.get(s.get("chapter_id")),pov=s.get("pov",""),tone_guide=s.get("tone_guide",""),forbidden_expressions=s.get("forbidden_expressions",""),sample_text=s.get("sample_text","")))
     for r in ext.get("reveals",[]):
         if r.get("entry_id") in entry_map:db.session.add(EntryRevealState(entry_id=entry_map[r["entry_id"]],field_path=r.get("field_path","content"),reveal_chapter_id=chapter_map.get(r.get("reveal_chapter_id")),visibility=r.get("visibility","작가전용")))
     for r in ext.get("relationships",[]):
@@ -1571,25 +1584,45 @@ def metadata_migration_plan():
 
 @app.route("/api/metadata/migration-apply", methods=["POST"])
 def metadata_migration_apply():
-    wid=get_world_id();data=request.json or {};count=0
+    wid=get_world_id();data=request.json or {};count=0;created_schemas=0;updated_schemas=0;skipped=[]
     for order,item in enumerate(data.get("attribute_schemas") or []):
         name=str(item.get("axis_name") or "").strip()[:100]
-        if not name:continue
-        row=WorldAttributeSchema.query.filter_by(world_id=wid,axis_name=name).first() or WorldAttributeSchema(world_id=wid,axis_name=name)
-        row.axis_order=order;row.min_tier=max(0,min(100,int(item.get("min_tier",1))));row.max_tier=max(row.min_tier,min(100,int(item.get("max_tier",5))));row.description=str(item.get("description") or "")[:2000];row.tier_labels_json=_json.dumps(_normalize_tier_descriptions(item,row.min_tier,row.max_tier),ensure_ascii=False);row.is_active=True;db.session.add(row)
+        if not name:
+            skipped.append({"type":"schema","reason":"axis_name이 비어 있음"});continue
+        row=WorldAttributeSchema.query.filter_by(world_id=wid,axis_name=name).first()
+        existed=bool(row)
+        if not row:row=WorldAttributeSchema(world_id=wid,axis_name=name)
+        try:
+            min_tier=max(0,min(100,int(item.get("min_tier",1))))
+            max_tier=max(min_tier,min(100,int(item.get("max_tier",5))))
+        except (TypeError,ValueError):
+            skipped.append({"type":"schema","name":name,"reason":"최소/최대 단계가 숫자가 아님"});continue
+        row.axis_order=order;row.min_tier=min_tier;row.max_tier=max_tier;row.description=str(item.get("description") or "")[:2000];row.tier_labels_json=_json.dumps(_normalize_tier_descriptions(item,row.min_tier,row.max_tier),ensure_ascii=False);row.is_active=True;db.session.add(row)
+        if existed:updated_schemas+=1
+        else:created_schemas+=1
     db.session.flush()
+    axes=WorldAttributeSchema.query.filter_by(world_id=wid,is_active=True).all()
+    axis_by_key={"".join(a.axis_name.split()).casefold():a for a in axes}
     for item in data.get("entries",[]):
         entry=WorldEntry.query.get(item.get("entry_id"))
-        if not entry or entry.world_id!=wid:continue
-        for name,value_data in (item.get("attributes") or {}).items():
-            axis=WorldAttributeSchema.query.filter_by(world_id=wid,axis_name=name,is_active=True).first()
-            if axis:
-                value=value_data.get("value",axis.min_tier) if isinstance(value_data,dict) else value_data
-                description=value_data.get("description","") if isinstance(value_data,dict) else ""
-                row=EntryAttributeValue.query.get((entry.id,axis.id)) or EntryAttributeValue(entry_id=entry.id,axis_id=axis.id);row.value=max(axis.min_tier,min(axis.max_tier,int(value)));row.description=str(description or "")[:4000];db.session.add(row);count+=1
+        if not entry or entry.world_id!=wid:
+            skipped.append({"type":"entry","entry_id":item.get("entry_id"),"reason":"현재 세계관의 인물을 찾지 못함"});continue
+        attributes=item.get("attributes") or {}
+        if not isinstance(attributes,dict):
+            skipped.append({"type":"entry","entry_id":entry.id,"reason":"attributes가 객체 형식이 아님"});continue
+        for name,value_data in attributes.items():
+            axis=axis_by_key.get("".join(str(name).split()).casefold())
+            if not axis:
+                skipped.append({"type":"attribute","entry_id":entry.id,"name":str(name),"reason":"일치하는 활성 능력치 축이 없음"});continue
+            value=value_data.get("value",axis.min_tier) if isinstance(value_data,dict) else value_data
+            description=value_data.get("description","") if isinstance(value_data,dict) else ""
+            try:value=max(axis.min_tier,min(axis.max_tier,int(value)))
+            except (TypeError,ValueError):
+                skipped.append({"type":"attribute","entry_id":entry.id,"name":str(name),"reason":f"수치가 정수가 아님: {value}"});continue
+            row=EntryAttributeValue.query.get((entry.id,axis.id)) or EntryAttributeValue(entry_id=entry.id,axis_id=axis.id);row.value=value;row.description=str(description or "")[:4000];db.session.add(row);count+=1
         for sid in item.get("reused_skill_ids") or []:
             if WorldSkillRegistry.query.filter_by(id=sid,world_id=wid).first() and not EntrySkillLink.query.get((entry.id,sid)):db.session.add(EntrySkillLink(entry_id=entry.id,skill_id=sid))
-    db.session.commit();return jsonify({"ok":True,"applied":count})
+    db.session.commit();return jsonify({"ok":True,"applied":count,"created_schemas":created_schemas,"updated_schemas":updated_schemas,"skipped":skipped})
 
 @app.route("/api/entries/<int:entry_id>/skills", methods=["GET","PUT"])
 def entry_skills(entry_id):
@@ -1671,11 +1704,60 @@ def _tag_chapter_entities(chapter):
         if any(start<b and end>a for a,b in occupied):continue
         occupied.append((start,end));db.session.add(NovelEntityMention(chapter_id=chapter.id,entry_id=eid,span_start=start,span_end=end,matched_text=content[start:end],source="keyword"))
 
+def _ensure_default_novel_part(world_id):
+    part=NovelPart.query.filter_by(world_id=world_id).order_by(NovelPart.order_no,NovelPart.id).first()
+    if not part:
+        part=NovelPart(world_id=world_id,title="기본 이야기",order_no=1)
+        db.session.add(part);db.session.flush()
+    NovelChapter.query.filter_by(world_id=world_id,part_id=None).update({"part_id":part.id},synchronize_session=False)
+    db.session.commit()
+    return part
+
+
+@app.route("/api/novel/parts", methods=["GET","POST"])
+def novel_parts():
+    wid=get_world_id();_ensure_default_novel_part(wid)
+    if request.method=="GET":
+        return jsonify([p.to_dict(with_count=True) for p in NovelPart.query.filter_by(world_id=wid).order_by(NovelPart.order_no,NovelPart.id).all()])
+    d=request.json or {};order=db.session.query(db.func.max(NovelPart.order_no)).filter_by(world_id=wid).scalar() or 0
+    part=NovelPart(world_id=wid,title=str(d.get("title") or "새 이야기")[:250],description=str(d.get("description") or ""),order_no=order+1)
+    db.session.add(part);db.session.commit();return jsonify(part.to_dict(with_count=True)),201
+
+
+@app.route("/api/novel/parts/<int:part_id>", methods=["GET","PUT","DELETE"])
+def novel_part(part_id):
+    part=NovelPart.query.get_or_404(part_id)
+    if part.world_id!=get_world_id():abort(403)
+    if request.method=="DELETE":
+        fallback=NovelPart.query.filter_by(world_id=part.world_id).filter(NovelPart.id!=part.id).order_by(NovelPart.order_no,NovelPart.id).first()
+        if not fallback:return jsonify({"error":"이야기/부는 최소 한 개가 필요합니다."}),400
+        NovelChapter.query.filter_by(part_id=part.id).update({"part_id":fallback.id},synchronize_session=False)
+        db.session.delete(part);db.session.commit();return jsonify({"ok":True,"moved_to":fallback.id})
+    if request.method=="PUT":
+        d=request.json or {};part.title=str(d.get("title",part.title) or "새 이야기")[:250];part.description=str(d.get("description",part.description) or "");part.order_no=int(d.get("order_no",part.order_no));db.session.commit()
+    return jsonify(part.to_dict(with_count=True))
+
+
+@app.route("/api/novel/parts/<int:part_id>/publish", methods=["POST"])
+def publish_novel_part(part_id):
+    part=NovelPart.query.get_or_404(part_id)
+    if part.world_id!=get_world_id():abort(403)
+    enabled=bool((request.json or {}).get("public",True));part.is_public=enabled
+    if enabled and not part.public_token:part.public_token=uuid.uuid4().hex
+    db.session.commit()
+    return jsonify({"ok":True,"is_public":bool(part.is_public),"url":url_for("public_novel_part",token=part.public_token,_external=True) if enabled else None})
+
+
 @app.route("/api/novel/chapters", methods=["GET","POST"])
 def novel_chapters():
-    wid=get_world_id()
-    if request.method=="GET":return jsonify([c.to_dict() for c in NovelChapter.query.filter_by(world_id=wid).order_by(NovelChapter.order_no).all()])
-    d=request.json or {};order=db.session.query(db.func.max(NovelChapter.order_no)).filter_by(world_id=wid).scalar() or 0;c=NovelChapter(world_id=wid,title=d.get("title","새 챕터"),order_no=order+1,content=d.get("content",""),status=d.get("status","초안"));db.session.add(c);db.session.commit();return jsonify(c.to_dict()),201
+    wid=get_world_id();default_part=_ensure_default_novel_part(wid);part_id=request.args.get("part_id",type=int)
+    if request.method=="GET":
+        q=NovelChapter.query.filter_by(world_id=wid)
+        if part_id:q=q.filter_by(part_id=part_id)
+        return jsonify([c.to_dict() for c in q.order_by(NovelChapter.order_no,NovelChapter.id).all()])
+    d=request.json or {};part=NovelPart.query.filter_by(id=d.get("part_id"),world_id=wid).first() or default_part
+    order=db.session.query(db.func.max(NovelChapter.order_no)).filter_by(world_id=wid,part_id=part.id).scalar() or 0
+    c=NovelChapter(world_id=wid,part_id=part.id,title=d.get("title","새 챕터"),order_no=order+1,content=d.get("content",""),status=d.get("status","초안"));db.session.add(c);db.session.commit();return jsonify(c.to_dict()),201
 
 @app.route("/api/novel/chapters/<int:chapter_id>", methods=["GET","PUT","DELETE"])
 def novel_chapter(chapter_id):
@@ -1683,12 +1765,28 @@ def novel_chapter(chapter_id):
     if c.world_id!=get_world_id():abort(403)
     if request.method=="DELETE":NovelEntityMention.query.filter_by(chapter_id=c.id).delete();EntryRevealState.query.filter_by(reveal_chapter_id=c.id).update({"reveal_chapter_id":None});db.session.delete(c);db.session.commit();return jsonify({"ok":True})
     if request.method=="PUT":
-        d=request.json or {};c.title=d.get("title",c.title);c.content=d.get("content",c.content);c.status=d.get("status",c.status);c.order_no=int(d.get("order_no",c.order_no));c.reveal_chapter_ref=d.get("reveal_chapter_ref",c.reveal_chapter_ref);_tag_chapter_entities(c);db.session.commit()
+        d=request.json or {};c.title=d.get("title",c.title);c.content=d.get("content",c.content);c.status=d.get("status",c.status);c.order_no=int(d.get("order_no",c.order_no));c.reveal_chapter_ref=d.get("reveal_chapter_ref",c.reveal_chapter_ref)
+        if "part_id" in d:
+            part=NovelPart.query.filter_by(id=d.get("part_id"),world_id=c.world_id).first()
+            if part:c.part_id=part.id
+        _tag_chapter_entities(c);db.session.commit()
     mentions=NovelEntityMention.query.filter_by(chapter_id=c.id).all();out=c.to_dict();enriched=[]
     for m in mentions:
         item=m.to_dict();entry=WorldEntry.query.get(m.entry_id)
         item["entry_title"]=entry.title if entry else item.get("matched_text","");item["category"]=entry.category if entry else "관념";enriched.append(item)
     out["mentions"]=enriched;return jsonify(out)
+
+
+@app.route("/api/novel/chapters/<int:chapter_id>/publish", methods=["POST"])
+def publish_novel_chapter(chapter_id):
+    chapter=NovelChapter.query.get_or_404(chapter_id)
+    if chapter.world_id!=get_world_id():abort(403)
+    enabled=bool((request.json or {}).get("public",True));chapter.is_public=enabled
+    if enabled:
+        chapter.status="공개"
+        if not chapter.public_token:chapter.public_token=uuid.uuid4().hex
+    db.session.commit()
+    return jsonify({"ok":True,"is_public":bool(chapter.is_public),"url":url_for("public_novel_chapter",token=chapter.public_token,_external=True) if enabled else None})
 
 @app.route("/api/novel/style", methods=["GET","PUT"])
 def novel_style():
@@ -1738,10 +1836,63 @@ def novel_generate():
     d=request.json or {};chapter=NovelChapter.query.get(d.get("chapter_id")) if d.get("chapter_id") else None
     try:
         import llm_client
-        result=llm_client.generate_novel_text(get_world_id(),d.get("instruction",""),chapter.to_dict() if chapter else None,d.get("entry_ids") or [])
+        chapter_data=chapter.to_dict() if chapter else None
+        if chapter_data:
+            part=NovelPart.query.get(chapter.part_id)
+            chapter_data["part"]={"title":part.title,"description":part.description or ""} if part else None
+        result=llm_client.generate_novel_text(get_world_id(),d.get("instruction",""),chapter_data,d.get("entry_ids") or [])
         result["new_entity_proposals"]=[x for x in result.get("new_entity_proposals",[]) if x.get("title") and x.get("content") and x.get("category") in CATEGORIES]
         return jsonify(result)
     except Exception as e:return jsonify({"error":str(e)}),502
+
+
+def _public_field_visible(entry_id, field_path, chapter):
+    states=EntryRevealState.query.filter_by(entry_id=entry_id).all()
+    state=next((x for x in states if x.field_path==field_path),None) or next((x for x in states if field_path.startswith(x.field_path+".")),None)
+    if not state or state.visibility=="완전공개":return True
+    if state.visibility=="작가전용" or not state.reveal_chapter_id:return False
+    reveal=NovelChapter.query.get(state.reveal_chapter_id)
+    if not reveal or reveal.world_id!=chapter.world_id:return False
+    reveal_part=NovelPart.query.get(reveal.part_id);current_part=NovelPart.query.get(chapter.part_id)
+    reveal_pos=((reveal_part.order_no if reveal_part else 0),reveal.order_no,reveal.id)
+    current_pos=((current_part.order_no if current_part else 0),chapter.order_no,chapter.id)
+    return current_pos>=reveal_pos
+
+
+def _public_chapter_payload(chapter):
+    payload=chapter.to_dict();payload.pop("public_token",None);entities=[];seen=set()
+    mentions=NovelEntityMention.query.filter_by(chapter_id=chapter.id).order_by(NovelEntityMention.span_start).all()
+    for mention in mentions:
+        if mention.entry_id in seen:continue
+        seen.add(mention.entry_id);entry=WorldEntry.query.get(mention.entry_id)
+        if not entry or entry.world_id!=chapter.world_id or not entry.is_active:continue
+        content_visible=_public_field_visible(entry.id,"content",chapter)
+        attrs=[]
+        for value in EntryAttributeValue.query.filter_by(entry_id=entry.id).all():
+            axis=WorldAttributeSchema.query.get(value.axis_id)
+            if axis and axis.is_active and _public_field_visible(entry.id,"stat_block."+axis.axis_name,chapter):
+                attrs.append({"name":axis.axis_name,"value":value.value,"description":value.description or "","tier_description":axis.tier_description(value.value)})
+        skills=[]
+        if _public_field_visible(entry.id,"stat_block.skills",chapter):
+            for link in EntrySkillLink.query.filter_by(entry_id=entry.id).all():
+                skill=WorldSkillRegistry.query.get(link.skill_id)
+                if skill:skills.append({"name":skill.name,"rank":link.rank,"description":skill.description or ""})
+        entities.append({"id":entry.id,"title":entry.title,"category":entry.category,"content":entry.content if content_visible else "","content_visible":content_visible,"primary_year":entry.primary_year or "","aliases":entry.to_dict().get("aliases",[]),"image_url":url_for("serve_storage",filename=entry.image_filename) if entry.image_filename else None,"attributes":attrs,"skills":skills})
+    payload["entities"]=entities;return payload
+
+
+@app.route("/read/chapter/<token>")
+def public_novel_chapter(token):
+    chapter=NovelChapter.query.filter_by(public_token=token,is_public=True).first_or_404()
+    part=NovelPart.query.get(chapter.part_id);world=World.query.get(chapter.world_id)
+    return render_template("public_novel.html",world=world,part=part,chapters=[_public_chapter_payload(chapter)],share_scope="chapter")
+
+
+@app.route("/read/part/<token>")
+def public_novel_part(token):
+    part=NovelPart.query.filter_by(public_token=token,is_public=True).first_or_404();world=World.query.get(part.world_id)
+    chapters=NovelChapter.query.filter_by(world_id=part.world_id,part_id=part.id).order_by(NovelChapter.order_no,NovelChapter.id).all()
+    return render_template("public_novel.html",world=world,part=part,chapters=[_public_chapter_payload(c) for c in chapters],share_scope="part")
 
 @app.route("/api/settings", methods=["GET"])
 def get_settings():

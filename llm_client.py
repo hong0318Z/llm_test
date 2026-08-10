@@ -396,7 +396,8 @@ def generate_novel_text(world_id: int, instruction: str, chapter: dict = None, e
     all_past=NovelChapter.query.filter_by(world_id=world_id).all();query_words=_extract_context_words(instruction+" "+(chapter or {}).get("content","")[-1500:])
     past=sorted(all_past,key=lambda c:len(_extract_context_words(c.title+" "+c.content)&query_words),reverse=True)[:3]
     style_text=json.dumps(style,ensure_ascii=False)
-    prompt=f"문체 설정: {style_text}\n\n등장 엔트리:\n{serialize_world_state(entries,get_entry_char_limit())}\n\n능력치/스킬 시트:\n"+"\n".join(stat_lines)+"\n\n관련 과거 챕터:\n"+"\n".join(f"[{c.title}] {c.content}" for c in past)+f"\n\n현재 본문:\n{(chapter or {}).get('content','')}\n\n요청:\n{instruction}"
+    part_context=json.dumps((chapter or {}).get("part") or {},ensure_ascii=False)
+    prompt=f"문체 설정: {style_text}\n\n현재 이야기/부의 상위 설정:\n{part_context}\n\n등장 엔트리:\n{serialize_world_state(entries,get_entry_char_limit())}\n\n능력치/스킬 시트:\n"+"\n".join(stat_lines)+"\n\n관련 과거 챕터:\n"+"\n".join(f"[{c.title}] {c.content}" for c in past)+f"\n\n현재 본문:\n{(chapter or {}).get('content','')}\n\n요청:\n{instruction}"
     system="세계관 설정과 공개 범위를 존중하는 소설 작가입니다. 금지 표현과 인물 말투를 지키세요. 기존 DB에 없는 새 고유명사를 발견/창작하면 별도 후보로 분리하세요. JSON만 출력: {\"content\":\"Markdown 본문\",\"new_entity_proposals\":[{\"title\":\"\",\"category\":\"인물/장소/세력 등\",\"content\":\"등록 초안\"}]}"
     response=client.chat.completions.create(model=model,messages=[{"role":"system","content":system},{"role":"user","content":prompt}],temperature=.75,max_tokens=get_max_output_tokens())
     raw=response.choices[0].message.content or "";parsed=_parse_json_safe(raw,"novel_generate")

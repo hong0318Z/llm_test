@@ -3,6 +3,7 @@ import os
 import unittest
 import uuid
 from unittest.mock import patch
+from urllib.parse import urlsplit
 
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["SECRET_KEY"] = "test-secret"
@@ -12,12 +13,14 @@ from models import (  # noqa: E402
     EntryAttributeValue,
     EntryRevealState,
     EntrySkillLink,
+    NovelChapter,
     NovelEntityMention,
     User,
     World,
     WorldAttributeSchema,
     WorldEntry,
     WorldEntryTemplate,
+    NovelPart,
     WorldSkillRegistry,
 )
 
@@ -103,6 +106,22 @@ class UpdateSpecTest(unittest.TestCase):
         value = EntryAttributeValue.query.filter_by(entry_id=entry.id).one()
         self.assertEqual(value.value, 4)
         self.assertEqual(value.description, "오랜 협상 경험에서 비롯됨")
+
+    def test_metadata_apply_normalizes_axis_names_and_reports_skips(self):
+        entry = self.add_entry()
+        response = self.client.post("/api/metadata/migration-apply", json={
+            "attribute_schemas": [{"axis_name": "정신 력", "min_tier": 1, "max_tier": 10}],
+            "entries": [{"entry_id": entry.id, "attributes": {
+                "정신력": {"value": 8, "description": "강한 의지"},
+                "없는 축": {"value": 3},
+            }}],
+        })
+        self.assertEqual(response.status_code, 200)
+        result = response.get_json()
+        self.assertEqual(result["created_schemas"], 1)
+        self.assertEqual(result["applied"], 1)
+        self.assertEqual(len(result["skipped"]), 1)
+        self.assertEqual(EntryAttributeValue.query.filter_by(entry_id=entry.id).one().description, "강한 의지")
 
     def test_generated_character_attributes_are_saved_and_visible_in_sheet(self):
         self.client.put("/api/metadata/attributes", json={"attributes":[{
@@ -219,6 +238,43 @@ class UpdateSpecTest(unittest.TestCase):
         self.assertEqual(base["pov"], "전지적")
         self.assertEqual(override["pov"], "1인칭")
 
+    def test_novel_parts_and_public_reader_without_login(self):
+        part = self.client.post("/api/novel/parts", json={
+            "title": "보바의 이야기", "description": "보바의 몰락과 귀환",
+        }).get_json()
+        entry = self.add_entry("보바")
+        entry.content = "공개되면 안 되는 작가 전용 DB 본문"
+        entry.secret_content = "절대로 공개되면 안 되는 비밀"
+        db.session.commit()
+        chapter = self.client.post("/api/novel/chapters", json={
+            "part_id": part["id"], "title": "첫 장", "content": "## 시작\n\n보바가 돌아왔다.",
+        }).get_json()
+        self.client.put(f"/api/novel/chapters/{chapter['id']}", json={"content": "## 시작\n\n보바가 돌아왔다."})
+        self.client.put(f"/api/entries/{entry.id}/reveal", json={
+            "states": [{"field_path": "content", "visibility": "작가전용"}],
+        })
+        chapter_share = self.client.post(f"/api/novel/chapters/{chapter['id']}/publish", json={"public": True}).get_json()
+        part_share = self.client.post(f"/api/novel/parts/{part['id']}/publish", json={"public": True}).get_json()
+        with self.client.session_transaction() as sess:
+            sess.clear()
+        chapter_page = self.client.get(urlsplit(chapter_share["url"]).path)
+        part_page = self.client.get(urlsplit(part_share["url"]).path)
+        self.assertEqual(chapter_page.status_code, 200)
+        self.assertEqual(part_page.status_code, 200)
+        page_text = part_page.get_data(as_text=True)
+        self.assertIn("보바의 이야기", page_text)
+        self.assertIn("보바의 몰락과 귀환", page_text)
+        self.assertIn(f'"id": {chapter["id"]}', page_text)
+        self.assertNotIn("작가 전용 DB 본문", page_text)
+        self.assertNotIn("절대로 공개되면 안 되는 비밀", page_text)
+        with self.client.session_transaction() as sess:
+            admin = User.query.filter_by(username="admin").first()
+            sess["user_id"] = admin.id; sess["world_id"] = self.world.id
+        self.client.post(f"/api/novel/parts/{part['id']}/publish", json={"public": False})
+        with self.client.session_transaction() as sess:
+            sess.clear()
+        self.assertEqual(self.client.get(urlsplit(part_share["url"]).path).status_code, 404)
+
     def test_entry_delete_cleans_extension_rows(self):
         entry = self.add_entry()
         axis = WorldAttributeSchema(world_id=self.world.id, axis_name="힘")
@@ -267,6 +323,9 @@ class UpdateSpecTest(unittest.TestCase):
         self.assertEqual(EntrySkillLink.query.filter_by(entry_id=restored.id).count(), 1)
         self.assertEqual(EntryRevealState.query.filter_by(entry_id=restored.id).count(), 1)
         self.assertEqual(NovelEntityMention.query.filter_by(entry_id=restored.id).count(), 1)
+        restored_chapter = NovelChapter.query.filter_by(world_id=self.world.id, title="복원 장").one()
+        self.assertIsNotNone(restored_chapter.part_id)
+        self.assertIsNotNone(NovelPart.query.get(restored_chapter.part_id))
 
 
 if __name__ == "__main__":

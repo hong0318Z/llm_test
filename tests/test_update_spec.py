@@ -4,6 +4,7 @@ import unittest
 import uuid
 from unittest.mock import patch
 from urllib.parse import urlsplit
+from types import SimpleNamespace
 
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["SECRET_KEY"] = "test-secret"
@@ -122,6 +123,26 @@ class UpdateSpecTest(unittest.TestCase):
         self.assertEqual(result["applied"], 1)
         self.assertEqual(len(result["skipped"]), 1)
         self.assertEqual(EntryAttributeValue.query.filter_by(entry_id=entry.id).one().description, "강한 의지")
+
+    def test_schema_fill_retries_an_omitted_axis(self):
+        import llm_client
+        responses = [
+            {"attribute_schemas": [{"axis_name": "지능", "description": "사고 판정", "tier_descriptions": {"1": "기초 사고", "2": "복합 사고"}}]},
+            {"attribute_schemas": [{"axis_name": "힘", "description": "근력 판정", "tier_descriptions": {"1": "가벼운 짐", "2": "무거운 짐"}}]},
+        ]
+        completion = SimpleNamespace(create=lambda **kwargs: SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=__import__("json").dumps(responses.pop(0), ensure_ascii=False)))]
+        ))
+        client = SimpleNamespace(chat=SimpleNamespace(completions=completion))
+        axes = [
+            {"axis_name": "힘", "min_tier": 1, "max_tier": 2},
+            {"axis_name": "지능", "min_tier": 1, "max_tier": 2},
+        ]
+        with patch.object(llm_client, "get_llm_client", return_value=(client, "test-model")):
+            result = llm_client.propose_attribute_schema_fill(axes)
+        self.assertEqual({x["axis_name"] for x in result["attribute_schemas"]}, {"힘", "지능"})
+        self.assertEqual(result["missing_axes_after_retry"], [])
+        self.assertIn("자동 보충 재요청", result["_raw"])
 
     def test_generated_character_attributes_are_saved_and_visible_in_sheet(self):
         self.client.put("/api/metadata/attributes", json={"attributes":[{

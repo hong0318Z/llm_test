@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ko">
+<html lang="ko" data-bs-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -36,6 +36,7 @@
       color: var(--text-primary);
       font-family: 'Segoe UI', system-ui, sans-serif;
       min-height: 100vh;
+      color-scheme: dark;
     }
 
     /* Bootstrap text-muted 재정의 */
@@ -80,6 +81,41 @@
     .form-check-label { color: var(--text-secondary); }
     .form-text { color: var(--text-secondary) !important; }
     .form-label { color: var(--text-secondary); }
+
+    /* Bootstrap 기본 밝은 배경이 다크 UI에 섞이지 않도록 통일 */
+    .list-group-item {
+      background: var(--bg-input);
+      color: var(--text-secondary);
+      border-color: var(--border);
+    }
+    .list-group-item-action:hover,
+    .list-group-item-action:focus {
+      background: rgba(139,127,247,0.10);
+      color: var(--text-primary);
+    }
+    .list-group-item.active {
+      background: rgba(139,127,247,0.20);
+      color: var(--text-primary);
+      border-color: var(--accent);
+    }
+    .list-group-item.active .text-muted { color: #c8c2ff !important; }
+    .nav-tabs { border-color: var(--border); }
+    .nav-tabs .nav-link { color: var(--text-secondary); border-color: transparent; }
+    .nav-tabs .nav-link:hover { border-color: var(--border); color: var(--text-primary); }
+    .nav-tabs .nav-link.active {
+      background: var(--bg-card); color: var(--accent);
+      border-color: var(--border) var(--border) var(--bg-card);
+    }
+    .table {
+      --bs-table-bg: transparent;
+      --bs-table-color: var(--text-secondary);
+      --bs-table-border-color: var(--border);
+    }
+    .dropdown-menu, .accordion-item {
+      background: var(--bg-card); color: var(--text-primary); border-color: var(--border);
+    }
+    .dropdown-item { color: var(--text-secondary); }
+    .dropdown-item:hover, .dropdown-item:focus { background: rgba(139,127,247,.12); color: var(--text-primary); }
 
     .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
     .btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }

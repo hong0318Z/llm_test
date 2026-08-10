@@ -1579,7 +1579,20 @@ def metadata_migration_plan():
     entries=[e.to_dict() for e in q.limit(30).all()]
     try:
         import llm_client
-        return jsonify(llm_client.propose_metadata_migration(entries,llm_client._world_metadata_rules(wid),str(data.get("instruction") or "")[:2000]))
+        required_axes=[a.to_dict() for a in WorldAttributeSchema.query.filter_by(world_id=wid,is_active=True).order_by(WorldAttributeSchema.axis_order).all()]
+        return jsonify(llm_client.propose_metadata_migration(entries,llm_client._world_metadata_rules(wid),str(data.get("instruction") or "")[:2000],required_axes=required_axes))
+    except Exception as e:return jsonify({"error":str(e)}),502
+
+
+@app.route("/api/metadata/schema-fill-plan", methods=["POST"])
+def metadata_schema_fill_plan():
+    """현재 축 이름·범위를 고정한 채 설명과 모든 단계 서술만 제안한다."""
+    wid=get_world_id();data=request.json or {}
+    axes=[a.to_dict() for a in WorldAttributeSchema.query.filter_by(world_id=wid,is_active=True).order_by(WorldAttributeSchema.axis_order).all()]
+    if not axes:return jsonify({"error":"먼저 사용할 능력치 축을 한 개 이상 추가하세요."}),400
+    try:
+        import llm_client
+        return jsonify(llm_client.propose_attribute_schema_fill(axes,llm_client._world_metadata_rules(wid),str(data.get("instruction") or "")[:2000]))
     except Exception as e:return jsonify({"error":str(e)}),502
 
 @app.route("/api/metadata/migration-apply", methods=["POST"])

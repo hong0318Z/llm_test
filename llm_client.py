@@ -463,17 +463,117 @@ def propose_entry_skills(entry: dict, candidates: list, guideline: dict) -> dict
     return _parse_json_safe(raw,"skill_proposal")
 
 
-def propose_metadata_migration(entries: list, metadata_rules: str, instruction: str = "") -> dict:
-    client,model=get_llm_client();prompt="""기존 인물 엔트리를 분석해 D&D/TRPG용 메타데이터 보강안을 만드세요. 원문과 DB는 수정하지 말고 제안만 반환하세요.
+def propose_metadata_migration(entries: list, metadata_rules: str, instruction: str = "", required_axes: list = None) -> dict:
+    client,model=get_llm_client();required_axes=required_axes or []
+    exact_rule=("\n아래 '반드시 완성할 기존 축'이 있으면 새 축을 만들거나 기존 축을 누락·개명하지 마세요. 정확히 같은 axis_name, min_tier, max_tier를 사용하고 모든 축을 하나도 빠짐없이 반환하세요. 각 인물의 attributes에도 모든 기존 축을 빠짐없이 넣으세요.\n반드시 완성할 기존 축:\n"+json.dumps([{"axis_name":a.get("axis_name"),"min_tier":a.get("min_tier",1),"max_tier":a.get("max_tier",5),"description":a.get("description",""),"tier_descriptions":a.get("tier_descriptions") or a.get("tier_labels") or {}} for a in required_axes],ensure_ascii=False)) if required_axes else ""
+    prompt="""기존 인물 엔트리를 분석해 D&D/TRPG용 메타데이터 보강안을 만드세요. 원문과 DB는 수정하지 말고 제안만 반환하세요.
 기존 능력치 축이 없거나 설명이 부족하면 세계관에 맞는 축을 제안하고, 각 축의 용도·수치 범위·모든 단계의 의미를 상세히 작성하세요.
 min_tier부터 max_tier까지 한 단계도 빠뜨리지 말고 tier_descriptions에 정확히 하나씩 작성하세요. 예를 들어 1~10 범위라면 "1"부터 "10"까지 정확히 10개의 키가 있어야 합니다.
 각 단계는 추상적인 강약 표현만 쓰지 말고 그 단계에서 가능한 행동, 한계 또는 판정 결과가 드러나게 서술하며, 단계가 올라갈수록 일관되게 강해져야 합니다.
 각 인물에는 축 범위 안의 정수 수치와, 본문의 어떤 설정 때문에 그 수치인지 구체적인 설명을 작성하세요. 기존 스킬은 ID를 재사용하세요.
 JSON만 출력:
 {"attribute_schemas":[{"axis_name":"힘","min_tier":1,"max_tier":10,"description":"축의 판정 용도와 의미","tier_descriptions":{"1":"무거운 물건을 거의 들지 못한다.","2":"일상적인 짐을 드는 데 어려움이 있다.","3":"평균 이하의 힘으로 가벼운 짐을 다룬다.","4":"가벼운 육체노동을 수행한다.","5":"평범한 성인 수준의 힘이다.","6":"꾸준히 단련한 사람 수준이다.","7":"무거운 장비를 오래 다룬다.","8":"여러 사람 몫의 힘을 발휘한다.","9":"인간의 일반적인 한계에 가깝다.","10":"세계관에서 허용되는 최고 수준의 힘이다."}}],"entries":[{"entry_id":1,"attributes":{"힘":{"value":7,"description":"훈련된 용병이라 무거운 장비를 장시간 다룬다."}},"reused_skill_ids":[]}]}
-"""+metadata_rules+"\n추가 요청:"+(instruction or "세계관 설정과 인물 본문을 근거로 빠짐없이 작성")+"\n인물 엔트리:"+json.dumps(entries,ensure_ascii=False)
+"""+exact_rule+"\n"+metadata_rules+"\n추가 요청:"+(instruction or "세계관 설정과 인물 본문을 근거로 빠짐없이 작성")+"\n인물 엔트리:"+json.dumps(entries,ensure_ascii=False)
     raw=client.chat.completions.create(model=model,messages=[{"role":"user","content":prompt}],temperature=.2,max_tokens=get_max_output_tokens()).choices[0].message.content or ""
-    return _parse_json_safe(raw,"metadata_migration")
+    result=_parse_json_safe(raw,"metadata_migration")
+    if not isinstance(result,dict):result={"attribute_schemas":[],"entries":[]}
+    raw_parts=[raw]
+
+    if required_axes:
+        key=lambda value:"".join(str(value or "").split()).casefold()
+        required={key(a.get("axis_name")):a for a in required_axes if a.get("axis_name")}
+        entry_ids={int(e.get("id")) for e in entries if e.get("id") is not None}
+
+        def canonicalize(payload):
+            schemas=[]
+            for schema in payload.get("attribute_schemas") or []:
+                if not isinstance(schema,dict):continue
+                original=required.get(key(schema.get("axis_name")))
+                if not original:continue
+                fixed=dict(schema);fixed["axis_name"]=original.get("axis_name");fixed["min_tier"]=original.get("min_tier",1);fixed["max_tier"]=original.get("max_tier",5);schemas.append(fixed)
+            rows=[]
+            for row in payload.get("entries") or []:
+                if not isinstance(row,dict):continue
+                try:entry_id=int(row.get("entry_id"))
+                except (TypeError,ValueError):continue
+                if entry_id not in entry_ids:continue
+                attrs={}
+                for name,value in (row.get("attributes") or {}).items():
+                    original=required.get(key(name))
+                    if original:attrs[original.get("axis_name")]=value
+                fixed=dict(row);fixed["entry_id"]=entry_id;fixed["attributes"]=attrs;rows.append(fixed)
+            return schemas,rows
+
+        schemas,rows=canonicalize(result)
+        schema_keys={key(x.get("axis_name")) for x in schemas}
+        attrs_by_entry={x["entry_id"]:dict(x.get("attributes") or {}) for x in rows}
+        missing_schema=[a.get("axis_name") for k,a in required.items() if k not in schema_keys]
+        missing_values={eid:[a.get("axis_name") for k,a in required.items() if a.get("axis_name") not in attrs_by_entry.get(eid,{})] for eid in entry_ids}
+        focus=sorted(set(missing_schema+[name for names in missing_values.values() for name in names]))
+        if focus:
+            retry_prompt="이전 응답에서 저장된 능력치 축 또는 인물별 값이 누락되었습니다. 아래 누락 축만 보충하되 axis_name과 범위를 정확히 지키세요. 모든 인물에 누락 축의 수치와 근거를 작성하세요. JSON 형식은 이전 요청과 동일합니다.\n누락 축: "+json.dumps([a for a in required_axes if a.get("axis_name") in focus],ensure_ascii=False)+"\n인물 엔트리: "+json.dumps(entries,ensure_ascii=False)
+            retry_raw=client.chat.completions.create(model=model,messages=[{"role":"user","content":retry_prompt}],temperature=.1,max_tokens=get_max_output_tokens()).choices[0].message.content or ""
+            raw_parts.append(retry_raw);retry=_parse_json_safe(retry_raw,"metadata_migration_retry")
+            retry_schemas,retry_rows=canonicalize(retry if isinstance(retry,dict) else {})
+            by_schema={key(x.get("axis_name")):x for x in schemas}
+            for item in retry_schemas:by_schema[key(item.get("axis_name"))]=item
+            schemas=list(by_schema.values())
+            by_entry={x["entry_id"]:x for x in rows}
+            for item in retry_rows:
+                target=by_entry.setdefault(item["entry_id"],{"entry_id":item["entry_id"],"attributes":{},"reused_skill_ids":[]})
+                target.setdefault("attributes",{}).update(item.get("attributes") or {})
+            rows=list(by_entry.values())
+        final_schema_keys={key(x.get("axis_name")) for x in schemas}
+        final_attrs={x["entry_id"]:x.get("attributes") or {} for x in rows}
+        result["attribute_schemas"]=schemas;result["entries"]=rows
+        result["missing_axes_after_retry"]=[a.get("axis_name") for k,a in required.items() if k not in final_schema_keys]
+        result["missing_values_after_retry"]={str(eid):[a.get("axis_name") for a in required_axes if a.get("axis_name") not in final_attrs.get(eid,{})] for eid in entry_ids}
+        result["missing_values_after_retry"]={k:v for k,v in result["missing_values_after_retry"].items() if v}
+    result["_raw"]="\n\n===== 자동 보충 재요청 =====\n\n".join(raw_parts)
+    return result
+
+
+def propose_attribute_schema_fill(required_axes: list, metadata_rules: str = "", instruction: str = "") -> dict:
+    """저장된 축을 개명하지 않고 축 설명과 단계별 행동 서술을 완성한다."""
+    client,model=get_llm_client();key=lambda value:"".join(str(value or "").split()).casefold()
+    required={key(a.get("axis_name")):a for a in (required_axes or []) if a.get("axis_name")}
+    compact=[{"axis_name":a.get("axis_name"),"min_tier":a.get("min_tier",1),"max_tier":a.get("max_tier",5),"description":a.get("description",""),"tier_descriptions":a.get("tier_descriptions") or a.get("tier_labels") or {}} for a in required_axes]
+    base="""당신은 TRPG 능력치 스키마 설계자입니다. 캐릭터 수치를 배정하지 말고, 제공된 능력치 축 자체의 설명과 모든 단계 서술만 완성하세요.
+축을 추가·삭제·개명하지 말고 axis_name, min_tier, max_tier를 입력과 정확히 같게 유지하세요.
+각 description에는 이 축의 판정 용도와 수치 의미를 작성하세요. tier_descriptions에는 min_tier부터 max_tier까지 모든 정수 키를 하나도 빠뜨리지 마세요.
+각 단계는 단순히 '낮음/보통/높음'이라고 하지 말고 가능한 행동, 성공 범위, 한계가 드러나게 쓰며 단계가 올라갈수록 일관되게 향상되어야 합니다.
+JSON만 출력: {"attribute_schemas":[{"axis_name":"힘","min_tier":1,"max_tier":10,"description":"판정 용도","tier_descriptions":{"1":"행동과 한계","2":"행동과 한계"}}]}
+"""
+    prompt=base+"\n반드시 완성할 축:\n"+json.dumps(compact,ensure_ascii=False)+"\n세계관 메타데이터:\n"+metadata_rules+"\n추가 요청:\n"+(instruction or "세계관의 척도에 맞게 구체적으로 작성")
+
+    def call(text,label):
+        raw=client.chat.completions.create(model=model,messages=[{"role":"user","content":text}],temperature=.2,max_tokens=get_max_output_tokens()).choices[0].message.content or ""
+        parsed=_parse_json_safe(raw,label);return (parsed if isinstance(parsed,dict) else {}),raw
+
+    def normalize(payload):
+        result={}
+        for schema in payload.get("attribute_schemas") or []:
+            if not isinstance(schema,dict):continue
+            original=required.get(key(schema.get("axis_name")))
+            if not original:continue
+            tiers=schema.get("tier_descriptions") if isinstance(schema.get("tier_descriptions"),dict) else schema.get("tier_labels")
+            if not isinstance(tiers,dict):tiers={}
+            result[key(original.get("axis_name"))]={"axis_name":original.get("axis_name"),"min_tier":original.get("min_tier",1),"max_tier":original.get("max_tier",5),"description":str(schema.get("description") or "").strip(),"tier_descriptions":{str(n):str(tiers.get(str(n),tiers.get(n,"")) or "").strip() for n in range(int(original.get("min_tier",1)),int(original.get("max_tier",5))+1)}}
+        return result
+
+    first,raw=call(prompt,"attribute_schema_fill");merged=normalize(first);raw_parts=[raw]
+    def incomplete_keys():
+        missing=[]
+        for k,original in required.items():
+            schema=merged.get(k)
+            if not schema or not schema.get("description") or any(not schema.get("tier_descriptions",{}).get(str(n)) for n in range(int(original.get("min_tier",1)),int(original.get("max_tier",5))+1)):missing.append(k)
+        return missing
+    missing=incomplete_keys()
+    if missing:
+        focus=[compact_item for compact_item in compact if key(compact_item.get("axis_name")) in missing]
+        retry,raw2=call(base+"\n이전 응답에서 다음 축 또는 단계가 누락되었습니다. 아래 축만 모든 단계까지 완성하세요:\n"+json.dumps(focus,ensure_ascii=False)+"\n추가 요청:\n"+(instruction or "구체적으로 작성"),"attribute_schema_fill_retry")
+        raw_parts.append(raw2);merged.update(normalize(retry));missing=incomplete_keys()
+    return {"attribute_schemas":list(merged.values()),"missing_axes_after_retry":[required[k].get("axis_name") for k in missing],"_raw":"\n\n===== 자동 보충 재요청 =====\n\n".join(raw_parts)}
 
 
 def serialize_world_state(entries: list, max_chars: int = 0) -> str:

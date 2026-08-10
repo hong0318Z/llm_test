@@ -144,6 +144,55 @@ class UpdateSpecTest(unittest.TestCase):
         self.assertEqual(result["missing_axes_after_retry"], [])
         self.assertIn("자동 보충 재요청", result["_raw"])
 
+    def test_schema_fill_preserves_existing_fields(self):
+        import llm_client
+        response = {"attribute_schemas": [{
+            "axis_name": "지능", "description": "덮어쓰면 안 됨",
+            "tier_descriptions": {"1": "덮어쓰면 안 됨", "2": "복합 사고"},
+        }]}
+        completion = SimpleNamespace(create=lambda **kwargs: SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=__import__("json").dumps(response, ensure_ascii=False)))]
+        ))
+        client = SimpleNamespace(chat=SimpleNamespace(completions=completion))
+        axes = [{
+            "axis_name": "지능", "min_tier": 1, "max_tier": 2,
+            "description": "기존 판정 설명", "tier_descriptions": {"1": "기존 기초 사고", "2": ""},
+        }]
+        with patch.object(llm_client, "get_llm_client", return_value=(client, "test-model")):
+            result = llm_client.propose_attribute_schema_fill(axes)
+        schema = result["attribute_schemas"][0]
+        self.assertEqual(schema["description"], "기존 판정 설명")
+        self.assertEqual(schema["tier_descriptions"]["1"], "기존 기초 사고")
+        self.assertEqual(schema["tier_descriptions"]["2"], "복합 사고")
+
+    def test_schema_fill_plan_limits_request_to_selected_active_axis(self):
+        self.client.put("/api/metadata/attributes", json={"attributes": [
+            {"axis_name": "힘", "min_tier": 1, "max_tier": 2, "is_active": True},
+            {"axis_name": "지능", "min_tier": 1, "max_tier": 2, "is_active": True},
+        ]})
+        proposed = {"attribute_schemas": [], "missing_axes_after_retry": [], "_raw": ""}
+        with patch("llm_client.propose_attribute_schema_fill", return_value=proposed) as mocked:
+            response = self.client.post("/api/metadata/schema-fill-plan", json={"axis_names": ["지능"]})
+        self.assertEqual(response.status_code, 200)
+        requested_axes = mocked.call_args.args[0]
+        self.assertEqual([axis["axis_name"] for axis in requested_axes], ["지능"])
+
+    def test_character_assignment_plan_limits_request_to_one_character(self):
+        first = self.add_entry("첫 인물")
+        self.add_entry("둘째 인물")
+        self.client.put("/api/metadata/attributes", json={"attributes": [{
+            "axis_name": "힘", "min_tier": 1, "max_tier": 2, "is_active": True,
+        }]})
+        proposed = {"attribute_schemas": [], "entries": [], "missing_values_after_retry": {}, "_raw": ""}
+        with patch("llm_client.propose_character_attribute_fill", return_value=proposed) as mocked:
+            response = self.client.post("/api/metadata/migration-plan", json={
+                "entry_ids": [first.id], "axis_names": ["힘"],
+            })
+        self.assertEqual(response.status_code, 200)
+        requested_entries, requested_axes, _ = mocked.call_args.args
+        self.assertEqual([entry["id"] for entry in requested_entries], [first.id])
+        self.assertEqual([axis["axis_name"] for axis in requested_axes], ["힘"])
+
     def test_generated_character_attributes_are_saved_and_visible_in_sheet(self):
         self.client.put("/api/metadata/attributes", json={"attributes":[{
             "axis_name":"힘", "min_tier":1, "max_tier":10,
@@ -240,6 +289,7 @@ class UpdateSpecTest(unittest.TestCase):
     def test_title_and_alias_keyword_tagging(self):
         entry = self.add_entry(aliases=["피투성이 보바"])
         chapter = self.client.post("/api/novel/chapters", json={"title": "1장"}).get_json()
+        self.client.put(f"/api/novel/parts/{chapter['part_id']}", json={"entry_ids": [entry.id]})
         response = self.client.put(
             f"/api/novel/chapters/{chapter['id']}",
             json={"content": "보바가 왔다. 피투성이 보바는 웃었다."},
@@ -250,14 +300,36 @@ class UpdateSpecTest(unittest.TestCase):
         self.assertTrue(all(m["entry_id"] == entry.id for m in mentions))
         self.assertTrue(all(m["category"] == "인물" for m in mentions))
 
-    def test_world_and_chapter_styles_do_not_overwrite_each_other(self):
+    def test_novel_style_is_global_master_setting(self):
         chapter = self.client.post("/api/novel/chapters", json={"title": "스타일"}).get_json()
-        self.client.put("/api/novel/style", json={"chapter_id": None, "pov": "전지적", "tone_guide": "건조"})
-        self.client.put("/api/novel/style", json={"chapter_id": chapter["id"], "pov": "1인칭", "tone_guide": ""})
-        base = self.client.get("/api/novel/style").get_json()
-        override = self.client.get(f"/api/novel/style?chapter_id={chapter['id']}").get_json()
-        self.assertEqual(base["pov"], "전지적")
-        self.assertEqual(override["pov"], "1인칭")
+        self.client.put("/api/settings", json={"novel_pov": "전지적", "novel_tone_guide": "건조"})
+        base = self.client.get("/api/settings").get_json()
+        legacy = self.client.get(f"/api/novel/style?chapter_id={chapter['id']}").get_json()
+        self.assertEqual(base["novel_pov"], "전지적")
+        self.assertEqual(base["novel_tone_guide"], "건조")
+        self.assertEqual(legacy["pov"], "전지적")
+        self.assertIsNone(legacy["chapter_id"])
+
+    def test_novel_part_selected_entries_limit_generation_context(self):
+        selected = self.add_entry("선택 인물")
+        self.add_entry("제외 인물")
+        part = self.client.post("/api/novel/parts", json={
+            "title": "선택 이야기", "entry_ids": [selected.id],
+        }).get_json()
+        self.assertEqual(part["entry_ids"], [selected.id])
+        catalog = self.client.get("/api/novel/entry-catalog?q=선택").get_json()
+        self.assertEqual([row["id"] for row in catalog], [selected.id])
+        chapter = self.client.post("/api/novel/chapters", json={
+            "part_id": part["id"], "title": "선택 장",
+        }).get_json()
+        proposed = {"proposal": "본문", "new_entity_proposals": []}
+        with patch("llm_client.generate_novel_text", return_value=proposed) as mocked:
+            response = self.client.post("/api/novel/generate", json={
+                "chapter_id": chapter["id"], "instruction": "계속",
+            })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(mocked.call_args.args[3], [selected.id])
+        self.assertEqual(mocked.call_args.args[2]["part"]["id"], part["id"])
 
     def test_novel_parts_and_public_reader_without_login(self):
         part = self.client.post("/api/novel/parts", json={
@@ -267,6 +339,7 @@ class UpdateSpecTest(unittest.TestCase):
         entry.content = "공개되면 안 되는 작가 전용 DB 본문"
         entry.secret_content = "절대로 공개되면 안 되는 비밀"
         db.session.commit()
+        self.client.put(f"/api/novel/parts/{part['id']}", json={"entry_ids": [entry.id]})
         chapter = self.client.post("/api/novel/chapters", json={
             "part_id": part["id"], "title": "첫 장", "content": "## 시작\n\n보바가 돌아왔다.",
         }).get_json()
@@ -302,6 +375,7 @@ class UpdateSpecTest(unittest.TestCase):
         skill = WorldSkillRegistry(world_id=self.world.id, name="검술")
         db.session.add_all([axis, skill]); db.session.flush()
         chapter = self.client.post("/api/novel/chapters", json={"title": "삭제"}).get_json()
+        part = NovelPart.query.get(chapter["part_id"]);part.entry_ids=[entry.id]
         db.session.add_all([
             EntryAttributeValue(entry_id=entry.id, axis_id=axis.id, value=3),
             EntrySkillLink(entry_id=entry.id, skill_id=skill.id),
@@ -314,6 +388,7 @@ class UpdateSpecTest(unittest.TestCase):
         self.assertEqual(EntrySkillLink.query.filter_by(entry_id=entry.id).count(), 0)
         self.assertEqual(EntryRevealState.query.filter_by(entry_id=entry.id).count(), 0)
         self.assertEqual(NovelEntityMention.query.filter_by(entry_id=entry.id).count(), 0)
+        self.assertEqual(NovelPart.query.get(part.id).entry_ids, [])
 
     def test_world_backup_contains_extensions(self):
         payload = self.client.get(f"/api/worlds/{self.world.id}/backup").get_json()
@@ -331,6 +406,7 @@ class UpdateSpecTest(unittest.TestCase):
             EntrySkillLink(entry_id=entry.id, skill_id=skill.id, rank=2),
         ]); db.session.commit()
         chapter = self.client.post("/api/novel/chapters", json={"title": "복원 장"}).get_json()
+        self.client.put(f"/api/novel/parts/{chapter['part_id']}", json={"entry_ids": [entry.id]})
         self.client.put(f"/api/novel/chapters/{chapter['id']}", json={"content": "별칭이 나타났다."})
         self.client.put("/api/novel/style", json={"chapter_id": chapter["id"], "pov": "1인칭"})
         self.client.put(f"/api/entries/{entry.id}/reveal", json={"states": [{"field_path": "content", "visibility": "챕터공개", "reveal_chapter_id": chapter["id"]}]})
@@ -346,7 +422,9 @@ class UpdateSpecTest(unittest.TestCase):
         self.assertEqual(NovelEntityMention.query.filter_by(entry_id=restored.id).count(), 1)
         restored_chapter = NovelChapter.query.filter_by(world_id=self.world.id, title="복원 장").one()
         self.assertIsNotNone(restored_chapter.part_id)
-        self.assertIsNotNone(NovelPart.query.get(restored_chapter.part_id))
+        restored_part = NovelPart.query.get(restored_chapter.part_id)
+        self.assertIsNotNone(restored_part)
+        self.assertEqual(restored_part.entry_ids, [restored.id])
 
 
 if __name__ == "__main__":

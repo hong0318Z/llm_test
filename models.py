@@ -219,6 +219,11 @@ class AppSettings(db.Model):
     llm_api_key = db.Column(db.Text, default="")
     embedding_base_url = db.Column(db.String(500), default="")
     embedding_api_key = db.Column(db.Text, default="")
+    # 소설 생성 전역 문체. 소설/챕터별 덮어쓰기 없이 한 곳에서 관리한다.
+    novel_pov = db.Column(db.String(100), default="3인칭 관찰자")
+    novel_tone_guide = db.Column(db.Text, default="")
+    novel_forbidden_expressions = db.Column(db.Text, default="")
+    novel_sample_text = db.Column(db.Text, default="")
 
     @staticmethod
     def get():
@@ -244,6 +249,10 @@ class AppSettings(db.Model):
             "llm_base_url": self.llm_base_url or "",
             "llm_api_key_saved": bool(self.llm_api_key),
             "embedding_base_url": self.embedding_base_url or "",
+            "novel_pov": self.novel_pov or "3인칭 관찰자",
+            "novel_tone_guide": self.novel_tone_guide or "",
+            "novel_forbidden_expressions": self.novel_forbidden_expressions or "",
+            "novel_sample_text": self.novel_sample_text or "",
             "embedding_api_key_saved": bool(self.embedding_api_key),
         }
 
@@ -347,13 +356,20 @@ class NovelPart(db.Model):
     world_id = db.Column(db.Integer, db.ForeignKey("worlds.id"), nullable=False, index=True)
     title = db.Column(db.String(250), default="기본 이야기")
     description = db.Column(db.Text, default="")
+    entry_ids_json = db.Column(db.Text, default="[]")
     order_no = db.Column(db.Integer, default=0)
     is_public = db.Column(db.Boolean, default=False)
     public_token = db.Column(db.String(100), unique=True, nullable=True, index=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    @property
+    def entry_ids(self):
+        try:return [int(x) for x in json.loads(self.entry_ids_json or "[]")]
+        except (TypeError,ValueError,json.JSONDecodeError):return []
+    @entry_ids.setter
+    def entry_ids(self,value):self.entry_ids_json=json.dumps(list(dict.fromkeys(int(x) for x in (value or []))),ensure_ascii=False)
     def to_dict(self, with_count=False):
-        d={"id":self.id,"world_id":self.world_id,"title":self.title or "기본 이야기","description":self.description or "","order_no":self.order_no,"is_public":bool(self.is_public),"public_token":self.public_token or None,"created_at":self.created_at.isoformat()+"Z" if self.created_at else None}
+        d={"id":self.id,"world_id":self.world_id,"title":self.title or "기본 이야기","description":self.description or "","entry_ids":self.entry_ids,"order_no":self.order_no,"is_public":bool(self.is_public),"public_token":self.public_token or None,"created_at":self.created_at.isoformat()+"Z" if self.created_at else None}
         if with_count:d["chapter_count"]=NovelChapter.query.filter_by(part_id=self.id).count()
         return d
 

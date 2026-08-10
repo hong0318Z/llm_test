@@ -375,13 +375,11 @@ def generate_world_detail_batch(context: str, items: list, existing_entries: lis
 
 
 def generate_novel_text(world_id: int, instruction: str, chapter: dict = None, entry_ids: list = None) -> dict:
-    from models import WorldEntry, WorldWritingStyle, NovelChapter, EntryAttributeValue, WorldAttributeSchema, EntrySkillLink, WorldSkillRegistry
+    from models import AppSettings, WorldEntry, NovelChapter, EntryAttributeValue, WorldAttributeSchema, EntrySkillLink, WorldSkillRegistry
     client, model=get_llm_client()
-    base_style=WorldWritingStyle.query.filter_by(world_id=world_id,chapter_id=None).first();chapter_style=WorldWritingStyle.query.filter_by(world_id=world_id,chapter_id=(chapter or {}).get("id")).first()
-    base=base_style.to_dict() if base_style else {"pov":"3인칭 관찰자","tone_guide":"","forbidden_expressions":"","sample_text":""};over=chapter_style.to_dict() if chapter_style else {}
-    style={k:(over.get(k) or base.get(k,"")) for k in ("pov","tone_guide","forbidden_expressions","sample_text")}
+    settings=AppSettings.get();style={"pov":settings.novel_pov or "3인칭 관찰자","tone_guide":settings.novel_tone_guide or "","forbidden_expressions":settings.novel_forbidden_expressions or "","sample_text":settings.novel_sample_text or ""}
     entries_q=WorldEntry.query.filter_by(world_id=world_id,is_active=True)
-    if entry_ids: entries_q=entries_q.filter(WorldEntry.id.in_(entry_ids))
+    if entry_ids is not None:entries_q=entries_q.filter(WorldEntry.id.in_(entry_ids or [-1]))
     entry_rows=entries_q.limit(30).all();entries=[e.to_dict() for e in entry_rows];stat_lines=[]
     for e in entry_rows:
         attrs=[]
@@ -393,7 +391,7 @@ def generate_novel_text(world_id: int, instruction: str, chapter: dict = None, e
             skill=WorldSkillRegistry.query.get(link.skill_id)
             if skill:skills.append(skill.name+(f"({link.rank})" if link.rank else ""))
         if attrs or skills:stat_lines.append(f"{e.title} | 능력치 {', '.join(attrs)} | 스킬/특성 {', '.join(skills)}")
-    all_past=NovelChapter.query.filter_by(world_id=world_id).all();query_words=_extract_context_words(instruction+" "+(chapter or {}).get("content","")[-1500:])
+    all_past=NovelChapter.query.filter_by(world_id=world_id,part_id=((chapter or {}).get("part") or {}).get("id")).filter(NovelChapter.id!=(chapter or {}).get("id")).all();query_words=_extract_context_words(instruction+" "+(chapter or {}).get("content","")[-1500:])
     past=sorted(all_past,key=lambda c:len(_extract_context_words(c.title+" "+c.content)&query_words),reverse=True)[:3]
     style_text=json.dumps(style,ensure_ascii=False)
     part_context=json.dumps((chapter or {}).get("part") or {},ensure_ascii=False)
@@ -533,46 +531,101 @@ JSON만 출력:
     return result
 
 
+def propose_character_attribute_fill(entries: list, required_axes: list, instruction: str = "") -> dict:
+    """기존 스키마는 출력하지 않고 선택된 인물의 능력치 값과 근거만 제안한다."""
+    client,model=get_llm_client();key=lambda value:"".join(str(value or "").split()).casefold()
+    axes={key(a.get("axis_name")):a for a in (required_axes or []) if a.get("axis_name")}
+    entry_ids={int(e.get("id")) for e in (entries or []) if e.get("id") is not None}
+    compact_axes=[{"axis_name":a.get("axis_name"),"min_tier":a.get("min_tier",1),"max_tier":a.get("max_tier",5),"description":a.get("description",""),"tier_descriptions":a.get("tier_descriptions") or a.get("tier_labels") or {}} for a in required_axes]
+    base="""당신은 TRPG 캐릭터 능력치 판정자입니다. 제공된 기존 능력치 축으로 선택된 인물의 수치와 인물별 근거만 작성하세요.
+능력치 스키마나 단계 설명을 다시 출력하지 마세요. 모든 entry_id와 axis_name을 입력과 정확히 유지하고, 각 인물에 모든 축을 빠짐없이 배정하세요.
+value는 해당 축의 min_tier~max_tier 범위 정수여야 합니다. description에는 인물 본문의 어떤 설정 때문에 그 수치인지 구체적으로 작성하세요.
+JSON만 출력: {"entries":[{"entry_id":1,"attributes":{"힘":{"value":7,"description":"용병 훈련으로 무거운 장비를 오래 다룬다."}}}]}
+"""
+    def call(prompt,label):
+        raw=client.chat.completions.create(model=model,messages=[{"role":"user","content":prompt}],temperature=.15,max_tokens=get_max_output_tokens()).choices[0].message.content or ""
+        parsed=_parse_json_safe(raw,label);return (parsed if isinstance(parsed,dict) else {}),raw
+    def normalize(payload):
+        rows={}
+        for item in payload.get("entries") or []:
+            if not isinstance(item,dict):continue
+            try:entry_id=int(item.get("entry_id"))
+            except (TypeError,ValueError):continue
+            if entry_id not in entry_ids:continue
+            attrs={}
+            for name,value in (item.get("attributes") or {}).items():
+                original=axes.get(key(name))
+                if not original:continue
+                attrs[original.get("axis_name")]=value
+            rows[entry_id]={"entry_id":entry_id,"attributes":attrs,"reused_skill_ids":[]}
+        return rows
+    def missing(rows):
+        return {eid:[a.get("axis_name") for a in required_axes if a.get("axis_name") not in rows.get(eid,{}).get("attributes",{})] for eid in entry_ids if any(a.get("axis_name") not in rows.get(eid,{}).get("attributes",{}) for a in required_axes)}
+    prompt=base+"\n기존 능력치 축:\n"+json.dumps(compact_axes,ensure_ascii=False)+"\n선택된 인물:\n"+json.dumps(entries,ensure_ascii=False)+"\n추가 요청:\n"+(instruction or "인물 본문을 근거로 배정")
+    first,raw=call(prompt,"character_attribute_fill");rows=normalize(first);raw_parts=[raw];missing_values=missing(rows)
+    if missing_values:
+        retry_prompt=base+"\n이전 응답에서 아래 인물·축 값이 누락되었습니다. 누락된 값만 보충하세요:\n"+json.dumps(missing_values,ensure_ascii=False)+"\n기존 능력치 축:\n"+json.dumps(compact_axes,ensure_ascii=False)+"\n선택된 인물:\n"+json.dumps(entries,ensure_ascii=False)
+        retry,raw2=call(retry_prompt,"character_attribute_fill_retry");raw_parts.append(raw2)
+        for entry_id,item in normalize(retry).items():
+            target=rows.setdefault(entry_id,{"entry_id":entry_id,"attributes":{},"reused_skill_ids":[]});target["attributes"].update(item.get("attributes") or {})
+        missing_values=missing(rows)
+    return {"attribute_schemas":[],"entries":list(rows.values()),"missing_values_after_retry":{str(k):v for k,v in missing_values.items()},"_raw":"\n\n===== 자동 보충 재요청 =====\n\n".join(raw_parts)}
+
+
 def propose_attribute_schema_fill(required_axes: list, metadata_rules: str = "", instruction: str = "") -> dict:
-    """저장된 축을 개명하지 않고 축 설명과 단계별 행동 서술을 완성한다."""
+    """저장된 축을 개명하지 않고 비어 있는 설명과 단계 서술만 완성한다."""
     client,model=get_llm_client();key=lambda value:"".join(str(value or "").split()).casefold()
     required={key(a.get("axis_name")):a for a in (required_axes or []) if a.get("axis_name")}
-    compact=[{"axis_name":a.get("axis_name"),"min_tier":a.get("min_tier",1),"max_tier":a.get("max_tier",5),"description":a.get("description",""),"tier_descriptions":a.get("tier_descriptions") or a.get("tier_labels") or {}} for a in required_axes]
-    base="""당신은 TRPG 능력치 스키마 설계자입니다. 캐릭터 수치를 배정하지 말고, 제공된 능력치 축 자체의 설명과 모든 단계 서술만 완성하세요.
-축을 추가·삭제·개명하지 말고 axis_name, min_tier, max_tier를 입력과 정확히 같게 유지하세요.
-각 description에는 이 축의 판정 용도와 수치 의미를 작성하세요. tier_descriptions에는 min_tier부터 max_tier까지 모든 정수 키를 하나도 빠뜨리지 마세요.
+    base="""당신은 TRPG 능력치 스키마 설계자입니다. 캐릭터 수치를 배정하지 말고, 제공된 능력치 축의 빈 설명만 작성하세요.
+축을 추가·삭제·개명하지 말고 axis_name을 입력과 정확히 같게 유지하세요. 요청하지 않은 필드는 출력하지 마세요.
+missing_description이 true이면 description에 이 축의 판정 용도와 수치 의미를 작성하세요. missing_tiers에 적힌 번호만 tier_descriptions에 작성하세요.
 각 단계는 단순히 '낮음/보통/높음'이라고 하지 말고 가능한 행동, 성공 범위, 한계가 드러나게 쓰며 단계가 올라갈수록 일관되게 향상되어야 합니다.
-JSON만 출력: {"attribute_schemas":[{"axis_name":"힘","min_tier":1,"max_tier":10,"description":"판정 용도","tier_descriptions":{"1":"행동과 한계","2":"행동과 한계"}}]}
+JSON만 출력: {"attribute_schemas":[{"axis_name":"힘","description":"판정 용도","tier_descriptions":{"2":"2단계 행동과 한계"}}]}
 """
-    prompt=base+"\n반드시 완성할 축:\n"+json.dumps(compact,ensure_ascii=False)+"\n세계관 메타데이터:\n"+metadata_rules+"\n추가 요청:\n"+(instruction or "세계관의 척도에 맞게 구체적으로 작성")
 
     def call(text,label):
         raw=client.chat.completions.create(model=model,messages=[{"role":"user","content":text}],temperature=.2,max_tokens=get_max_output_tokens()).choices[0].message.content or ""
         parsed=_parse_json_safe(raw,label);return (parsed if isinstance(parsed,dict) else {}),raw
 
-    def normalize(payload):
-        result={}
+    merged={}
+    for k,original in required.items():
+        min_tier=int(original.get("min_tier",1));max_tier=int(original.get("max_tier",5));tiers=original.get("tier_descriptions") or original.get("tier_labels") or {}
+        merged[k]={"axis_name":original.get("axis_name"),"min_tier":min_tier,"max_tier":max_tier,"description":str(original.get("description") or "").strip(),"tier_descriptions":{str(n):str(tiers.get(str(n),tiers.get(n,"")) or "").strip() for n in range(min_tier,max_tier+1)}}
+
+    def merge_payload(payload):
         for schema in payload.get("attribute_schemas") or []:
             if not isinstance(schema,dict):continue
             original=required.get(key(schema.get("axis_name")))
             if not original:continue
+            target=merged[key(original.get("axis_name"))]
+            if not target["description"] and str(schema.get("description") or "").strip():target["description"]=str(schema.get("description")).strip()
             tiers=schema.get("tier_descriptions") if isinstance(schema.get("tier_descriptions"),dict) else schema.get("tier_labels")
             if not isinstance(tiers,dict):tiers={}
-            result[key(original.get("axis_name"))]={"axis_name":original.get("axis_name"),"min_tier":original.get("min_tier",1),"max_tier":original.get("max_tier",5),"description":str(schema.get("description") or "").strip(),"tier_descriptions":{str(n):str(tiers.get(str(n),tiers.get(n,"")) or "").strip() for n in range(int(original.get("min_tier",1)),int(original.get("max_tier",5))+1)}}
-        return result
+            for n in range(target["min_tier"],target["max_tier"]+1):
+                value=str(tiers.get(str(n),tiers.get(n,"")) or "").strip()
+                if not target["tier_descriptions"][str(n)] and value:target["tier_descriptions"][str(n)]=value
 
-    first,raw=call(prompt,"attribute_schema_fill");merged=normalize(first);raw_parts=[raw]
     def incomplete_keys():
         missing=[]
         for k,original in required.items():
             schema=merged.get(k)
             if not schema or not schema.get("description") or any(not schema.get("tier_descriptions",{}).get(str(n)) for n in range(int(original.get("min_tier",1)),int(original.get("max_tier",5))+1)):missing.append(k)
         return missing
+
+    def missing_request(keys):
+        rows=[]
+        for k in keys:
+            schema=merged[k]
+            rows.append({"axis_name":schema["axis_name"],"missing_description":not bool(schema["description"]),"missing_tiers":[n for n in range(schema["min_tier"],schema["max_tier"]+1) if not schema["tier_descriptions"].get(str(n))]})
+        return rows
+
     missing=incomplete_keys()
+    if not missing:return {"attribute_schemas":list(merged.values()),"missing_axes_after_retry":[],"_raw":""}
+    prompt=base+"\n채울 빈 필드:\n"+json.dumps(missing_request(missing),ensure_ascii=False)+"\n세계관 메타데이터:\n"+metadata_rules+"\n추가 요청:\n"+(instruction or "세계관의 척도에 맞게 구체적으로 작성")
+    first,raw=call(prompt,"attribute_schema_fill");merge_payload(first);raw_parts=[raw];missing=incomplete_keys()
     if missing:
-        focus=[compact_item for compact_item in compact if key(compact_item.get("axis_name")) in missing]
-        retry,raw2=call(base+"\n이전 응답에서 다음 축 또는 단계가 누락되었습니다. 아래 축만 모든 단계까지 완성하세요:\n"+json.dumps(focus,ensure_ascii=False)+"\n추가 요청:\n"+(instruction or "구체적으로 작성"),"attribute_schema_fill_retry")
-        raw_parts.append(raw2);merged.update(normalize(retry));missing=incomplete_keys()
+        retry,raw2=call(base+"\n이전 응답에서 아래 빈 필드가 누락되었습니다. 이것만 보충하세요:\n"+json.dumps(missing_request(missing),ensure_ascii=False)+"\n추가 요청:\n"+(instruction or "구체적으로 작성"),"attribute_schema_fill_retry")
+        raw_parts.append(raw2);merge_payload(retry);missing=incomplete_keys()
     return {"attribute_schemas":list(merged.values()),"missing_axes_after_retry":[required[k].get("axis_name") for k in missing],"_raw":"\n\n===== 자동 보충 재요청 =====\n\n".join(raw_parts)}
 
 

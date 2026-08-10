@@ -375,7 +375,7 @@
 
   <!-- 마스터 설정 모달 -->
   <div class="modal fade" id="masterSettingsModal" tabindex="-1">
-    <div class="modal-dialog modal-md">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
       <div class="modal-content">
         <div class="modal-header">
           <h5 class="modal-title"><i class="bi bi-gear me-2"></i>마스터 설정</h5>
@@ -438,6 +438,13 @@
               <span style="color:#ffb86c;">0 = RAG 비활성화 (전체 엔트리 전달)</span>
             </div>
           </div>
+
+          <hr style="border-color:var(--border);">
+          <div class="mb-2"><div class="form-label"><i class="bi bi-feather me-1" style="color:#ffb86c;"></i>소설 전역 문체</div><div class="form-text mb-3">여기서 한 번 설정하면 모든 이야기/부와 챕터의 LLM 생성에 동일하게 적용됩니다.</div></div>
+          <div class="mb-3"><label class="form-label small">시점</label><input class="form-control" id="msNovelPov" placeholder="예: 3인칭 관찰자"></div>
+          <div class="mb-3"><label class="form-label small">톤 가이드</label><textarea class="form-control" id="msNovelTone" rows="3" placeholder="문장의 분위기, 호흡, 묘사 밀도"></textarea></div>
+          <div class="mb-3"><label class="form-label small">금지 표현</label><textarea class="form-control" id="msNovelForbidden" rows="2" placeholder="피해야 할 표현과 서술 습관"></textarea></div>
+          <div class="mb-3"><label class="form-label small">샘플 문체</label><textarea class="form-control" id="msNovelSample" rows="5" placeholder="LLM이 모방할 예시 문단"></textarea></div>
 
           <hr style="border-color:var(--border);">
           <div class="form-check form-switch mb-3">
@@ -602,6 +609,10 @@
     document.getElementById('msEntriesPerTick').value = s.entries_per_tick ?? 1;
     document.getElementById('msUserChars').value = s.max_user_entry_chars ?? 1000;
     document.getElementById('msRagBudget').value = s.rag_token_budget ?? 0;
+    document.getElementById('msNovelPov').value = s.novel_pov ?? '3인칭 관찰자';
+    document.getElementById('msNovelTone').value = s.novel_tone_guide ?? '';
+    document.getElementById('msNovelForbidden').value = s.novel_forbidden_expressions ?? '';
+    document.getElementById('msNovelSample').value = s.novel_sample_text ?? '';
     setModelSelect('msModelSim', s.llm_model_simulation ?? 'claude-sonnet-4.5');
     setModelSelect('msModelNai', s.llm_model_nai ?? 'claude-sonnet-4.5');
     document.getElementById('msEmbeddingEnabled').checked = !!s.embedding_enabled;
@@ -655,6 +666,10 @@
       entries_per_tick: parseInt(document.getElementById('msEntriesPerTick').value) || 0,
       max_user_entry_chars: parseInt(document.getElementById('msUserChars').value) || 0,
       rag_token_budget: parseInt(document.getElementById('msRagBudget').value) || 0,
+      novel_pov: document.getElementById('msNovelPov').value.trim() || '3인칭 관찰자',
+      novel_tone_guide: document.getElementById('msNovelTone').value,
+      novel_forbidden_expressions: document.getElementById('msNovelForbidden').value,
+      novel_sample_text: document.getElementById('msNovelSample').value,
       llm_model_simulation: document.getElementById('msCustomModel').value.trim() || document.getElementById('msModelSim').value,
       llm_model_nai: document.getElementById('msCustomNaiModel').value.trim() || document.getElementById('msModelNai').value,
       embedding_enabled: document.getElementById('msEmbeddingEnabled').checked,

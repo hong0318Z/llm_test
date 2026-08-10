@@ -209,6 +209,58 @@ class UpdateSpecTest(unittest.TestCase):
         self.assertEqual(stat["tier_description"],"힘 7단계")
         self.assertEqual(stat["description"],"용병 훈련")
 
+    def test_single_entry_generation_unwraps_nested_metadata_json(self):
+        import json
+        import llm_client
+        inner = {
+            "content": "공개 인물 설명",
+            "secret": "숨겨진 혈통",
+            "attributes": {"힘": {"value": 7, "description": "오랜 훈련"}},
+        }
+        raw = json.dumps({"content": json.dumps(inner, ensure_ascii=False)}, ensure_ascii=False)
+        completion = SimpleNamespace(create=lambda **kwargs: SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=raw))],
+            usage=SimpleNamespace(prompt_tokens=10, completion_tokens=20),
+        ))
+        client = SimpleNamespace(chat=SimpleNamespace(completions=completion))
+        with patch.object(llm_client, "get_llm_client", return_value=(client, "test-model")):
+            result = llm_client.generate_entry("인물", "인물", "", [], "", max_chars=0)
+        self.assertEqual(result["content"], "공개 인물 설명")
+        self.assertNotIn("숨겨진 혈통", result["content"])
+        self.assertEqual(result["secret"], "숨겨진 혈통")
+        self.assertEqual(result["attributes"]["힘"]["value"], 7)
+
+    def test_single_entry_generation_removes_metadata_appended_to_content(self):
+        import json
+        import llm_client
+        appended = json.dumps({
+            "secret": "감춰진 계약",
+            "attributes": {"지능": {"value": 6, "description": "학자 교육"}},
+        }, ensure_ascii=False)
+        payload = {"content": f"공개 설명입니다.\n```json\n{appended}\n```"}
+        raw = json.dumps(payload, ensure_ascii=False)
+        normalized = llm_client._normalize_generated_entry_response(raw, payload)
+        self.assertEqual(normalized["content"], "공개 설명입니다.")
+        self.assertNotIn("감춰진 계약", normalized["content"])
+        self.assertEqual(normalized["secret"], "감춰진 계약")
+        self.assertEqual(normalized["attributes"]["지능"]["value"], 6)
+
+    def test_generated_attribute_axis_ignores_spacing_difference(self):
+        self.client.put("/api/metadata/attributes", json={"attributes": [{
+            "axis_name": "카리스마/화술", "min_tier": 1, "max_tier": 10,
+        }]})
+        response = self.client.post("/api/entries", json={
+            "title": "외교관", "category": "인물", "content": "공개 설명",
+            "secret": "비밀 협상가",
+            "attributes": {"카리스마 / 화술": {"value": 8, "description": "능숙한 협상"}},
+        })
+        self.assertEqual(response.status_code, 201)
+        entry_id = response.get_json()["id"]
+        stat = self.client.get(f"/api/entries/{entry_id}/stat-block").get_json()["attributes"][0]
+        self.assertEqual(stat["axis_name"], "카리스마/화술")
+        self.assertEqual(stat["value"], 8)
+        self.assertEqual(self.client.get(f"/api/entries/{entry_id}/secret").get_json()["secret"], "비밀 협상가")
+
     def test_secret_requires_explicit_endpoint_and_is_backed_up(self):
         response=self.client.post("/api/entries",json={"title":"비밀 인물","category":"인물","content":"공개 정보","secret":"왕위 계승자"})
         entry_id=response.get_json()["id"]

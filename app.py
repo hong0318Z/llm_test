@@ -572,10 +572,11 @@ def _apply_generated_attributes(entry, attributes):
     """LLM 제안 능력치를 현재 세계관의 활성 스키마 범위에 맞춰 저장한다."""
     if entry.category != "인물" or not isinstance(attributes, dict):
         return
+    axes=WorldAttributeSchema.query.filter_by(world_id=entry.world_id,is_active=True).all()
+    key=lambda value:"".join(str(value or "").split()).casefold()
+    axis_by_key={key(axis.axis_name):axis for axis in axes}
     for axis_name, value_data in attributes.items():
-        axis = WorldAttributeSchema.query.filter_by(
-            world_id=entry.world_id, axis_name=str(axis_name), is_active=True
-        ).first()
+        axis=axis_by_key.get(key(axis_name))
         if not axis:
             continue
         value = value_data.get("value", axis.min_tier) if isinstance(value_data, dict) else value_data

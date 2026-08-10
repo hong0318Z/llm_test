@@ -162,6 +162,102 @@ def _parse_json_safe(raw: str, context: str = "") -> dict:
         }
 
 
+def _extract_json_object(raw: str):
+    """코드블록·설명문·이중 인코딩 문자열 안에서 완전한 JSON 객체를 찾는다."""
+    text=str(raw or "").strip();candidates=[text]
+    candidates.extend(re.findall(r"```(?:json)?\s*([\s\S]*?)```",text,flags=re.IGNORECASE))
+    decoder=json.JSONDecoder();found=[]
+    for candidate in candidates:
+        clean=candidate.strip()
+        try:
+            value=json.loads(clean)
+            if isinstance(value,dict):found.append(value)
+        except (json.JSONDecodeError,TypeError):pass
+        for match in re.finditer(r"\{",clean):
+            try:
+                value,_=decoder.raw_decode(clean[match.start():])
+                if isinstance(value,dict):found.append(value)
+            except json.JSONDecodeError:continue
+    if not found:return None
+    def score(value):
+        keys=set(value)
+        return (10 if keys & {"content","public_content","public","본문","entry"} else 0)+(4 if keys & {"secret","secret_content","비밀"} else 0)+(3 if keys & {"attributes","metadata","메타데이터"} else 0)+len(keys)/100
+    return max(found,key=score)
+
+
+def _normalize_generated_attributes(value):
+    """LLM의 객체/배열형 능력치 응답을 저장 API의 축 이름 객체 형식으로 통일한다."""
+    if isinstance(value,dict) and isinstance(value.get("attributes"),dict):value=value["attributes"]
+    if isinstance(value,dict) and isinstance(value.get("능력치"),dict):value=value["능력치"]
+    if isinstance(value,list):
+        converted={}
+        for item in value:
+            if not isinstance(item,dict):continue
+            name=item.get("axis_name") or item.get("name") or item.get("능력치")
+            if name:converted[str(name)]={"value":item.get("value",item.get("score",item.get("수치"))),"description":item.get("description",item.get("reason",item.get("근거","")))}
+        value=converted
+    if not isinstance(value,dict):return {}
+    result={}
+    for name,item in value.items():
+        if isinstance(item,dict):
+            score=item.get("value",item.get("score",item.get("수치")))
+            description=item.get("description",item.get("reason",item.get("근거","")))
+            result[str(name)]={"value":score,"description":str(description or "")}
+        else:result[str(name)]={"value":item,"description":""}
+    return result
+
+
+def _split_embedded_entry_metadata(text: str):
+    """공개 본문 뒤에 붙은 secret/attributes JSON을 분리한다."""
+    source=str(text or "");decoder=json.JSONDecoder();matches=[]
+    for match in re.finditer(r"\{",source):
+        try:value,length=decoder.raw_decode(source[match.start():])
+        except json.JSONDecodeError:continue
+        if isinstance(value,dict) and set(value) & {"secret","secret_content","비밀","attributes","metadata","메타데이터"}:
+            matches.append((match.start(),match.start()+length,value))
+    if not matches:return source,None
+    start,end,value=max(matches,key=lambda item:(len(set(item[2]) & {"secret","secret_content","비밀","attributes","metadata","메타데이터"}),item[1]-item[0]))
+    if set(value) & {"content","public_content","public","본문","body"}:
+        cleaned=next((value.get(k) for k in ("content","public_content","public","본문","body") if value.get(k) is not None),"")
+    else:cleaned=(source[:start]+source[end:]).replace("```json","").replace("```JSON","").replace("```","")
+    return str(cleaned or "").strip(),value
+
+
+def _normalize_generated_entry_response(raw: str, parsed) -> dict:
+    """공개 본문, 비밀, 능력치를 분리하고 구조화 원문의 본문 유입을 차단한다."""
+    payload=parsed if isinstance(parsed,dict) and not parsed.get("_parse_error") else _extract_json_object(raw)
+    if not isinstance(payload,dict):
+        text=str(raw or "").strip();looks_structured=text.startswith(("{","```")) or any(marker in text for marker in ('"secret"','"attributes"','"비밀"','"메타데이터"'))
+        if looks_structured:raise ValueError("LLM이 비밀·능력치가 포함된 JSON을 깨진 형식으로 반환해 본문 저장을 중단했습니다. 다시 생성하세요.")
+        return {"content":text,"secret":"","attributes":{}}
+    for _ in range(3):
+        if isinstance(payload.get("entry"),dict):payload=payload["entry"];continue
+        content_value=next((payload.get(k) for k in ("content","public_content","public","본문","body") if payload.get(k) is not None),"")
+        nested=content_value if isinstance(content_value,dict) else (_extract_json_object(content_value) if isinstance(content_value,str) and content_value.strip().startswith(("{","```")) else None)
+        if isinstance(nested,dict) and set(nested) & {"content","public_content","public","본문","entry","secret","attributes","metadata","메타데이터"}:
+            merged=dict(nested)
+            for key in ("secret","secret_content","비밀","attributes","metadata","메타데이터"):
+                if key not in merged and key in payload:merged[key]=payload[key]
+            payload=merged;continue
+        break
+    metadata=next((payload.get(k) for k in ("metadata","메타데이터","meta") if isinstance(payload.get(k),dict)),None)
+    if metadata is None:
+        metadata_text=next((payload.get(k) for k in ("metadata","메타데이터","meta") if isinstance(payload.get(k),str)),"")
+        metadata=_extract_json_object(metadata_text) or {}
+    content=next((payload.get(k) for k in ("content","public_content","public","본문","body") if payload.get(k) is not None),metadata.get("content",""))
+    if isinstance(content,(dict,list)):raise ValueError("LLM 공개 본문이 문자열이 아니라 JSON 객체로 반환되었습니다. 다시 생성하세요.")
+    content=str(content or "").strip()
+    content,embedded=_split_embedded_entry_metadata(content)
+    if isinstance(embedded,dict):
+        for key in ("secret","secret_content","비밀","attributes","metadata","메타데이터"):
+            if (key not in payload or not payload.get(key)) and embedded.get(key) is not None:payload[key]=embedded[key]
+        embedded_meta=next((embedded.get(k) for k in ("metadata","메타데이터","meta") if isinstance(embedded.get(k),dict)),{})
+        for key,value in embedded_meta.items():metadata.setdefault(key,value)
+    secret=next((payload.get(k) for k in ("secret","secret_content","비밀") if payload.get(k) is not None),metadata.get("secret",metadata.get("비밀","")))
+    attributes=payload.get("attributes",metadata.get("attributes",metadata.get("능력치",{})))
+    return {"content":content,"secret":str(secret or ""),"attributes":_normalize_generated_attributes(attributes)}
+
+
 SYSTEM_PROMPT_TEMPLATE = """\
 당신은 세계관 자율 진화 엔진입니다.
 주어진 세계관 엔트리들을 기반으로 논리적으로 일관된 사건과 변화를 생성합니다.
@@ -993,14 +1089,16 @@ def generate_entry(title: str, category: str, hint: str, ref_entries: list, meta
     )
     raw = response.choices[0].message.content.strip()
     parsed = _parse_json_safe(raw, "generate_entry")
-    content = str(parsed.get("content", raw))
+    normalized = _normalize_generated_entry_response(raw, parsed)
+    content = normalized["content"]
+    if not content:raise ValueError("LLM이 공개 본문을 반환하지 않았습니다.")
     if max_chars:content=content[:max_chars]
     tokens_in = getattr(response.usage, "prompt_tokens", 0)
     tokens_out = getattr(response.usage, "completion_tokens", 0)
     return {
         "content": content,
-        "secret": str(parsed.get("secret") or ""),
-        "attributes": parsed.get("attributes") if isinstance(parsed.get("attributes"), dict) else {},
+        "secret": normalized["secret"][:10000],
+        "attributes": normalized["attributes"],
         "_tokens_in": tokens_in,
         "_tokens_out": tokens_out,
     }

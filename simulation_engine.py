@@ -7,6 +7,13 @@ from models import db, WorldEntry, SimulationRun, SimulationLog, TimelineEvent, 
 import llm_client
 
 
+def _limit_llm_content(content):
+    """마스터 설정이 0이면 원문 유지, 양수이면 저장 결과까지 강제 제한한다."""
+    text=str(content or "")
+    limit=AppSettings.get().max_llm_entry_chars or 0
+    return text[:limit] if limit>0 else text
+
+
 def run_simulation(run_id: int, app):
     """백그라운드에서 시뮬레이션 실행 (Flask app context 필요)"""
     with app.app_context():
@@ -83,7 +90,7 @@ def run_simulation(run_id: int, app):
                 embedding_enabled = _user_settings.embedding_enabled if _user_settings else settings.embedding_enabled
                 embedding_model = _user_settings.embedding_model if _user_settings else settings.embedding_model
                 reference_limit = _user_settings.rag_reference_limit if _user_settings else settings.rag_reference_limit
-                max_chars = settings.max_llm_entry_chars if settings.max_llm_entry_chars is not None else 500
+                max_chars = settings.max_llm_entry_chars if settings.max_llm_entry_chars is not None else 0
                 rag_budget = settings.rag_token_budget or 0
                 cfg_dict = {**config.to_dict(), "max_content_chars": max_chars, "rag_token_budget": rag_budget, "entries_per_tick": settings.entries_per_tick if settings.entries_per_tick is not None else 1}
                 if llm_client.needs_summary(entries, max_chars=max_chars):
@@ -183,7 +190,7 @@ def _run_auto_summary(run: SimulationRun, tick: int, entries: list, config: dict
             world_id=run.world_id,
             title=summary.get("title", f"세계관 요약 - 틱 {tick}"),
             category=summary.get("category", "관념"),
-            content=summary.get("content", ""),
+            content=_limit_llm_content(summary.get("content", "")),
             created_by=CREATOR_LLM,
             tick_created=tick,
             is_active=True,
@@ -261,7 +268,7 @@ def _apply_tick_result(run: SimulationRun, tick: int, result: dict):
                 world_id=run.world_id,
                 title=entry.title,
                 category=entry.category,
-                content=update.get("new_content", ""),
+                content=_limit_llm_content(update.get("new_content", "")),
                 created_by=CREATOR_LLM,
                 tick_created=tick,
                 is_active=True,
@@ -290,7 +297,7 @@ def _apply_tick_result(run: SimulationRun, tick: int, result: dict):
                 world_id=run.world_id,
                 title=entry.title,
                 category=entry.category,
-                content=update.get("new_content", ""),
+                content=_limit_llm_content(update.get("new_content", "")),
                 created_by=CREATOR_LLM,
                 tick_created=tick,
                 is_active=True,
@@ -318,7 +325,7 @@ def _apply_tick_result(run: SimulationRun, tick: int, result: dict):
             world_id=run.world_id,
             title=new.get("title", "이름없음"),
             category=new.get("category", "관념"),
-            content=new.get("content", ""),
+            content=_limit_llm_content(new.get("content", "")),
             created_by=CREATOR_LLM,
             tick_created=tick,
             primary_year=(new.get("primary_year") or "")[:100],

@@ -27,10 +27,34 @@ def _user_connection_settings():
 
 COPILOT_BASE_URL = "https://api.githubcopilot.com"
 DEFAULT_MODEL = "claude-sonnet-4.5"
-MAX_TOKENS = 16000  # Copilot API 최대값
+MAX_TOKENS = 262144  # 256K 출력 상한. 실제 생성 길이는 모델과 프롬프트가 결정한다.
 
 # 세계관 직렬화가 이 토큰 수를 넘으면 자동 요약 실행
-CONTEXT_SUMMARY_THRESHOLD = 120_000
+CONTEXT_SUMMARY_THRESHOLD = 240_000
+
+
+def get_max_output_tokens():
+    """현재 설정의 chat completion 출력 상한을 반환한다."""
+    raw = os.environ.get("LLM_MAX_OUTPUT_TOKENS")
+    if raw is None:
+        try:
+            from models import AppSettings
+            raw = AppSettings.get().llm_max_output_tokens
+        except Exception:
+            raw = MAX_TOKENS
+    try:
+        return max(1, min(MAX_TOKENS, int(raw)))
+    except (TypeError, ValueError):
+        return MAX_TOKENS
+
+
+def get_entry_char_limit():
+    """마스터 설정의 엔트리별 글자 제한. 0은 무제한이다."""
+    try:
+        from models import AppSettings
+        return max(0, int(AppSettings.get().max_llm_entry_chars or 0))
+    except Exception:
+        return 0
 
 
 def get_llm_client(model_override: str = None):
@@ -41,38 +65,15 @@ def get_llm_client(model_override: str = None):
     OpenAI 호환 서버) 해당 엔드포인트를 사용하고, 없으면 GitHub Copilot
     API를 사용합니다.
     """
-    local_base_url = os.environ.get("LLM_BASE_URL")
-    if local_base_url:
-        model = model_override or os.environ.get("LLM_MODEL", "local-model")
-        client = OpenAI(
-            base_url=local_base_url,
-            api_key=os.environ.get("LLM_API_KEY", "not-needed"),
-        )
-        return client, model
-
-    github_token = os.environ.get("GITHUB_TOKEN")
-    if not github_token:
-        raise EnvironmentError(
-            "GITHUB_TOKEN 환경변수가 필요합니다.\n"
-            ".env 파일에 GITHUB_TOKEN=your_token 을 추가하세요.\n"
-            "또는 로컬 모델을 사용하려면 LLM_BASE_URL을 설정하세요 (예: http://localhost:8080/v1)."
-        )
-
-    """Copilot 또는 OpenAI 호환 로컬/원격 서버 클라이언트 반환.
-
-    LLM_BASE_URL을 지정하면 Ollama, LM Studio, vLLM 등으로 전환된다.
-    """
     settings = _user_connection_settings()
     ui_base_url = settings.llm_base_url if settings else ""
     ui_api_key = settings.llm_api_key if settings else ""
     base_url = ui_base_url or os.environ.get("LLM_BASE_URL") or COPILOT_BASE_URL
     api_key = ui_api_key or os.environ.get("LLM_API_KEY") or os.environ.get("GITHUB_TOKEN")
     if not api_key:
-        # Ollama 등 인증 없는 OpenAI 호환 서버도 OpenAI SDK에는 더미 키가 필요하다.
-        if os.environ.get("LLM_BASE_URL"):
-            api_key = "local-no-key"
-        else:
-            raise EnvironmentError("GITHUB_TOKEN 또는 LLM_API_KEY가 필요합니다.")
+        # 로컬 OpenAI 호환 서버는 대개 인증이 없지만 SDK에는 더미 키가 필요하다.
+        if base_url != COPILOT_BASE_URL: api_key = "local-no-key"
+        else: raise EnvironmentError("GitHub Copilot에는 GITHUB_TOKEN이 필요합니다. 로컬 모델은 LLM Base URL을 설정하세요.")
 
     model = model_override or (settings.llm_model if settings and settings.llm_model else None) or os.environ.get("LLM_MODEL", DEFAULT_MODEL)
     client = OpenAI(
@@ -298,12 +299,12 @@ def design_world(context: str, answers: str = "", existing_entries: list = None,
                  prior_entries: list = None, batch_number: int = 1) -> dict:
     """큰 맥락을 DB 엔트리 초안과 보완 질문으로 변환한다. 저장은 호출자가 승인 후 수행한다."""
     client, model = get_llm_client()
-    existing = serialize_world_state(existing_entries or [], max_chars=250) if existing_entries else "(아직 없음)"
+    existing = serialize_world_state(existing_entries or [], max_chars=get_entry_char_limit()) if existing_entries else "(아직 없음)"
     prior = "\n".join(f"- [{e.get('category','')}] {e.get('title','')}" for e in (prior_entries or [])) or "(첫 번째 묶음)"
     prompt = f"=== 사용자의 큰 맥락 ===\n{context}\n\n=== 보완 답변 ===\n{answers or '(없음)'}\n\n=== 기존 DB (중복 생성 금지) ===\n{existing}\n\n=== 앞선 설계 묶음에서 이미 만든 항목 (절대 중복 금지) ===\n{prior}\n\n이번은 설계 묶음 {batch_number}입니다. 앞선 항목을 확장하는 서로 다른 6~12개 항목을 생성하세요. 관계·갈등·지리·제도 중 아직 비어 있는 영역을 우선하세요."
     response = client.chat.completions.create(model=model, messages=[
         {"role": "system", "content": WORLD_DESIGN_PROMPT}, {"role": "user", "content": prompt}
-    ], temperature=0.55, max_tokens=3000)
+    ], temperature=0.55, max_tokens=get_max_output_tokens())
     raw = response.choices[0].message.content or ""
     result = _parse_json_safe(raw, "world_design")
     result["_raw"] = raw
@@ -317,11 +318,12 @@ WORLD_STRUCTURE_PROMPT = """당신은 세계관 데이터베이스 설계자입�
 """
 
 
-def plan_world_structure(context: str, target_count: int, answers: str, existing_entries: list) -> dict:
+def plan_world_structure(context: str, target_count: int, answers: str, existing_entries: list, max_chars: int = None) -> dict:
     client, model = get_llm_client()
-    existing = serialize_world_state(existing_entries, max_chars=220) if existing_entries else "(없음)"
+    max_chars=get_entry_char_limit() if max_chars is None else max(0,int(max_chars))
+    existing = serialize_world_state(existing_entries, max_chars=max_chars) if existing_entries else "(없음)"
     prompt = f"=== 큰 맥락 ===\n{context}\n\n=== 보완 답변 ===\n{answers or '(없음)'}\n\n=== 기존 DB ===\n{existing}\n\n정확히 최대 {target_count}개 이하의 서로 다른 설계 항목을 제안하세요."
-    raw = client.chat.completions.create(model=model, messages=[{"role":"system","content":WORLD_STRUCTURE_PROMPT},{"role":"user","content":prompt}], temperature=0.45, max_tokens=2200).choices[0].message.content or ""
+    raw = client.chat.completions.create(model=model, messages=[{"role":"system","content":WORLD_STRUCTURE_PROMPT},{"role":"user","content":prompt}], temperature=0.45, max_tokens=get_max_output_tokens()).choices[0].message.content or ""
     result = _parse_json_safe(raw, "world_structure")
     result["_raw"] = raw
     return result
@@ -336,9 +338,10 @@ Markdown으로 읽기 쉬운 TRPG 시트를 작성하세요.
 - 장소: 유형/지형/규모, 분위기, 주요 구역, 주민/세력, 자원·위험, 비밀·모험 훅, 접근 경로, 연도별 변화
 - 세력: 목표·조직·자원·지도자·동맹/적대·현재 계획·약점·연도별 사건
 - 사건/연도: 발생 연도, 원인, 전개, 결과, 세계관 영향, 관련 인물·장소·세력
+모든 엔트리는 공개 본문 content와 비밀 정보 secret을 분리하세요. secret의 사실은 content에 암시하거나 반복하지 마세요. 다른 엔트리의 공개 설정에도 비밀을 근거로 사용하거나 크게 언급하지 마세요.
 연도와 관련된 항목은 "## 연도별 특기사항"에 해당 시점 사건을 기록하세요.
 설계 목록 밖의 새 항목을 추가하지 말고, Markdown 제목은 쓰지 마세요.
-JSON만 출력: {"entries":[{"title":"", "category":"", "content":"", "references":[], "attributes":{"축이름":{"value":1,"description":"이 인물에게 이 수치가 갖는 구체적 의미"}}, "reused_skill_ids":[], "new_skill_proposals":[{"name":"","description":"","type":"스킬","tags":[]}]}]}
+JSON만 출력: {"entries":[{"title":"", "category":"", "content":"", "secret":"클릭해서만 볼 비밀 설정", "references":[], "attributes":{"축이름":{"value":1,"description":"이 인물에게 이 수치가 갖는 구체적 의미"}}, "reused_skill_ids":[], "new_skill_proposals":[{"name":"","description":"","type":"스킬","tags":[]}]}]}
 """
 
 def _world_metadata_rules(world_id):
@@ -354,16 +357,19 @@ def _world_metadata_rules(world_id):
         return ""
 
 
-def generate_world_detail_batch(context: str, items: list, existing_entries: list, max_chars: int = 0) -> dict:
+def generate_world_detail_batch(context: str, items: list, existing_entries: list, max_chars: int = 0, world_id=None) -> dict:
     client, model = get_llm_client()
-    existing = serialize_world_state(existing_entries, max_chars=300) if existing_entries else "(없음)"
+    existing = serialize_world_state(existing_entries, max_chars=max_chars) if existing_entries else "(없음)"
     items_text = json.dumps(items, ensure_ascii=False)
-    length_rule = ("content 길이는 제한하지 마세요. 정보가 충분히 정리될 때까지 모델이 가능한 범위에서 충실하게 작성하세요." if not max_chars else f"각 content는 최대 {max_chars}자 이내로 작성하세요. 제한 안에서 정의·배경/역사·구조/특성·관계·갈등을 우선순위대로 충실히 담으세요.")
+    length_rule = ("content 길이는 제한하지 마세요. 성급히 요약하거나 짧게 끝내지 말고, 특별한 이유가 없으면 엔트리마다 최소 1500자 이상으로 모든 필수 구획·역사·관계·갈등·구체적 사례를 충실히 작성하세요." if not max_chars else f"각 content는 최대 {max_chars}자 이내로 작성하세요. 제한 안에서 정의·배경/역사·구조/특성·관계·갈등을 우선순위대로 충실히 담으세요.")
     prompt = f"=== 큰 맥락 ===\n{context}\n\n=== 이번에 상세 작성할 설계 항목 ===\n{items_text}\n\n=== 기존 DB 참고 ===\n{existing}"
-    world_id = next((e.get("world_id") for e in existing_entries if e.get("world_id")), None)
+    world_id = world_id or next((e.get("world_id") for e in existing_entries if e.get("world_id")), None)
     system_prompt = WORLD_DETAIL_PROMPT.replace("{length_rule}", length_rule).replace("{metadata_rules}", _world_metadata_rules(world_id))
-    raw = client.chat.completions.create(model=model, messages=[{"role":"system","content":system_prompt},{"role":"user","content":prompt}], temperature=0.6, max_tokens=8000).choices[0].message.content or ""
+    raw = client.chat.completions.create(model=model, messages=[{"role":"system","content":system_prompt},{"role":"user","content":prompt}], temperature=0.6, max_tokens=get_max_output_tokens()).choices[0].message.content or ""
     result = _parse_json_safe(raw, "world_detail_batch")
+    if max_chars:
+        for entry in result.get("entries", []):
+            entry["content"] = str(entry.get("content") or "")[:max_chars]
     result["_raw"] = raw
     return result
 
@@ -390,9 +396,9 @@ def generate_novel_text(world_id: int, instruction: str, chapter: dict = None, e
     all_past=NovelChapter.query.filter_by(world_id=world_id).all();query_words=_extract_context_words(instruction+" "+(chapter or {}).get("content","")[-1500:])
     past=sorted(all_past,key=lambda c:len(_extract_context_words(c.title+" "+c.content)&query_words),reverse=True)[:3]
     style_text=json.dumps(style,ensure_ascii=False)
-    prompt=f"문체 설정: {style_text}\n\n등장 엔트리:\n{serialize_world_state(entries,700)}\n\n능력치/스킬 시트:\n"+"\n".join(stat_lines)+"\n\n관련 과거 챕터:\n"+"\n".join(f"[{c.title}] {c.content[-1200:]}" for c in past)+f"\n\n현재 본문:\n{(chapter or {}).get('content','')}\n\n요청:\n{instruction}"
+    prompt=f"문체 설정: {style_text}\n\n등장 엔트리:\n{serialize_world_state(entries,get_entry_char_limit())}\n\n능력치/스킬 시트:\n"+"\n".join(stat_lines)+"\n\n관련 과거 챕터:\n"+"\n".join(f"[{c.title}] {c.content}" for c in past)+f"\n\n현재 본문:\n{(chapter or {}).get('content','')}\n\n요청:\n{instruction}"
     system="세계관 설정과 공개 범위를 존중하는 소설 작가입니다. 금지 표현과 인물 말투를 지키세요. 기존 DB에 없는 새 고유명사를 발견/창작하면 별도 후보로 분리하세요. JSON만 출력: {\"content\":\"Markdown 본문\",\"new_entity_proposals\":[{\"title\":\"\",\"category\":\"인물/장소/세력 등\",\"content\":\"등록 초안\"}]}"
-    response=client.chat.completions.create(model=model,messages=[{"role":"system","content":system},{"role":"user","content":prompt}],temperature=.75,max_tokens=6000)
+    response=client.chat.completions.create(model=model,messages=[{"role":"system","content":system},{"role":"user","content":prompt}],temperature=.75,max_tokens=get_max_output_tokens())
     raw=response.choices[0].message.content or "";parsed=_parse_json_safe(raw,"novel_generate")
     return {"proposal":parsed.get("content",raw) if isinstance(parsed,dict) else raw,"new_entity_proposals":parsed.get("new_entity_proposals",[]) if isinstance(parsed,dict) else [],"model":model}
 
@@ -416,10 +422,37 @@ def propose_entry_revision(entry: dict, instruction: str, history: list = None) 
     client, model = get_llm_client()
     past = "\n".join(f"{m.get('role','user')}: {m.get('content','')}" for m in (history or [])[-8:]) or "(없음)"
     prompt = f"=== 현재 엔트리 ===\nID: {entry.get('id')}\n제목: {entry.get('title')}\n분류: {entry.get('category')}\n내용:\n{entry.get('content')}\n참조: {entry.get('references', [])}\n\n=== 이전 대화 ===\n{past}\n\n=== 이번 요청 ===\n{instruction}"
-    raw = client.chat.completions.create(model=model, messages=[{"role":"system","content":ENTRY_REVISION_PROMPT},{"role":"user","content":prompt}], temperature=0.45, max_tokens=5000).choices[0].message.content or ""
+    raw = client.chat.completions.create(model=model, messages=[{"role":"system","content":ENTRY_REVISION_PROMPT},{"role":"user","content":prompt}], temperature=0.45, max_tokens=get_max_output_tokens()).choices[0].message.content or ""
     result = _parse_json_safe(raw, "entry_revision")
     if not isinstance(result, dict): result = {"reply": raw, "questions": [], "proposal": None}
     return result
+
+
+def propose_entry_from_chat(world_id: int, history: list, entries: list, instruction: str = "", model_override: str = None) -> dict:
+    """아이디어 대화에서 한 개의 저장 전 엔트리 초안을 만든다."""
+    client, model = get_llm_client(model_override)
+    conversation = "\n\n".join(
+        f"{'사용자' if m.get('role') == 'user' else '기획 파트너'}:\n{str(m.get('content') or '')}"
+        for m in (history or [])
+    )
+    length_rule = ("본문 길이를 임의로 줄이지 말고 대화에서 확정된 내용을 충분히 구조화하세요."
+                   if not get_entry_char_limit() else f"content는 최대 {get_entry_char_limit()}자 이내로 작성하세요.")
+    system = f"""당신은 세계관 DB 편집자입니다. 아이디어 대화에서 사용자가 확정하거나 유력하게 채택한 내용만 하나의 엔트리 초안으로 정리하세요.
+아직 논의 중인 대안은 사실처럼 합치지 말고, 대화에 근거가 부족한 세부사항을 새로 발명하지 마세요. {length_rule}
+content는 읽기 쉬운 Markdown으로 작성하세요. 비밀은 공개 content에 암시·반복하지 말고 secret에만 분리하세요.
+{_world_metadata_rules(world_id)}
+JSON만 출력: {{"title":"", "category":"세력·인물·관념·물건·종족·사건·장소·마법/기술·신화/종교·역사/기록·규칙/법·연도 중 하나", "content":"Markdown 본문", "secret":"", "aliases":[], "attributes":{{"능력치 축":{{"value":1,"description":"구체적 의미"}}}}}}"""
+    prompt = f"=== 현재 공개 DB 참고 ===\n{serialize_world_state(entries, get_entry_char_limit())}\n\n=== 아이디어 대화 ===\n{conversation}\n\n=== 추가 지시 ===\n{instruction or '(없음)'}"
+    raw = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+        temperature=0.35,
+        max_tokens=get_max_output_tokens(),
+    ).choices[0].message.content or ""
+    result = _parse_json_safe(raw, "chat_entry_draft")
+    if not isinstance(result, dict):
+        raise ValueError("엔트리 초안을 JSON으로 해석하지 못했습니다.")
+    return result.get("entry", result) if isinstance(result.get("entry", result), dict) else result
 
 
 def propose_entry_skills(entry: dict, candidates: list, guideline: dict) -> dict:
@@ -431,16 +464,18 @@ def propose_entry_skills(entry: dict, candidates: list, guideline: dict) -> dict
 
 def propose_metadata_migration(entries: list, metadata_rules: str, instruction: str = "") -> dict:
     client,model=get_llm_client();prompt="""기존 인물 엔트리를 분석해 D&D/TRPG용 메타데이터 보강안을 만드세요. 원문과 DB는 수정하지 말고 제안만 반환하세요.
-기존 능력치 축이 없거나 설명이 부족하면 세계관에 맞는 축을 제안하고, 각 축의 용도·수치 범위·모든 티어의 의미를 상세히 작성하세요.
+기존 능력치 축이 없거나 설명이 부족하면 세계관에 맞는 축을 제안하고, 각 축의 용도·수치 범위·모든 단계의 의미를 상세히 작성하세요.
+min_tier부터 max_tier까지 한 단계도 빠뜨리지 말고 tier_descriptions에 정확히 하나씩 작성하세요. 예를 들어 1~10 범위라면 "1"부터 "10"까지 정확히 10개의 키가 있어야 합니다.
+각 단계는 추상적인 강약 표현만 쓰지 말고 그 단계에서 가능한 행동, 한계 또는 판정 결과가 드러나게 서술하며, 단계가 올라갈수록 일관되게 강해져야 합니다.
 각 인물에는 축 범위 안의 정수 수치와, 본문의 어떤 설정 때문에 그 수치인지 구체적인 설명을 작성하세요. 기존 스킬은 ID를 재사용하세요.
 JSON만 출력:
-{"attribute_schemas":[{"axis_name":"힘","min_tier":1,"max_tier":20,"description":"축의 판정 용도와 의미","tier_labels":{"1":"매우 약함","20":"초인적"}}],"entries":[{"entry_id":1,"attributes":{"힘":{"value":14,"description":"훈련된 용병이라 평균보다 강하다."}},"reused_skill_ids":[]}]}
+{"attribute_schemas":[{"axis_name":"힘","min_tier":1,"max_tier":10,"description":"축의 판정 용도와 의미","tier_descriptions":{"1":"무거운 물건을 거의 들지 못한다.","2":"일상적인 짐을 드는 데 어려움이 있다.","3":"평균 이하의 힘으로 가벼운 짐을 다룬다.","4":"가벼운 육체노동을 수행한다.","5":"평범한 성인 수준의 힘이다.","6":"꾸준히 단련한 사람 수준이다.","7":"무거운 장비를 오래 다룬다.","8":"여러 사람 몫의 힘을 발휘한다.","9":"인간의 일반적인 한계에 가깝다.","10":"세계관에서 허용되는 최고 수준의 힘이다."}}],"entries":[{"entry_id":1,"attributes":{"힘":{"value":7,"description":"훈련된 용병이라 무거운 장비를 장시간 다룬다."}},"reused_skill_ids":[]}]}
 """+metadata_rules+"\n추가 요청:"+(instruction or "세계관 설정과 인물 본문을 근거로 빠짐없이 작성")+"\n인물 엔트리:"+json.dumps(entries,ensure_ascii=False)
-    raw=client.chat.completions.create(model=model,messages=[{"role":"user","content":prompt}],temperature=.2,max_tokens=8000).choices[0].message.content or ""
+    raw=client.chat.completions.create(model=model,messages=[{"role":"user","content":prompt}],temperature=.2,max_tokens=get_max_output_tokens()).choices[0].message.content or ""
     return _parse_json_safe(raw,"metadata_migration")
 
 
-def serialize_world_state(entries: list, max_chars: int = 500) -> str:
+def serialize_world_state(entries: list, max_chars: int = 0) -> str:
     """
     세계관 엔트리 목록을 LLM이 읽기 좋은 형태로 직렬화.
     max_chars: 엔트리당 내용 최대 글자 수 (0 = 제한 없음)
@@ -472,7 +507,7 @@ def serialize_world_state(entries: list, max_chars: int = 500) -> str:
 
 def estimate_world_tokens(entries: list, config: dict = None) -> dict:
     """현재 세계관 + 프롬프트의 예상 토큰 수 반환"""
-    max_chars = (config.get("max_content_chars") or 500) if config else 500
+    max_chars = (config.get("max_content_chars") if config.get("max_content_chars") is not None else 0) if config else 0
     world_state = serialize_world_state(entries, max_chars=max_chars)
     world_tokens = estimate_tokens(world_state)
 
@@ -584,7 +619,7 @@ def run_tick(config: dict, tick_number: int, entries: list, recent_context: str 
             {"role": "user", "content": user_prompt},
         ],
         temperature=0.8,
-        max_tokens=MAX_TOKENS,
+        max_tokens=get_max_output_tokens(),
     )
 
     raw = response.choices[0].message.content or ""
@@ -608,7 +643,7 @@ def run_summary(config: dict, tick_number: int, entries: list, prompt_overrides:
                 model_override: str = None) -> dict:
     """컨텍스트 한계 근접 시 전체 세계관을 압축 요약."""
     client, model = get_llm_client(model_override)
-    max_chars = config.get("max_content_chars") or 500
+    max_chars = config.get("max_content_chars") if config.get("max_content_chars") is not None else 0
     overrides = prompt_overrides or {}
 
     world_state = serialize_world_state(entries, max_chars=max_chars)
@@ -622,7 +657,7 @@ def run_summary(config: dict, tick_number: int, entries: list, prompt_overrides:
         model=model,
         messages=[{"role": "user", "content": user_prompt}],
         temperature=0.3,
-        max_tokens=MAX_TOKENS,
+        max_tokens=get_max_output_tokens(),
     )
 
     raw = response.choices[0].message.content or ""
@@ -650,7 +685,7 @@ def translate_entries(entries: list) -> dict:
         model=model,
         messages=[{"role": "user", "content": user_prompt}],
         temperature=0.3,
-        max_tokens=MAX_TOKENS,
+        max_tokens=get_max_output_tokens(),
     )
 
     raw = response.choices[0].message.content or ""
@@ -765,15 +800,18 @@ def select_entries_rag(
     }
 
 
-def generate_entry(title: str, category: str, hint: str, ref_entries: list) -> dict:
+def generate_entry(title: str, category: str, hint: str, ref_entries: list, metadata_rules: str = "", max_chars: int = None) -> dict:
     """유저 입력(제목·분류·힌트·참조)을 기반으로 엔트리 내용을 LLM이 생성"""
     client, model = get_llm_client()
 
+    max_chars=get_entry_char_limit() if max_chars is None else max(0,int(max_chars))
     ref_block = ""
     if ref_entries:
         lines = []
         for e in ref_entries:
-            lines.append(f"  [{e['category']}] {e['title']}: {e['content'][:300]}")
+            ref_content=str(e.get("content") or "")
+            if max_chars:ref_content=ref_content[:max_chars]
+            lines.append(f"  ID={e.get('id')} [{e['category']}] {e['title']}: {ref_content}")
         ref_block = "\n참조 엔트리:\n" + "\n".join(lines)
 
     hint_block = f"\n사용자 힌트/초안:\n{hint}" if hint else ""
@@ -782,26 +820,33 @@ def generate_entry(title: str, category: str, hint: str, ref_entries: list) -> d
 
 제목: {title}
 분류: {category}{hint_block}{ref_block}
+{metadata_rules}
 
 요구 사항:
 - 세계관 설정에 어울리는 구체적이고 풍부한 묘사
 - 참조 엔트리와 자연스럽게 연결되는 내용
+- 인물이면 위 메타데이터의 활성 능력치 축을 사용해 attributes에 범위 안의 정수와 인물별 근거를 반환
+- 공개 본문과 비밀을 분리하고, secret의 내용을 content에 암시하거나 반복하지 않기
+- 공개 content는 {('제한 없이 성급히 요약하지 말고 특별한 이유가 없으면 최소 1500자 이상' if not max_chars else f'최대 {max_chars}자 이내')}로 구체적으로 작성
 - 마크다운 기호(**볼드**, # 헤더 등) 사용 금지, 일반 텍스트만
 - 한국어로 작성
-- 반드시 JSON으로만 응답: {{"content": "생성된 내용"}}"""
+- 반드시 JSON으로만 응답: {{"content":"생성된 공개 내용","secret":"클릭해서만 볼 비밀 설정","attributes":{{"능력치명":{{"value":1,"description":"수치의 근거"}}}}}}"""
 
     response = client.chat.completions.create(
         model=model,
         messages=[{"role": "user", "content": prompt}],
-        max_tokens=2000,
+        max_tokens=get_max_output_tokens(),
     )
     raw = response.choices[0].message.content.strip()
     parsed = _parse_json_safe(raw, "generate_entry")
-    content = parsed.get("content", raw)
+    content = str(parsed.get("content", raw))
+    if max_chars:content=content[:max_chars]
     tokens_in = getattr(response.usage, "prompt_tokens", 0)
     tokens_out = getattr(response.usage, "completion_tokens", 0)
     return {
         "content": content,
+        "secret": str(parsed.get("secret") or ""),
+        "attributes": parsed.get("attributes") if isinstance(parsed.get("attributes"), dict) else {},
         "_tokens_in": tokens_in,
         "_tokens_out": tokens_out,
     }
@@ -850,7 +895,7 @@ def generate_timeline(entry: dict, world_entries: list, extra_prompt: str = "",
 
     world_state = serialize_world_state(
         [e for e in world_entries if e["id"] != entry["id"]],
-        max_chars=300,
+        max_chars=get_entry_char_limit(),
     )
 
     tmpl = overrides.get("timeline_generate", TIMELINE_GEN_PROMPT)
@@ -858,7 +903,7 @@ def generate_timeline(entry: dict, world_entries: list, extra_prompt: str = "",
         category=entry.get("category", ""),
         title=entry.get("title", ""),
         content=entry.get("content", ""),
-        world_state=world_state[:4000] if len(world_state) > 4000 else world_state,
+        world_state=world_state,
         extra_prompt=extra_prompt or f"이 엔트리의 주요 사건을 {episode_count}개의 에피소드로 구성하세요.",
     )
 
@@ -866,7 +911,7 @@ def generate_timeline(entry: dict, world_entries: list, extra_prompt: str = "",
         model=model,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.85,
-        max_tokens=MAX_TOKENS,
+        max_tokens=get_max_output_tokens(),
     )
 
     raw = response.choices[0].message.content or ""

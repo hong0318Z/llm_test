@@ -554,7 +554,7 @@ function renderTimeline() {
   document.getElementById('tlHeaderDesc').innerHTML =
     (mainEntry ? `<span style="font-size:0.72rem;background:rgba(110,234,176,0.12);color:#6eeab0;border:1px solid rgba(110,234,176,0.3);border-radius:6px;padding:1px 8px;margin-right:6px;">
       <i class="bi bi-link-45deg"></i> ${escHtml(mainEntry.title)}</span>` : '') +
-    escHtml(currentTl.description || '');
+    `<span class="markdown-body d-inline-block">${markdownHtml(currentTl.description || '')}</span>`;
   document.getElementById('tlEventCount').textContent = `${currentTl.event_count}개 에피소드`;
 
   renderArcPanel();
@@ -603,7 +603,7 @@ function renderArcPanel() {
   const goalEl = document.getElementById('arcGoalPreview');
   if (goal) {
     goalEl.style.display = 'block';
-    goalEl.innerHTML = `<i class="bi bi-bullseye me-1" style="color:#ffb86c;"></i><strong>서사 목표:</strong> ${escHtml(goal)}`;
+    goalEl.innerHTML = `<i class="bi bi-bullseye me-1" style="color:#ffb86c;"></i><strong>서사 목표:</strong><div class="markdown-body mt-1">${markdownHtml(goal)}</div>`;
   } else {
     goalEl.style.display = 'none';
   }
@@ -675,7 +675,7 @@ function renderEvent(ev, tick, showTick, tickBeats) {
   }).join('');
 
   const desc = ev.description
-    ? `<div class="tl-event-desc mt-2" style="display:none;">${escHtml(ev.description)}</div>` : '';
+    ? `<div class="tl-event-desc markdown-body mt-2" style="display:none;">${markdownHtml(ev.description)}</div>` : '';
   const toggleDesc = ev.description
     ? `<button class="tl-act-btn" onclick="toggleDesc(this)" title="설명 펼치기">
         <i class="bi bi-chevron-down"></i></button>` : '';

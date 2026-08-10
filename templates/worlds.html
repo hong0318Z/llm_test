@@ -167,7 +167,7 @@ function renderWorlds() {
         </div>
         ${isSelected ? '<div style="position:absolute;top:12px;left:14px;font-size:0.7rem;background:rgba(139,127,247,0.2);color:var(--accent);padding:2px 8px;border-radius:10px;font-weight:700;">현재 선택</div>' : ''}
         <div class="world-name" style="margin-top:${isSelected ? '18px' : '0'};">${escH(w.name)}</div>
-        <div class="world-desc">${escH(w.description || '')}</div>
+        <div class="world-desc markdown-body">${markdownHtml(w.description || '')}</div>
         <div class="world-meta">
           <span class="world-stat"><i class="bi bi-database"></i>${w.entry_count ?? 0}개 엔트리</span>
           <span class="world-stat"><i class="bi bi-clock-history"></i>${w.timeline_count ?? 0}개 타임라인</span>

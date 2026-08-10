@@ -498,7 +498,7 @@ function renderLiveLog(logs) {
   container.innerHTML = logs.map(l => `
     <div class="log-item log-${l.event_type}">
       <span class="log-tick-badge me-2">틱 ${l.tick_number}</span>
-      <span>${escHtml(l.description)}</span>
+      <span class="markdown-body d-inline-block">${markdownHtml(l.description)}</span>
       ${l.tokens_total ? `<span class="ms-2" style="font-size:0.72rem;color:var(--accent);">+${l.tokens_total.toLocaleString()} tok</span>` : ''}
     </div>
   `).join('');
@@ -646,7 +646,7 @@ async function updateArcPreview() {
     if (!goal && beats.length === 0) { preview.style.display = 'none'; return; }
     preview.style.display = 'block';
     const goalEl = document.getElementById('arcPreviewGoal');
-    goalEl.innerHTML = goal ? `<strong>서사 목표:</strong> ${escHtml(goal)}` : '';
+    goalEl.innerHTML = goal ? `<strong>서사 목표:</strong><div class="markdown-body">${markdownHtml(goal)}</div>` : '';
     goalEl.style.display = goal ? 'block' : 'none';
 
     const BEAT_COLORS = {

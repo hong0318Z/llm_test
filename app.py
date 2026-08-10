@@ -45,6 +45,7 @@ with app.app_context():
         ("world_entries",       "primary_year",            "TEXT DEFAULT ''"),
         ("world_entries",       "year_notes_json",         "TEXT DEFAULT '[]'"),
         ("world_entries",       "aliases_json",            "TEXT DEFAULT '[]'"),
+        ("world_entries",       "secret_content",          "TEXT DEFAULT ''"),
         ("timelines",           "main_entry_id",           "INTEGER"),
         # 세계관 컨테이너 마이그레이션
         ("world_entries",       "world_id",                "INTEGER"),
@@ -67,6 +68,7 @@ with app.app_context():
         ("app_settings",        "embedding_base_url",      "TEXT DEFAULT ''"),
         ("app_settings",        "embedding_api_key",       "TEXT DEFAULT ''"),
         ("app_settings",        "entries_per_tick",        "INTEGER DEFAULT 1"),
+        ("app_settings",        "llm_max_output_tokens",   "INTEGER DEFAULT 262144"),
         ("world_attribute_schema", "description",          "TEXT DEFAULT ''"),
         ("entry_attribute_value",  "description",          "TEXT DEFAULT ''"),
     ]
@@ -179,7 +181,6 @@ with app.app_context():
         db.session.add(admin)
         db.session.commit()
 
-
 STORAGE_DIR = os.path.join(os.path.dirname(__file__), "storage")
 ALLOWED_IMAGE_EXT = {"jpg", "jpeg", "png", "gif", "webp"}
 MAX_IMAGE_SIZE = 5 * 1024 * 1024  # 5MB
@@ -279,7 +280,7 @@ DEFAULT_ENTRY_TEMPLATE_FIELDS = {
     "장소": [("danger_level",1,"1~5"),("통치 세력",1,""),("분위기 태그",1,""),("인구",0,""),("접근 경로",0,""),("비밀",0,""),("모험 훅",0,"")],
     "사건": [("발생 틱/연도",1,""),("원인→결과",1,""),("관련 대상",0,""),("파급범위",0,"개인/가문/제국")],
     "관념": [("정의",1,"한 줄"),("사회적 영향력",1,"tier"),("기원",0,""),("신봉/반대 세력",0,""),("관련 사건",0,"")],
-    "물건": [("등급",1,"일반/희귀/유일"),("효과",1,""),("제작자/기원",0,""),("소유 이력",0,""),("대가/제약",0,"")],
+    "물건": [("등급",1,"일반/희귀/유일"),("효과",1,""),("제작자/기원",0,""),("대표 주인",0,"인물 DB 복수 링크"),("소유 이력",0,""),("대가/제약",0,"")],
     "종족": [("신체 특성",1,""),("사회 구조",1,""),("평균 수명",0,""),("서식지",0,""),("타 종족 관계",0,""),("고유 능력",0,"")],
     "마법/기술": [("희귀도",1,""),("효과",1,""),("원리",0,"계통"),("습득 조건",0,""),("리스크/대가",0,""),("관련 스킬",0,"")],
     "신화/종교": [("주신/개념",1,""),("교리 요약",1,""),("신도 세력",0,""),("상징/의식",0,""),("진실과의 괴리",0,"reveal 대상")],
@@ -395,6 +396,7 @@ def create_world():
     world = World(name=name, description=data.get("description", ""))
     db.session.add(world)
     db.session.commit()
+
     _ensure_world_metadata(world.id)
     return jsonify(world.to_dict()), 201
 
@@ -517,7 +519,10 @@ def create_entry():
     entry.primary_year = (data.get("primary_year") or "").strip()[:100]
     entry.year_notes_json = _json.dumps(data.get("year_notes") or [], ensure_ascii=False)
     entry.aliases_json = _json.dumps(data.get("aliases") or [], ensure_ascii=False)
+    entry.secret_content = str(data.get("secret") or "")[:10000]
     db.session.add(entry)
+    db.session.flush()
+    _apply_generated_attributes(entry, data.get("attributes") or {})
     db.session.commit()
 
     _enrich_entry(entry)
@@ -553,6 +558,40 @@ def update_entry(entry_id):
         _enrich_entry(entry)
 
     return jsonify(entry.to_dict())
+
+
+def _apply_generated_attributes(entry, attributes):
+    """LLM 제안 능력치를 현재 세계관의 활성 스키마 범위에 맞춰 저장한다."""
+    if entry.category != "인물" or not isinstance(attributes, dict):
+        return
+    for axis_name, value_data in attributes.items():
+        axis = WorldAttributeSchema.query.filter_by(
+            world_id=entry.world_id, axis_name=str(axis_name), is_active=True
+        ).first()
+        if not axis:
+            continue
+        value = value_data.get("value", axis.min_tier) if isinstance(value_data, dict) else value_data
+        description = value_data.get("description", "") if isinstance(value_data, dict) else ""
+        try:
+            value = max(axis.min_tier, min(axis.max_tier, int(value)))
+        except (TypeError, ValueError):
+            continue
+        row = EntryAttributeValue.query.get((entry.id, axis.id)) or EntryAttributeValue(entry_id=entry.id, axis_id=axis.id)
+        row.value = value
+        row.description = str(description or "")[:4000]
+        db.session.add(row)
+
+
+@app.route("/api/entries/<int:entry_id>/secret", methods=["GET", "PUT"])
+def entry_secret(entry_id):
+    """비밀은 사용자가 이 경로를 명시적으로 호출했을 때만 반환한다."""
+    entry = WorldEntry.query.get_or_404(entry_id)
+    if entry.world_id != get_world_id(): abort(403)
+    if request.method == "PUT":
+        entry.secret_content = str((request.json or {}).get("secret") or "")[:10000]
+        entry.updated_at = datetime.utcnow()
+        db.session.commit()
+    return jsonify({"entry_id":entry.id,"secret":entry.secret_content or "","has_secret":bool(entry.secret_content)})
 
 
 @app.route("/api/entries/<int:entry_id>/revision-plan", methods=["POST"])
@@ -592,6 +631,142 @@ def create_relationship():
         if target.id not in refs: source.references = refs + [target.id]
     db.session.commit()
     return jsonify({"ok": True, "created_target_ids": created})
+
+
+CHARACTER_RELATION_TYPES = ("동일인물", "아버지", "어머니", "부모")
+
+
+def _add_character_relation(world_id, source_id, target_id, relation_type):
+    if source_id == target_id or relation_type not in CHARACTER_RELATION_TYPES:
+        return None
+    if relation_type == "동일인물" and source_id > target_id:
+        source_id, target_id = target_id, source_id
+    row = EntryRelationship.query.filter_by(
+        world_id=world_id, source_entry_id=source_id,
+        target_entry_id=target_id, relation_type=relation_type,
+    ).first()
+    if not row:
+        row = EntryRelationship(world_id=world_id, source_entry_id=source_id, target_entry_id=target_id, relation_type=relation_type)
+        db.session.add(row)
+    source = WorldEntry.query.get(source_id)
+    if source and target_id not in source.references:
+        source.references = source.references + [target_id]
+    return row
+
+
+@app.route("/api/entries/<int:entry_id>/character-links", methods=["GET", "PUT"])
+def character_links(entry_id):
+    """동일 인물 정체성과 부모·자식 관계를 구조화해 관리한다."""
+    entry = WorldEntry.query.get_or_404(entry_id)
+    if entry.world_id != get_world_id(): abort(403)
+    if entry.category != "인물": return jsonify({"error":"인물 엔트리만 연결할 수 있습니다."}),400
+    wid = entry.world_id
+    if request.method == "PUT":
+        data = request.json or {}
+        focused = EntryRelationship.query.filter_by(world_id=wid).filter(db.or_(
+            db.and_(EntryRelationship.relation_type == "동일인물", db.or_(EntryRelationship.source_entry_id == entry.id, EntryRelationship.target_entry_id == entry.id)),
+            db.and_(EntryRelationship.relation_type.in_(("아버지","어머니","부모")), db.or_(EntryRelationship.source_entry_id == entry.id, EntryRelationship.target_entry_id == entry.id)),
+        )).all()
+        removed_pairs={(r.source_entry_id,r.target_entry_id) for r in focused}
+        for row in focused: db.session.delete(row)
+        db.session.flush()
+        def valid_person(raw_id):
+            try: candidate=WorldEntry.query.get(int(raw_id))
+            except (TypeError,ValueError): return None
+            return candidate if candidate and candidate.world_id==wid and candidate.category=="인물" and candidate.id!=entry.id else None
+        for other_id in data.get("identity_ids") or []:
+            other=valid_person(other_id)
+            if other:_add_character_relation(wid,entry.id,other.id,"동일인물")
+        for field,role in (("father_id","아버지"),("mother_id","어머니")):
+            parent=valid_person(data.get(field))
+            if parent:_add_character_relation(wid,parent.id,entry.id,role)
+        for child_data in data.get("children") or []:
+            child=valid_person(child_data.get("entry_id") if isinstance(child_data,dict) else child_data)
+            role=(child_data.get("role") if isinstance(child_data,dict) else "부모")
+            if child:_add_character_relation(wid,entry.id,child.id,role if role in ("아버지","어머니","부모") else "부모")
+        db.session.flush()
+        for source_id,target_id in removed_pairs:
+            if not EntryRelationship.query.filter_by(world_id=wid,source_entry_id=source_id,target_entry_id=target_id).first():
+                source=WorldEntry.query.get(source_id)
+                if source and target_id in source.references:source.references=[x for x in source.references if x!=target_id]
+        db.session.commit()
+
+    rows=EntryRelationship.query.filter_by(world_id=wid).filter(EntryRelationship.relation_type.in_(CHARACTER_RELATION_TYPES)).all()
+    if request.args.get("recursive","false")=="true":
+        ids={entry.id};changed=True
+        while changed:
+            changed=False
+            for row in rows:
+                if row.source_entry_id in ids or row.target_entry_id in ids:
+                    before=len(ids);ids.update((row.source_entry_id,row.target_entry_id));changed=changed or len(ids)>before
+        tree_rows=[r for r in rows if r.source_entry_id in ids and r.target_entry_id in ids]
+        people=WorldEntry.query.filter(WorldEntry.id.in_(ids)).all()
+        return jsonify({"entries":[p.to_dict() for p in people],"links":[{"source_id":r.source_entry_id,"target_id":r.target_entry_id,"type":r.relation_type} for r in tree_rows]})
+    entry_map={p.id:p.to_dict() for p in WorldEntry.query.filter_by(world_id=wid,category="인물").all()}
+    identities=[];parents=[];children=[]
+    for row in rows:
+        if row.relation_type=="동일인물" and entry.id in (row.source_entry_id,row.target_entry_id):
+            other=row.target_entry_id if row.source_entry_id==entry.id else row.source_entry_id
+            if other in entry_map:identities.append(entry_map[other])
+        elif row.target_entry_id==entry.id and row.relation_type in ("아버지","어머니","부모") and row.source_entry_id in entry_map:
+            parents.append({"person":entry_map[row.source_entry_id],"role":row.relation_type})
+        elif row.source_entry_id==entry.id and row.relation_type in ("아버지","어머니","부모") and row.target_entry_id in entry_map:
+            children.append({"person":entry_map[row.target_entry_id],"role":row.relation_type})
+    return jsonify({"identities":identities,"parents":parents,"children":children})
+
+
+@app.route("/api/entries/<int:entry_id>/owners", methods=["GET", "PUT"])
+def item_owners(entry_id):
+    """물건의 복수 대표 주인을 직접 관계로 관리한다."""
+    item=WorldEntry.query.get_or_404(entry_id)
+    if item.world_id!=get_world_id():abort(403)
+    if item.category!="물건":return jsonify({"error":"물건 엔트리만 대표 주인을 설정할 수 있습니다."}),400
+    if request.method=="PUT":
+        data=request.json or {};owner_ids=[]
+        for raw_id in data.get("owner_ids") or []:
+            try:owner_id=int(raw_id)
+            except (TypeError,ValueError):continue
+            owner=WorldEntry.query.get(owner_id)
+            if owner and owner.world_id==item.world_id and owner.category=="인물" and owner_id not in owner_ids:owner_ids.append(owner_id)
+        old=EntryRelationship.query.filter_by(world_id=item.world_id,source_entry_id=item.id,relation_type="대표 주인").all()
+        old_ids={x.target_entry_id for x in old}
+        for row in old:db.session.delete(row)
+        for owner_id in owner_ids:
+            db.session.add(EntryRelationship(world_id=item.world_id,source_entry_id=item.id,target_entry_id=owner_id,relation_type="대표 주인"))
+        # 대표 주인은 직접 참조이기도 하므로 관계도와 LLM 공개 컨텍스트에 연결한다.
+        preserved=[x for x in item.references if x not in old_ids]
+        item.references=list(dict.fromkeys(preserved+owner_ids))
+        db.session.commit()
+    rows=EntryRelationship.query.filter_by(world_id=item.world_id,source_entry_id=item.id,relation_type="대표 주인").order_by(EntryRelationship.id).all()
+    people={p.id:p.to_dict() for p in WorldEntry.query.filter_by(world_id=item.world_id,category="인물").all()}
+    return jsonify([people[x.target_entry_id] for x in rows if x.target_entry_id in people])
+
+
+@app.route("/api/entries/<int:entry_id>/owner-candidates", methods=["GET"])
+def item_owner_candidates(entry_id):
+    """현재 직접 주인을 먼저, 이후 검색 적합도 순으로 인물 후보를 반환한다."""
+    item=WorldEntry.query.get_or_404(entry_id)
+    if item.world_id!=get_world_id():abort(403)
+    if item.category!="물건":return jsonify({"error":"물건 엔트리만 조회할 수 있습니다."}),400
+    q=str(request.args.get("q") or "").strip().casefold()
+    selected={x.target_entry_id for x in EntryRelationship.query.filter_by(world_id=item.world_id,source_entry_id=item.id,relation_type="대표 주인").all()}
+    candidates=[]
+    for person in WorldEntry.query.filter_by(world_id=item.world_id,category="인물",is_active=True).all():
+        try:aliases=[str(x) for x in _json.loads(person.aliases_json or "[]")]
+        except Exception:aliases=[]
+        title=person.title.casefold();alias_fold=[x.casefold() for x in aliases];haystack=" ".join([title,(person.keywords or "").casefold(),person.content[:1000].casefold(),*alias_fold])
+        if q and q not in haystack and person.id not in selected:continue
+        score=10000 if person.id in selected else 0
+        if q:
+            if title==q:score+=1000
+            elif title.startswith(q):score+=800
+            elif q in title:score+=600
+            if q in alias_fold:score+=500
+            elif any(x.startswith(q) for x in alias_fold):score+=400
+            elif q in haystack:score+=100
+        candidates.append((score,person.title,person,aliases))
+    candidates.sort(key=lambda x:(-x[0],x[1]))
+    return jsonify([{"entry":person.to_dict(),"aliases":aliases,"selected":person.id in selected,"score":score} for score,_,person,aliases in candidates[:50]])
 
 
 @app.route("/api/entries/<int:entry_id>", methods=["DELETE"])
@@ -966,6 +1141,7 @@ def _export_world_extensions(world_id):
         "styles":[s.to_dict() for s in WorldWritingStyle.query.filter_by(world_id=world_id).all()],
         "reveals":[r.to_dict() for r in EntryRevealState.query.filter(EntryRevealState.entry_id.in_(entry_ids or [-1])).all()],
         "relationships":[{"source_entry_id":r.source_entry_id,"target_entry_id":r.target_entry_id,"relation_type":r.relation_type,"description":r.description or ""} for r in EntryRelationship.query.filter_by(world_id=world_id).all()],
+        "secrets":[{"entry_id":e.id,"secret":e.secret_content or ""} for e in WorldEntry.query.filter_by(world_id=world_id).filter(WorldEntry.secret_content != "").all()],
     }
 
 def _delete_world_extensions(world_id, entry_ids=None):
@@ -1012,6 +1188,9 @@ def _restore_world_extensions(world_id, ext, entry_map):
         if r.get("entry_id") in entry_map:db.session.add(EntryRevealState(entry_id=entry_map[r["entry_id"]],field_path=r.get("field_path","content"),reveal_chapter_id=chapter_map.get(r.get("reveal_chapter_id")),visibility=r.get("visibility","작가전용")))
     for r in ext.get("relationships",[]):
         if r.get("source_entry_id") in entry_map and r.get("target_entry_id") in entry_map:db.session.add(EntryRelationship(world_id=world_id,source_entry_id=entry_map[r["source_entry_id"]],target_entry_id=entry_map[r["target_entry_id"]],relation_type=r.get("relation_type","관련"),description=r.get("description","")))
+    for s in ext.get("secrets",[]):
+        if s.get("entry_id") in entry_map:
+            restored=WorldEntry.query.get(entry_map[s["entry_id"]]);restored.secret_content=str(s.get("secret") or "")[:10000]
     if not ext.get("templates"):_ensure_world_metadata(world_id,commit=False)
 
 @app.route("/api/backup", methods=["GET"])
@@ -1125,7 +1304,7 @@ def restore_db():
             s.max_user_entry_chars = settings_data["max_user_entry_chars"]
         if "rag_token_budget" in settings_data:
             s.rag_token_budget = settings_data["rag_token_budget"]
-        for field in ("entries_per_tick", "llm_model_simulation", "llm_model_nai",
+        for field in ("entries_per_tick", "llm_max_output_tokens", "llm_model_simulation", "llm_model_nai",
                       "embedding_enabled", "embedding_model", "rag_reference_limit",
                       "llm_base_url", "embedding_base_url"):
             if field in settings_data:
@@ -1304,6 +1483,18 @@ def delete_config(config_id):
 #  마스터 설정 API
 # ─────────────────────────────────────────
 
+def _normalize_tier_descriptions(item, min_tier, max_tier):
+    """단계 범위의 모든 키를 보장하고 기존 tier_labels 입력도 받아들인다."""
+    raw = item.get("tier_descriptions")
+    if not isinstance(raw, dict):
+        raw = item.get("tier_labels")
+    if not isinstance(raw, dict):
+        raw = {}
+    return {
+        str(tier): str(raw.get(str(tier), raw.get(tier, "")) or "").strip()[:2000]
+        for tier in range(min_tier, max_tier + 1)
+    }
+
 @app.route("/api/metadata", methods=["GET"])
 def get_metadata():
     wid=get_world_id(); _ensure_world_metadata(wid)
@@ -1320,7 +1511,7 @@ def save_attributes():
     wid=get_world_id(); data=request.json or {}; seen=[]
     for order,item in enumerate(data.get("attributes") or []):
         row=WorldAttributeSchema.query.filter_by(id=item.get("id"),world_id=wid).first() if item.get("id") else WorldAttributeSchema(world_id=wid)
-        row.axis_name=str(item.get("axis_name") or "새 능력치")[:100]; row.axis_order=order; row.min_tier=max(0,int(item.get("min_tier",1))); row.max_tier=max(row.min_tier,int(item.get("max_tier",5))); row.description=str(item.get("description") or "")[:2000]; row.tier_labels_json=_json.dumps(item.get("tier_labels") or {},ensure_ascii=False); row.is_active=bool(item.get("is_active",True)); db.session.add(row); db.session.flush(); seen.append(row.id)
+        row.axis_name=str(item.get("axis_name") or "새 능력치")[:100]; row.axis_order=order; row.min_tier=max(0,min(100,int(item.get("min_tier",1)))); row.max_tier=max(row.min_tier,min(100,int(item.get("max_tier",5)))); row.description=str(item.get("description") or "")[:2000]; row.tier_labels_json=_json.dumps(_normalize_tier_descriptions(item,row.min_tier,row.max_tier),ensure_ascii=False); row.is_active=bool(item.get("is_active",True)); db.session.add(row); db.session.flush(); seen.append(row.id)
     removed=[x.id for x in WorldAttributeSchema.query.filter_by(world_id=wid).filter(~WorldAttributeSchema.id.in_(seen or [-1])).all()]
     if removed:EntryAttributeValue.query.filter(EntryAttributeValue.axis_id.in_(removed)).delete(synchronize_session=False)
     WorldAttributeSchema.query.filter_by(world_id=wid).filter(~WorldAttributeSchema.id.in_(seen or [-1])).delete(synchronize_session=False); db.session.commit()
@@ -1385,7 +1576,7 @@ def metadata_migration_apply():
         name=str(item.get("axis_name") or "").strip()[:100]
         if not name:continue
         row=WorldAttributeSchema.query.filter_by(world_id=wid,axis_name=name).first() or WorldAttributeSchema(world_id=wid,axis_name=name)
-        row.axis_order=order;row.min_tier=max(0,int(item.get("min_tier",1)));row.max_tier=max(row.min_tier,int(item.get("max_tier",5)));row.description=str(item.get("description") or "")[:2000];row.tier_labels_json=_json.dumps(item.get("tier_labels") or {},ensure_ascii=False);row.is_active=True;db.session.add(row)
+        row.axis_order=order;row.min_tier=max(0,min(100,int(item.get("min_tier",1))));row.max_tier=max(row.min_tier,min(100,int(item.get("max_tier",5))));row.description=str(item.get("description") or "")[:2000];row.tier_labels_json=_json.dumps(_normalize_tier_descriptions(item,row.min_tier,row.max_tier),ensure_ascii=False);row.is_active=True;db.session.add(row)
     db.session.flush()
     for item in data.get("entries",[]):
         entry=WorldEntry.query.get(item.get("entry_id"))
@@ -1422,7 +1613,8 @@ def entry_stat_block(entry_id):
         if axis:
             try:labels=_json.loads(axis.tier_labels_json or "{}")
             except Exception:labels={}
-            attributes.append({"axis_id":axis.id,"axis_name":axis.axis_name,"value":v.value,"label":labels.get(str(v.value),""),"description":v.description or "","axis_description":axis.description or "","min_tier":axis.min_tier,"max_tier":axis.max_tier})
+            tier_description=labels.get(str(v.value),"")
+            attributes.append({"axis_id":axis.id,"axis_name":axis.axis_name,"value":v.value,"tier_description":tier_description,"label":tier_description,"description":v.description or "","axis_description":axis.description or "","min_tier":axis.min_tier,"max_tier":axis.max_tier})
     links=EntrySkillLink.query.filter_by(entry_id=entry.id).all();skills=[]
     for link in links:
         skill=WorldSkillRegistry.query.get(link.skill_id)
@@ -1567,7 +1759,9 @@ def update_settings():
     s = AppSettings.get()
     us = UserLlmSettings.get_for_user(current_user().id)
     if "max_llm_entry_chars" in data:
-        s.max_llm_entry_chars = int(data["max_llm_entry_chars"])
+        s.max_llm_entry_chars = max(0, int(data["max_llm_entry_chars"]))
+    if "llm_max_output_tokens" in data:
+        s.llm_max_output_tokens = max(1, min(262144, int(data["llm_max_output_tokens"])))
     if "entries_per_tick" in data:
         s.entries_per_tick = max(0, min(20, int(data["entries_per_tick"])))
     if "max_user_entry_chars" in data:
@@ -2322,7 +2516,7 @@ def test_llm():
 def chat_page():
     redir = _require_world_redirect()
     if redir: return redir
-    return render_template("chat.html")
+    return render_template("chat.html", categories=CATEGORIES)
 
 
 @app.route("/world-design")
@@ -2344,7 +2538,7 @@ def world_design_plan():
     target_count = max(1, min(30, int(data.get("target_count", 10))))
     try:
         import llm_client
-        result = llm_client.plan_world_structure(context, target_count, (data.get("answers") or "").strip(), entries)
+        result = llm_client.plan_world_structure(context, target_count, (data.get("answers") or "").strip(), entries, max_chars=AppSettings.get().max_llm_entry_chars or 0)
         items = [item for item in result.get("items", []) if item.get("title") and item.get("category") in CATEGORIES][:target_count]
         # 임베딩이 켜졌다면 후보 제목/속성을 벡터화하여 유사한 기존 DB 항목을 제외한다.
         settings = UserLlmSettings.get_for_user(current_user().id)
@@ -2387,7 +2581,7 @@ def world_design_generate():
         max_chars = AppSettings.get().max_llm_entry_chars or 0
         for start in range(0, len(items), chunk_size):
             chunk = items[start:start + chunk_size]
-            result = llm_client.generate_world_detail_batch(context, chunk, existing + entries, max_chars=max_chars)
+            result = llm_client.generate_world_detail_batch(context, chunk, existing + entries, max_chars=max_chars, world_id=wid)
             wanted = {i["title"].strip().lower() for i in chunk}
             for entry in result.get("entries", []):
                 if entry.get("title", "").strip().lower() in wanted and entry.get("category") in CATEGORIES and entry.get("content"):
@@ -2411,15 +2605,12 @@ def world_design_apply():
         title, category, content = (str(item.get(k) or "").strip() for k in ("title", "category", "content"))
         if not title or not content or category not in CATEGORIES: continue
         refs = [existing[r] for r in item.get("references", []) if r in existing]
-        entry = WorldEntry(world_id=wid, title=title[:200], category=category, content=content, created_by="llm", tick_created=0, is_active=True)
+        max_chars=AppSettings.get().max_llm_entry_chars or 0
+        if max_chars:content=content[:max_chars]
+        entry = WorldEntry(world_id=wid, title=title[:200], category=category, content=content, secret_content=str(item.get("secret") or "")[:10000], created_by="llm", tick_created=0, is_active=True)
         entry.references = refs
         db.session.add(entry); db.session.flush(); existing[entry.title] = entry.id; created.append(entry)
-        for axis_name,value_data in (item.get("attributes") or {}).items():
-            axis=WorldAttributeSchema.query.filter_by(world_id=wid,axis_name=axis_name,is_active=True).first()
-            if axis:
-                value=value_data.get("value",axis.min_tier) if isinstance(value_data,dict) else value_data
-                description=value_data.get("description","") if isinstance(value_data,dict) else ""
-                db.session.add(EntryAttributeValue(entry_id=entry.id,axis_id=axis.id,value=max(axis.min_tier,min(axis.max_tier,int(value))),description=str(description or "")[:4000]))
+        _apply_generated_attributes(entry, item.get("attributes") or {})
         for skill_id in item.get("reused_skill_ids") or []:
             skill=WorldSkillRegistry.query.filter_by(id=skill_id,world_id=wid).first()
             if skill: db.session.add(EntrySkillLink(entry_id=entry.id,skill_id=skill.id))
@@ -2444,7 +2635,6 @@ def chat():
     message = (data.get("message") or "").strip()
     if not message: return jsonify({"error": "message는 필수입니다."}), 400
     history = data.get("history") or []
-    history = history[-12:]
     settings = AppSettings.get()
     entries = WorldEntry.query.filter_by(world_id=get_world_id(), is_active=True).all()
     context = [e.to_dict() for e in entries[:settings.rag_reference_limit]]
@@ -2452,10 +2642,44 @@ def chat():
         import llm_client
         model_override = (settings.llm_model_simulation or None) if settings.llm_base_url else (os.environ.get("LLM_MODEL") if os.environ.get("LLM_BASE_URL") else (settings.llm_model_simulation or None))
         client, model = llm_client.get_llm_client(model_override)
-        system = "당신은 세계관 기획 파트너입니다. 사용자가 아이디어를 명확히 정의하도록 질문·대안·일관성 점검을 돕습니다. 확정되지 않은 사실은 단정하지 마세요.\n\n현재 참조 데이터:\n" + llm_client.serialize_world_state(context, settings.max_llm_entry_chars or 500)
+        system = "당신은 세계관 기획 파트너입니다. 사용자가 아이디어를 명확히 정의하도록 질문·대안·일관성 점검을 돕습니다. 확정되지 않은 사실은 단정하지 마세요.\n\n현재 참조 데이터:\n" + llm_client.serialize_world_state(context, settings.max_llm_entry_chars if settings.max_llm_entry_chars is not None else 0)
         messages = [{"role": "system", "content": system}] + [{"role": m.get("role", "user"), "content": str(m.get("content", ""))} for m in history if m.get("role") in ("user", "assistant")] + [{"role": "user", "content": message}]
-        response = client.chat.completions.create(model=model, messages=messages, temperature=0.7, max_tokens=1200)
+        response = client.chat.completions.create(model=model, messages=messages, temperature=0.7, max_tokens=llm_client.get_max_output_tokens())
         return jsonify({"reply": response.choices[0].message.content or "", "model": model, "reference_count": len(context)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
+
+
+@app.route("/api/chat/entry-draft", methods=["POST"])
+def chat_entry_draft():
+    """현재 아이디어 대화를 검토 가능한 엔트리 초안으로 변환한다."""
+    data = request.json or {}
+    history = [m for m in (data.get("history") or []) if m.get("role") in ("user", "assistant")]
+    if not history:
+        return jsonify({"error": "먼저 아이디어 대화를 시작하세요."}), 400
+    settings = AppSettings.get()
+    entries = WorldEntry.query.filter_by(world_id=get_world_id(), is_active=True).limit(settings.rag_reference_limit).all()
+    context = [e.to_dict() for e in entries]
+    try:
+        import llm_client
+        model_override = (settings.llm_model_simulation or None) if settings.llm_base_url else (os.environ.get("LLM_MODEL") if os.environ.get("LLM_BASE_URL") else (settings.llm_model_simulation or None))
+        draft = llm_client.propose_entry_from_chat(
+            get_world_id(), history, context,
+            instruction=str(data.get("instruction") or "")[:2000],
+            model_override=model_override,
+        )
+        category = draft.get("category") if draft.get("category") in CATEGORIES else "관념"
+        content = str(draft.get("content") or "").strip()
+        if settings.max_llm_entry_chars:
+            content = content[:settings.max_llm_entry_chars]
+        return jsonify({
+            "title": str(draft.get("title") or "아이디어 대화 초안").strip()[:200],
+            "category": category,
+            "content": content,
+            "secret": str(draft.get("secret") or "")[:10000],
+            "aliases": draft.get("aliases") if isinstance(draft.get("aliases"), list) else [],
+            "attributes": draft.get("attributes") if isinstance(draft.get("attributes"), dict) else {},
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 502
 
@@ -2712,7 +2936,7 @@ def generate_entry_content():
     ref_entries = [WorldEntry.query.get(rid).to_dict()
                    for rid in ref_ids if WorldEntry.query.get(rid)]
     try:
-        result = lc.generate_entry(title, category, hint, ref_entries)
+        result = lc.generate_entry(title, category, hint, ref_entries, lc._world_metadata_rules(get_world_id()), max_chars=AppSettings.get().max_llm_entry_chars or 0)
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500

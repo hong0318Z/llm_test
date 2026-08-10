@@ -123,6 +123,9 @@
             <button class="btn btn-sm btn-outline-secondary" onclick="chooseRegistrySkills()"><i class="bi bi-lightning me-1"></i>스킬 선택</button>
             <button class="btn btn-sm btn-outline-secondary" onclick="proposeSkills()"><i class="bi bi-magic me-1"></i>스킬 제안</button>
             <button class="btn btn-sm btn-outline-secondary" onclick="editRevealState()"><i class="bi bi-eye-slash me-1"></i>공개 범위</button>
+            <button class="btn btn-sm btn-outline-warning" onclick="toggleSecret()"><i class="bi bi-key me-1"></i>비밀</button>
+            <button class="btn btn-sm btn-outline-secondary" id="characterLinksBtn" onclick="editCharacterLinks()" style="display:none"><i class="bi bi-people me-1"></i>정체성·가계도</button>
+            <button class="btn btn-sm btn-outline-secondary" id="itemOwnersBtn" onclick="openOwnerPicker()" style="display:none"><i class="bi bi-person-check me-1"></i>대표 주인</button>
             <button class="btn btn-sm btn-outline-secondary" id="toggleActiveBtn" onclick="toggleActive()"></button>
             <button class="btn btn-sm btn-outline-secondary" onclick="stripMarkdownEntry()" title="**굵게**, # 제목, > 인용 등 마크다운 기호 제거">
               <i class="bi bi-eraser me-1"></i>MD 제거
@@ -186,6 +189,9 @@
               <div id="detailKeywords"></div>
             </div>
             <div class="mb-3" id="detailStatSection" style="display:none"><label class="form-label small text-muted">능력치·스킬 시트</label><div id="detailStatBlock" class="p-2 rounded" style="background:var(--bg-input)"></div></div>
+            <div class="mb-3" id="detailCharacterLinksSection" style="display:none"><label class="form-label small text-muted">동일 인물·가계도</label><div id="detailCharacterLinks" class="p-2 rounded" style="background:var(--bg-input)"></div></div>
+            <div class="mb-3" id="detailOwnersSection" style="display:none"><label class="form-label small text-muted">대표 주인</label><div id="detailOwners" class="p-2 rounded" style="background:var(--bg-input)"></div></div>
+            <div class="mb-3" id="detailSecretSection" style="display:none"><label class="form-label small text-warning"><i class="bi bi-key me-1"></i>비밀 정보</label><div id="detailSecretContent" class="p-3 rounded" style="white-space:pre-wrap;background:rgba(255,193,7,.08);border:1px solid rgba(255,193,7,.25)"></div><button class="btn btn-sm btn-outline-warning mt-2" onclick="editSecret()">비밀 수정</button></div>
             <div class="mb-3">
               <label class="form-label small text-muted">참조 엔트리</label>
               <div id="detailReferences"></div>
@@ -314,6 +320,7 @@
           <input type="text" class="form-control" id="newReferences" placeholder="예: 1, 3, 7">
         </div>
         <div class="mb-3"><label class="form-label small">별칭 (콤마로 구분)</label><input type="text" class="form-control" id="newAliases" placeholder="통칭, 이명, 가명"></div>
+        <details class="mb-3"><summary class="small text-warning" style="cursor:pointer">비밀 설정</summary><textarea class="form-control mt-2" id="newSecret" rows="4" placeholder="일반 시트와 LLM 참조에는 노출되지 않습니다."></textarea></details>
         <div class="mb-3">
           <label class="form-label small">생성 틱 번호</label>
           <input type="number" class="form-control" id="newTickCreated" min="0" value="0" placeholder="0 = 초기 설정">
@@ -349,6 +356,19 @@
       </div>
     </div>
   </div>
+</div>
+
+<!-- 물건 대표 주인 검색/다중 선택 -->
+<div class="modal fade" id="ownerPickerModal" tabindex="-1">
+  <div class="modal-dialog"><div class="modal-content">
+    <div class="modal-header"><h5 class="modal-title"><i class="bi bi-person-check me-2"></i>대표 주인 선택</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body">
+      <input class="form-control mb-2" id="ownerSearchInput" placeholder="인물 이름·별칭·키워드 검색" oninput="searchOwnerCandidates()">
+      <div class="form-text mb-2">현재 직접적인 주인이 항상 맨 앞에 표시됩니다. 여러 명을 선택할 수 있습니다.</div>
+      <div id="ownerCandidateList" style="max-height:420px;overflow:auto"></div>
+    </div>
+    <div class="modal-footer"><button class="btn btn-outline-secondary" data-bs-dismiss="modal">취소</button><button class="btn btn-primary" onclick="saveOwners()">선택 저장</button></div>
+  </div></div>
 </div>
 
 <!-- AI 수정 대화/승인 모달 -->
@@ -388,6 +408,9 @@
 <script>
 let allEntries = [];
 let currentEntry = null;
+let currentCharacterLinks = {identities:[],parents:[],children:[]};
+let pendingGeneratedEntry = {attributes:{},secret:''};
+let ownerPickerModal,ownerSelection=new Set(),ownerSearchTimer=null;
 let currentCategory = null;
 let createModal;
 let snapshotModal;
@@ -422,6 +445,7 @@ function updateCharCount(textareaId, counterId) {
 
 document.addEventListener('DOMContentLoaded', () => {
   createModal = new bootstrap.Modal(document.getElementById('createModal'));
+  ownerPickerModal = new bootstrap.Modal(document.getElementById('ownerPickerModal'));
   snapshotModal = new bootstrap.Modal(document.getElementById('snapshotModal'));
   loadEntries();
   loadSnapshotCount();
@@ -726,6 +750,8 @@ async function selectEntry(id) {
 async function showDetail() {
   const e = currentEntry;
   currentStatBlock = {attributes:[], skills:[]};
+  currentCharacterLinks = {identities:[],parents:[],children:[]};
+  document.getElementById('detailSecretSection').style.display='none';
   document.getElementById('detailEmpty').style.display = 'none';
   document.getElementById('detailContent').style.display = 'block';
   document.getElementById('detailTitle').textContent = e.title;
@@ -736,6 +762,8 @@ async function showDetail() {
   contentEl.textContent = e.content;
   try { const r = await fetch('/api/markdown/render', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:e.content})}); const d=await r.json(); if(r.ok) contentEl.innerHTML=d.html; } catch (_) {}
   document.getElementById('characterViewSwitch').style.display = e.category === '인물' ? 'inline-flex' : 'none';
+  document.getElementById('characterLinksBtn').style.display = e.category === '인물' ? 'inline-block' : 'none';
+  document.getElementById('itemOwnersBtn').style.display = e.category === '물건' ? 'inline-block' : 'none';
   setEntryView('normal');
   document.getElementById('detailTick').textContent = e.tick_created === 0 ? '초기 설정' : `틱 ${e.tick_created}`;
   if (e.primary_year) document.getElementById('detailTick').textContent += ` · 연도: ${e.primary_year}`;
@@ -753,6 +781,8 @@ async function showDetail() {
   loadEntryVersions(e.id);
   loadEntryEpisodes(e.id);
   loadStatBlock(e.id);
+  if(e.category==='인물')loadCharacterLinks(e.id);
+  if(e.category==='물건')loadOwners(e.id);else document.getElementById('detailOwnersSection').style.display='none';
 
   // 비활성화/활성화 버튼 텍스트 갱신
   const toggleBtn = document.getElementById('toggleActiveBtn');
@@ -821,11 +851,11 @@ function openAiRevision() {
   aiRevisionModal = aiRevisionModal || new bootstrap.Modal(document.getElementById('aiRevisionModal'));
   aiRevisionModal.show();
 }
-function addRevisionMessage(role, content) { const el=document.getElementById('aiRevisionChat'); el.innerHTML += `<div class="p-2 mt-2 rounded" style="background:${role==='user'?'rgba(139,127,247,.16)':'var(--bg-input)'}"><b>${role==='user'?'나':'AI'}</b><div style="white-space:pre-wrap">${escHtml(content)}</div></div>`; el.scrollTop=el.scrollHeight; }
+function addRevisionMessage(role, content) { const el=document.getElementById('aiRevisionChat'); const item=document.createElement('div'); item.className='p-2 mt-2 rounded'; item.style.background=role==='user'?'rgba(139,127,247,.16)':'var(--bg-input)'; const label=document.createElement('b'); label.textContent=role==='user'?'나':'AI'; const body=document.createElement('div'); body.className='mt-1'; renderMarkdown(body,content); item.append(label,body); el.appendChild(item); el.scrollTop=el.scrollHeight; }
 async function requestAiRevision() {
   const input=document.getElementById('aiRevisionInstruction'), instruction=input.value.trim(); if(!instruction)return;
   const btn=document.getElementById('aiRevisionSend'); btn.disabled=true; addRevisionMessage('user',instruction); input.value='';
-  try { const r=await fetch(`/api/entries/${currentEntry.id}/revision-plan`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({instruction,history:aiRevisionHistory})}); const d=await r.json(); if(!r.ok)throw Error(d.error); aiRevisionHistory.push({role:'user',content:instruction},{role:'assistant',content:d.reply||''}); addRevisionMessage('assistant',d.reply||'수정안을 검토했습니다.'); if(d.questions?.length) addRevisionMessage('assistant','확인 질문:\n'+d.questions.map((q,i)=>`${i+1}. ${q}`).join('\n')); aiRevisionProposal=d.proposal||null; if(aiRevisionProposal){const p=aiRevisionProposal;const box=document.getElementById('aiRevisionProposal');box.style.display='block';box.innerHTML=`<hr><b>저장 전 수정안</b><div class="small text-muted">변경: ${(d.changes||[]).map(escHtml).join(' · ')}</div><div class="mt-2"><b>[${escHtml(p.category)}] ${escHtml(p.title)}</b><div class="mt-1" style="white-space:pre-wrap">${escHtml(p.content)}</div></div>`;document.getElementById('aiRevisionApprove').style.display='inline-block';}} catch(e){addRevisionMessage('assistant','오류: '+e.message)} finally{btn.disabled=false;}
+  try { const r=await fetch(`/api/entries/${currentEntry.id}/revision-plan`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({instruction,history:aiRevisionHistory})}); const d=await r.json(); if(!r.ok)throw Error(d.error); aiRevisionHistory.push({role:'user',content:instruction},{role:'assistant',content:d.reply||''}); addRevisionMessage('assistant',d.reply||'수정안을 검토했습니다.'); if(d.questions?.length) addRevisionMessage('assistant','확인 질문:\n'+d.questions.map((q,i)=>`${i+1}. ${q}`).join('\n')); aiRevisionProposal=d.proposal||null; if(aiRevisionProposal){const p=aiRevisionProposal;const box=document.getElementById('aiRevisionProposal');box.style.display='block';box.innerHTML=`<hr><b>저장 전 수정안</b><div class="small text-muted">변경: ${(d.changes||[]).map(escHtml).join(' · ')}</div><div class="mt-2"><b>[${escHtml(p.category)}] ${escHtml(p.title)}</b><div class="mt-1 markdown-body">${markdownHtml(p.content)}</div></div>`;document.getElementById('aiRevisionApprove').style.display='inline-block';}} catch(e){addRevisionMessage('assistant','오류: '+e.message)} finally{btn.disabled=false;}
 }
 async function approveAiRevision() {
   if(!aiRevisionProposal)return; const p=aiRevisionProposal;
@@ -833,6 +863,17 @@ async function approveAiRevision() {
 }
 
 async function loadStatBlock(id){try{const d=await(await fetch(`/api/entries/${id}/stat-block`)).json();if(!currentEntry||currentEntry.id!==id)return;currentStatBlock=d;const section=document.getElementById('detailStatSection');if(!d.attributes?.length&&!d.skills?.length){section.style.display='none';renderDndSheet();return}section.style.display='block';detailStatBlock.innerHTML=`${d.attributes?.length?`<div class="mb-2">${d.attributes.map(a=>`<span class="badge bg-secondary me-1" title="${escHtml(a.description||a.label||a.axis_description)}">${escHtml(a.axis_name)} ${a.value}${a.label?' · '+escHtml(a.label):''}</span>`).join('')}</div>`:''}${d.skills?.map(x=>`<span class="badge me-1" style="background:rgba(139,127,247,.2);color:var(--accent)" title="${escHtml(x.skill.description)}">${escHtml(x.skill.name)}${x.rank?' '+x.rank:''}</span>`).join('')||''}`;renderDndSheet()}catch(e){}}
+
+async function toggleSecret(){const section=document.getElementById('detailSecretSection');if(section.style.display!=='none'){section.style.display='none';return}const r=await fetch(`/api/entries/${currentEntry.id}/secret`);const d=await r.json();if(!r.ok)return alert(d.error||'비밀 조회 실패');renderMarkdown('detailSecretContent',d.secret||'등록된 비밀이 없습니다.');section.style.display='block'}
+async function editSecret(){const r=await fetch(`/api/entries/${currentEntry.id}/secret`),d=await r.json();if(!r.ok)return alert(d.error||'비밀 조회 실패');const value=prompt('비밀 정보 (일반 LLM 컨텍스트에서는 제외됩니다.)',d.secret||'');if(value===null)return;const saved=await fetch(`/api/entries/${currentEntry.id}/secret`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({secret:value})});if(!saved.ok)return alert('비밀 저장 실패');renderMarkdown('detailSecretContent',value||'등록된 비밀이 없습니다.')}
+
+async function loadCharacterLinks(id){try{const r=await fetch(`/api/entries/${id}/character-links`),d=await r.json();if(!r.ok)return;currentCharacterLinks=d;const section=document.getElementById('detailCharacterLinksSection'),box=document.getElementById('detailCharacterLinks');const people=[...(d.identities||[]).map(p=>`동일인물: <b>${escHtml(p.title)}</b>`),...(d.parents||[]).map(x=>`${x.role}: <b>${escHtml(x.person.title)}</b>`),...(d.children||[]).map(x=>`자식: <b>${escHtml(x.person.title)}</b> <span class="text-muted">(${x.role})</span>`)];section.style.display=people.length?'block':'none';box.innerHTML=people.map(x=>`<div class="small mb-1">${x}</div>`).join('');renderDndSheet()}catch(e){}}
+async function editCharacterLinks(){if(!currentEntry||currentEntry.category!=='인물')return;await loadCharacterLinks(currentEntry.id);const people=allEntries.filter(e=>e.category==='인물'&&e.id!==currentEntry.id);const help=people.map(e=>`${e.id}:${e.title}`).join(', ');const ids=x=>(x||[]).map(v=>v.id).join(',');const identityRaw=prompt(`동일 인물로 연결할 ID (콤마)\n${help}`,ids(currentCharacterLinks.identities));if(identityRaw===null)return;const father=currentCharacterLinks.parents.find(x=>x.role==='아버지')?.person.id||'';const mother=currentCharacterLinks.parents.find(x=>x.role==='어머니')?.person.id||'';const fatherRaw=prompt(`아버지 ID (없으면 비움)\n${help}`,father);if(fatherRaw===null)return;const motherRaw=prompt(`어머니 ID (없으면 비움)\n${help}`,mother);if(motherRaw===null)return;const childRaw=prompt(`자식 ID를 콤마로 입력\n${help}`,(currentCharacterLinks.children||[]).map(x=>x.person.id).join(','));if(childRaw===null)return;const parse=s=>String(s||'').split(',').map(x=>+x.trim()).filter(Boolean);const body={identity_ids:parse(identityRaw),father_id:+fatherRaw||null,mother_id:+motherRaw||null,children:parse(childRaw).map(entry_id=>({entry_id,role:currentCharacterLinks.children.find(x=>x.person.id===entry_id)?.role||'부모'}))};const r=await fetch(`/api/entries/${currentEntry.id}/character-links`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(!r.ok)return alert((await r.json()).error||'연결 저장 실패');await loadCharacterLinks(currentEntry.id);alert('동일 인물과 가계도 연결을 저장했습니다.')}
+
+async function loadOwners(id){const r=await fetch(`/api/entries/${id}/owners`),owners=await r.json();if(!r.ok)return;const section=document.getElementById('detailOwnersSection'),box=document.getElementById('detailOwners');section.style.display=owners.length?'block':'none';box.innerHTML=owners.map(p=>`<span class="badge bg-secondary me-1" style="cursor:pointer" onclick="selectEntry(${p.id})">${escHtml(p.title)}</span>`).join('')}
+async function openOwnerPicker(){if(!currentEntry||currentEntry.category!=='물건')return;const r=await fetch(`/api/entries/${currentEntry.id}/owners`),owners=await r.json();if(!r.ok)return alert('대표 주인 조회 실패');ownerSelection=new Set(owners.map(x=>x.id));document.getElementById('ownerSearchInput').value='';ownerPickerModal.show();await searchOwnerCandidates(true)}
+async function searchOwnerCandidates(immediate=false){clearTimeout(ownerSearchTimer);const run=async()=>{const q=encodeURIComponent(document.getElementById('ownerSearchInput').value.trim()),r=await fetch(`/api/entries/${currentEntry.id}/owner-candidates?q=${q}`),rows=await r.json();if(!r.ok)return;ownerCandidateList.innerHTML=rows.map(x=>`<label class="d-flex align-items-start gap-2 p-2 border-bottom" style="cursor:pointer"><input type="checkbox" class="form-check-input mt-1" ${ownerSelection.has(x.entry.id)?'checked':''} onchange="this.checked?ownerSelection.add(${x.entry.id}):ownerSelection.delete(${x.entry.id})"><span><b>${escHtml(x.entry.title)}</b>${x.selected?'<span class="badge bg-primary ms-2">현재 직접 주인</span>':''}${x.aliases?.length?`<div class="small text-muted">별칭: ${x.aliases.map(escHtml).join(', ')}</div>`:''}</span></label>`).join('')||'<div class="text-muted small p-3">검색 결과가 없습니다.</div>'};if(immediate)return run();ownerSearchTimer=setTimeout(run,180)}
+async function saveOwners(){const r=await fetch(`/api/entries/${currentEntry.id}/owners`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({owner_ids:[...ownerSelection]})});if(!r.ok)return alert((await r.json()).error||'대표 주인 저장 실패');ownerPickerModal.hide();await loadOwners(currentEntry.id);await loadEntries();alert('대표 주인을 저장했습니다.')}
 
 function setEntryView(mode){
   const isDnd=mode==='dnd'&&currentEntry?.category==='인물';
@@ -871,12 +912,13 @@ function renderDndSheet(){
   const combined=firstDndValue(text,['종족/직업/레벨','종족·직업·레벨']).split(/\s*[\/·|]\s*/).filter(Boolean);
   const identity=[['종족',firstDndValue(text,['종족','혈통'])||combined[0]],['직업',firstDndValue(text,['직업','클래스'])||combined[1]],['레벨',firstDndValue(text,['레벨','Level','LV'])||combined[2]],['HP',firstDndValue(text,['HP','체력'])],['AC',firstDndValue(text,['AC','방어도'])],['성향',firstDndValue(text,['성향','Alignment'])]].filter(x=>x[1]);
   const sections=parseDndSections(text).filter(s=>!/^능력치|기본 능력치$/i.test(s.title));
-  const metadata=(currentStatBlock.attributes||[]).map(a=>`<div class="dnd-section"><h6>${escHtml(a.axis_name)} · ${a.value}${a.label?' / '+escHtml(a.label):''}</h6><div class="dnd-meta-description">${escHtml(a.description||a.axis_description||'상세 설명 없음')}</div></div>`).join('');
+  const metadata=(currentStatBlock.attributes||[]).map(a=>`<div class="dnd-section"><h6>${escHtml(a.axis_name)} · ${a.value}</h6>${a.tier_description?`<div class="dnd-section-body">${escHtml(a.tier_description)}</div>`:''}${a.description?`<div class="dnd-meta-description">인물 근거: ${escHtml(a.description)}</div>`:''}${a.axis_description?`<div class="dnd-meta-description">판정 기준: ${escHtml(a.axis_description)}</div>`:''}</div>`).join('');
   const skills=(currentStatBlock.skills||[]).map(x=>`<div><b>${escHtml(x.skill.name)}${x.rank?' '+x.rank:''}</b>${x.skill.description?`<div class="dnd-meta-description">${escHtml(x.skill.description)}</div>`:''}</div>`).join('');
+  const family=[...(currentCharacterLinks.identities||[]).map(p=>`동일인물: ${p.title}`),...(currentCharacterLinks.parents||[]).map(x=>`${x.role}: ${x.person.title}`),...(currentCharacterLinks.children||[]).map(x=>`자식: ${x.person.title}`)];
   box.innerHTML=`<div class="dnd-sheet-head"><div class="h4 mb-1">${escHtml(currentEntry.title)}</div><div class="dnd-sheet-subtitle">D&amp;D / TRPG CHARACTER SHEET</div></div>
     ${identity.length?`<div class="dnd-core-grid">${identity.map(x=>`<div class="dnd-core-item"><small>${escHtml(x[0])}</small><strong>${escHtml(x[1])}</strong></div>`).join('')}</div>`:''}
     ${Object.keys(stats).length?`<div class="dnd-abilities">${Object.entries(stats).map(([k,v])=>`<div class="dnd-ability"><small>${k}</small><strong>${escHtml(v.value)}</strong>${v.mod?`<div class="dnd-meta-description">${/^[+-]/.test(v.mod)?'':'+'}${escHtml(v.mod)}</div>`:''}</div>`).join('')}</div>`:''}
-    <div class="dnd-section-grid">${sections.map(s=>`<div class="dnd-section"><h6>${escHtml(s.title)}</h6><div class="dnd-section-body">${escHtml(s.lines.join('\n').replace(/^\s*[-*]\s*/gm,'• ').trim())}</div></div>`).join('')}${metadata}${skills?`<div class="dnd-section"><h6>스킬 / 특성</h6><div class="dnd-section-body">${skills}</div></div>`:''}</div>`;
+    <div class="dnd-section-grid">${sections.map(s=>`<div class="dnd-section"><h6>${escHtml(s.title)}</h6><div class="dnd-section-body">${escHtml(s.lines.join('\n').replace(/^\s*[-*]\s*/gm,'• ').trim())}</div></div>`).join('')}${metadata}${skills?`<div class="dnd-section"><h6>스킬 / 특성</h6><div class="dnd-section-body">${skills}</div></div>`:''}${family.length?`<div class="dnd-section"><h6>정체성 / 가계도</h6><div class="dnd-section-body">${escHtml(family.join('\n'))}</div></div>`:''}</div>`;
 }
 
 function startEdit() {
@@ -944,7 +986,7 @@ async function loadEntryEpisodes(entryId) {
           <span style="font-size:0.75rem;color:var(--text-muted);">${ev.timeline_name || ''}</span>
           <span style="font-size:0.8rem;font-weight:600;flex:1;">${escHtml(ev.title)}</span>
         </div>
-        ${ev.description ? `<div style="font-size:0.75rem;color:var(--text-secondary);white-space:pre-wrap;line-height:1.5;">${escHtml(ev.description.slice(0,180))}${ev.description.length>180?'…':''}</div>` : ''}
+        ${ev.description ? `<div class="markdown-body" style="font-size:0.75rem;color:var(--text-secondary);line-height:1.5;">${markdownHtml(ev.description.slice(0,180)+(ev.description.length>180?'…':''))}</div>` : ''}
       </div>
     `).join('');
   } catch(e) {}
@@ -1147,6 +1189,8 @@ function openCreateModal() {
   document.getElementById('newTitle').value = '';
   document.getElementById('newContent').value = '';
   document.getElementById('newReferences').value = '';
+  document.getElementById('newSecret').value = '';
+  pendingGeneratedEntry = {attributes:{},secret:''};
   updateCharCount('newContent', 'newCharCount');
   createModal.show();
 }
@@ -1177,6 +1221,8 @@ async function llmGenerateContent() {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || '생성 실패');
     document.getElementById('newContent').value = data.content;
+    document.getElementById('newSecret').value = data.secret || '';
+    pendingGeneratedEntry = {attributes:data.attributes||{},secret:data.secret||''};
     updateCharCount('newContent', 'newCharCount');
   } catch (e) {
     alert('LLM 생성 실패: ' + e.message);
@@ -1197,6 +1243,8 @@ async function createEntry() {
     aliases: document.getElementById('newAliases').value.split(',').map(x=>x.trim()).filter(Boolean),
     tick_created: parseInt(document.getElementById('newTickCreated').value) || 0,
     primary_year: document.getElementById('newPrimaryYear').value.trim(),
+    secret: document.getElementById('newSecret').value,
+    attributes: pendingGeneratedEntry.attributes || {},
   };
   if (!body.title || !body.content) { alert('제목과 내용을 입력하세요.'); return; }
   const res = await fetch('/api/entries', {

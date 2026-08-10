@@ -135,6 +135,10 @@
         <span id="sdCategoryBadge"></span>
         <span id="sdTitle" class="fw-semibold" style="font-size:0.9rem; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></span>
         <div class="d-flex gap-1 ms-2">
+          <button class="btn btn-sm" id="familyTreeBtn" onclick="showFamilyTree(selectedEntry.id)" title="이 인물의 가계도와 동일 인물 보기"
+            style="display:none;padding:3px 8px;font-size:0.75rem;border:1px solid rgba(255,193,7,.45);color:#ffc107;">
+            <i class="bi bi-people"></i>
+          </button>
           <button class="btn btn-sm" onclick="enterFocusMode(1)" title="1단계 연결만 보기"
             style="padding:3px 8px;font-size:0.75rem;border:1px solid rgba(139,127,247,0.4);color:var(--accent);">
             <i class="bi bi-bullseye"></i>
@@ -569,7 +573,8 @@ function showSidePanel(entry) {
       border-radius:12px;padding:2px 10px;font-size:0.72rem;font-weight:600;white-space:nowrap;"
     >${entry.category}</span>`;
   document.getElementById('sdTitle').textContent = entry.title;
-  document.getElementById('sdContent').textContent = entry.content || '';
+  document.getElementById('familyTreeBtn').style.display=entry.category==='인물'?'inline-block':'none';
+  renderMarkdown('sdContent', entry.content || '');
 
   // 이미지 영역
   renderImageArea(entry);
@@ -751,6 +756,18 @@ function clearSidePanel() {
 function jumpToNode(id) {
   const entry = allEntries.find(e => e.id === id);
   if (entry) showSidePanel(entry);
+}
+
+async function showFamilyTree(entryId){
+  const r=await fetch(`/api/entries/${entryId}/character-links?recursive=true`),d=await r.json();
+  if(!r.ok)return alert(d.error||'가계도 조회 실패');
+  if((d.entries||[]).length<=1)return alert('연결된 부모·자식 또는 동일 인물 정보가 없습니다.');
+  _focusMode=true;
+  const banner=document.getElementById('focusBanner');banner.style.display='flex';
+  document.getElementById('focusBannerTitle').textContent=`${_idToEntry[entryId]?.title||'인물'} 가계도`;
+  document.getElementById('focusBannerDepth').textContent=`${d.entries.length}명`;
+  buildGraph(d.entries);
+  setTimeout(()=>network&&network.fit({animation:{duration:400}}),100);
 }
 
 // ── 편집 모드 ─────────────────────────────────────────────

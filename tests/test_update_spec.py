@@ -2,6 +2,7 @@
 import os
 import unittest
 import uuid
+from unittest.mock import patch
 
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["SECRET_KEY"] = "test-secret"
@@ -55,6 +56,8 @@ class UpdateSpecTest(unittest.TestCase):
         self.assertEqual(WorldEntryTemplate.query.filter_by(world_id=self.world.id).count(), 12)
         self.assertEqual(self.client.get("/api/metadata").status_code, 200)
         self.assertEqual(self.client.get("/metadata").status_code, 200)
+        self.assertEqual(self.client.get("/").status_code, 200)
+        self.assertEqual(self.client.get("/graph").status_code, 200)
 
     def test_detailed_attribute_metadata_round_trip(self):
         entry = self.add_entry()
@@ -74,6 +77,18 @@ class UpdateSpecTest(unittest.TestCase):
         self.assertEqual(stat["description"], "용병 생활로 단련된 근력")
         self.assertEqual(stat["axis_description"], "근력 판정과 운반 능력")
 
+    def test_attribute_schema_has_every_tier_description_key(self):
+        response = self.client.put("/api/metadata/attributes", json={"attributes": [{
+            "axis_name": "근력", "min_tier": 1, "max_tier": 10,
+            "tier_descriptions": {str(i): f"{i}단계 행동 서술" for i in range(1, 11)},
+        }]})
+        self.assertEqual(response.status_code, 200)
+        axis = WorldAttributeSchema.query.filter_by(world_id=self.world.id, axis_name="근력").one()
+        data = axis.to_dict()
+        self.assertEqual(set(data["tier_descriptions"]), {str(i) for i in range(1, 11)})
+        self.assertEqual(data["tier_descriptions"]["10"], "10단계 행동 서술")
+        self.assertEqual(data["tier_labels"], data["tier_descriptions"])
+
     def test_llm_metadata_apply_accepts_detailed_values(self):
         entry = self.add_entry()
         response = self.client.post("/api/metadata/migration-apply", json={
@@ -88,6 +103,99 @@ class UpdateSpecTest(unittest.TestCase):
         value = EntryAttributeValue.query.filter_by(entry_id=entry.id).one()
         self.assertEqual(value.value, 4)
         self.assertEqual(value.description, "오랜 협상 경험에서 비롯됨")
+
+    def test_generated_character_attributes_are_saved_and_visible_in_sheet(self):
+        self.client.put("/api/metadata/attributes", json={"attributes":[{
+            "axis_name":"힘", "min_tier":1, "max_tier":10,
+            "tier_descriptions":{str(i):f"힘 {i}단계" for i in range(1,11)},
+        }]})
+        response=self.client.post("/api/entries",json={
+            "title":"생성 전사","category":"인물","content":"전사",
+            "attributes":{"힘":{"value":7,"description":"용병 훈련"}},
+        })
+        self.assertEqual(response.status_code,201)
+        entry_id=response.get_json()["id"]
+        stat=self.client.get(f"/api/entries/{entry_id}/stat-block").get_json()["attributes"][0]
+        self.assertEqual(stat["value"],7)
+        self.assertEqual(stat["tier_description"],"힘 7단계")
+        self.assertEqual(stat["description"],"용병 훈련")
+
+    def test_secret_requires_explicit_endpoint_and_is_backed_up(self):
+        response=self.client.post("/api/entries",json={"title":"비밀 인물","category":"인물","content":"공개 정보","secret":"왕위 계승자"})
+        entry_id=response.get_json()["id"]
+        public=self.client.get(f"/api/entries/{entry_id}").get_json()
+        self.assertNotIn("secret",public)
+        self.assertNotIn("has_secret",public)
+        secret=self.client.get(f"/api/entries/{entry_id}/secret").get_json()
+        self.assertEqual(secret["secret"],"왕위 계승자")
+        backup=self.client.get(f"/api/worlds/{self.world.id}/backup").get_json()
+        self.assertEqual(backup["extensions"]["secrets"][0]["secret"],"왕위 계승자")
+
+    def test_same_identity_and_family_tree_links(self):
+        person=self.add_entry("현재 이름")
+        former=self.add_entry("과거 이름")
+        father=self.add_entry("아버지")
+        mother=self.add_entry("어머니")
+        child=self.add_entry("자식")
+        response=self.client.put(f"/api/entries/{person.id}/character-links",json={
+            "identity_ids":[former.id],"father_id":father.id,"mother_id":mother.id,
+            "children":[{"entry_id":child.id,"role":"부모"}],
+        })
+        self.assertEqual(response.status_code,200)
+        links=response.get_json()
+        self.assertEqual({x["person"]["title"] for x in links["parents"]},{"아버지","어머니"})
+        self.assertEqual(links["identities"][0]["title"],"과거 이름")
+        tree=self.client.get(f"/api/entries/{person.id}/character-links?recursive=true").get_json()
+        self.assertEqual({x["title"] for x in tree["entries"]},{"현재 이름","과거 이름","아버지","어머니","자식"})
+
+    def test_item_multiple_owners_and_ranked_search(self):
+        owner1=self.add_entry("김철수",aliases=["철의 기사"])
+        owner2=self.add_entry("박영희")
+        item=WorldEntry(world_id=self.world.id,title="왕의 검",category="물건",content="검")
+        db.session.add(item);db.session.commit()
+        response=self.client.put(f"/api/entries/{item.id}/owners",json={"owner_ids":[owner2.id,owner1.id]})
+        self.assertEqual(response.status_code,200)
+        self.assertEqual({x["title"] for x in response.get_json()},{"김철수","박영희"})
+        ranked=self.client.get(f"/api/entries/{item.id}/owner-candidates?q=철의").get_json()
+        self.assertTrue(ranked[0]["selected"])
+        self.assertEqual(ranked[0]["entry"]["title"],"김철수")
+        self.assertEqual(set(WorldEntry.query.get(item.id).references),{owner1.id,owner2.id})
+
+    def test_output_token_setting_supports_256k_and_no_entry_char_limit(self):
+        settings=self.client.get("/api/settings").get_json()
+        self.assertEqual(settings["max_llm_entry_chars"],0)
+        response=self.client.put("/api/settings",json={"llm_max_output_tokens":262144,"max_llm_entry_chars":0})
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(response.get_json()["llm_max_output_tokens"],262144)
+
+    def test_master_entry_char_limit_is_enforced_for_llm_apply(self):
+        self.client.put("/api/settings",json={"max_llm_entry_chars":5})
+        response=self.client.post("/api/world-design/apply",json={"entries":[{
+            "title":"제한 테스트","category":"관념","content":"1234567890",
+        }]})
+        self.assertEqual(response.status_code,200)
+        restored=WorldEntry.query.filter_by(world_id=self.world.id,title="제한 테스트").one()
+        self.assertEqual(restored.content,"12345")
+        self.client.put("/api/settings",json={"max_llm_entry_chars":0})
+
+    @patch("llm_client.propose_entry_from_chat")
+    def test_chat_can_create_reviewable_markdown_entry_draft(self, propose):
+        propose.return_value = {
+            "title": "검은 탑", "category": "장소",
+            "content": "## 개요\n\n**마력**이 흐르는 탑입니다.",
+            "secret": "탑 자체가 생명체다.", "aliases": ["흑탑"],
+        }
+        response = self.client.post("/api/chat/entry-draft", json={
+            "history": [
+                {"role": "user", "content": "검은 탑을 설정하자."},
+                {"role": "assistant", "content": "마력이 흐르는 장소로 정리할까요?"},
+            ]
+        })
+        self.assertEqual(response.status_code, 200)
+        draft = response.get_json()
+        self.assertEqual(draft["category"], "장소")
+        self.assertIn("## 개요", draft["content"])
+        self.assertEqual(draft["secret"], "탑 자체가 생명체다.")
 
     def test_title_and_alias_keyword_tagging(self):
         entry = self.add_entry(aliases=["피투성이 보바"])

@@ -171,8 +171,8 @@ function renderLogs(logs) {
           <span class="small text-muted">Run #${l.run_id}</span>
           <span class="small text-muted ms-auto">${new Date(l.created_at).toLocaleString('ko-KR')}</span>
         </div>
-        <div class="small">${escHtml(l.description)}</div>
-        ${l.llm_reasoning ? `<div class="mt-1" style="font-size:0.78rem;color:var(--text-secondary);font-style:italic;">"${escHtml(l.llm_reasoning.substring(0, 100))}${l.llm_reasoning.length > 100 ? '...' : ''}"</div>` : ''}
+        <div class="small markdown-body">${markdownHtml(l.description)}</div>
+        ${l.llm_reasoning ? `<div class="mt-1 markdown-body" style="font-size:0.78rem;color:var(--text-secondary);font-style:italic;">${markdownHtml(l.llm_reasoning.substring(0, 100)+(l.llm_reasoning.length > 100 ? '...' : ''))}</div>` : ''}
         ${l.tokens_total ? `<div class="mt-1" style="font-size:0.72rem;color:var(--accent);">토큰: 입력 ${(l.tokens_in||0).toLocaleString()} · 출력 ${(l.tokens_out||0).toLocaleString()} · 합계 ${l.tokens_total.toLocaleString()}</div>` : ''}
       </div>
       <button class="btn btn-sm" style="padding:1px 6px; border:none; background:transparent; color:var(--text-muted); flex-shrink:0;"
@@ -220,17 +220,17 @@ async function showLogDetail(id) {
       </div>
       <div class="col-12">
         <div class="small text-muted mb-1">설명</div>
-        <div style="white-space: pre-wrap;">${escHtml(log.description)}</div>
+        <div class="markdown-body">${markdownHtml(log.description)}</div>
       </div>
       ${log.llm_reasoning ? `
       <div class="col-12">
         <div class="small text-muted mb-1">LLM 판단 근거</div>
-        <div style="white-space: pre-wrap; font-size:0.88rem; color: #b0bac8;">${escHtml(log.llm_reasoning)}</div>
+        <div class="markdown-body" style="font-size:0.88rem; color: #b0bac8;">${markdownHtml(log.llm_reasoning)}</div>
       </div>` : ''}
       ${log.raw_llm_output ? `
       <div class="col-12">
         <div class="small text-muted mb-1">원본 LLM 출력</div>
-        <pre class="p-3 rounded small" style="background:var(--bg-input); max-height:300px; overflow-y:auto; white-space: pre-wrap;">${escHtml(log.raw_llm_output)}</pre>
+        <div class="markdown-body p-3 rounded small" style="background:var(--bg-input); max-height:300px; overflow-y:auto;">${markdownHtml(log.raw_llm_output)}</div>
       </div>` : ''}
       <div class="col-12">
         <div class="small text-muted">생성 시각</div>

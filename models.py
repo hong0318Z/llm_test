@@ -95,6 +95,8 @@ class WorldEntry(db.Model):
     primary_year = db.Column(db.String(100), default="")
     year_notes_json = db.Column(db.Text, default="[]")
     aliases_json = db.Column(db.Text, default="[]")
+    # 일반 엔트리 직렬화와 LLM 컨텍스트에서는 원문을 절대 노출하지 않는다.
+    secret_content = db.Column(db.Text, default="")
     is_active = db.Column(db.Boolean, default=True)
     is_summarized = db.Column(db.Boolean, default=False)  # 요약으로 대체된 항목
     keywords = db.Column(db.Text, default="")  # 쉼표 구분 핵심 키워드 (최대 5개)
@@ -121,7 +123,7 @@ class WorldEntry(db.Model):
     def references(self, value):
         self.references_json = json.dumps(value or [])
 
-    def to_dict(self):
+    def to_dict(self, include_secret=False):
         try:
             auto_tags = json.loads(self.auto_tags_json or "[]")
         except Exception:
@@ -134,7 +136,7 @@ class WorldEntry(db.Model):
             aliases = json.loads(self.aliases_json or "[]")
         except Exception:
             aliases = []
-        return {
+        data = {
             "id": self.id,
             "title": self.title,
             "category": self.category,
@@ -159,6 +161,9 @@ class WorldEntry(db.Model):
             "created_at": self.created_at.isoformat() + 'Z' if self.created_at else None,
             "updated_at": self.updated_at.isoformat() + 'Z' if self.updated_at else None,
         }
+        if include_secret:
+            data["secret"] = self.secret_content or ""
+        return data
 
 
 class LlmPromptConfig(db.Model):
@@ -194,7 +199,9 @@ class AppSettings(db.Model):
 
     id = db.Column(db.Integer, primary_key=True, default=1)
     # LLM이 생성하는 엔트리 1개당 최대 글자수 (0 = 제한 없음)
-    max_llm_entry_chars = db.Column(db.Integer, default=500)
+    max_llm_entry_chars = db.Column(db.Integer, default=0)
+    # OpenAI 호환 chat.completions의 출력 상한. 256K 모델까지 그대로 전달한다.
+    llm_max_output_tokens = db.Column(db.Integer, default=262144)
     entries_per_tick = db.Column(db.Integer, default=1)
     # 유저 입력 엔트리 1개당 최대 글자수 (UI 카운터용, 0 = 제한 없음)
     max_user_entry_chars = db.Column(db.Integer, default=1000)
@@ -224,7 +231,8 @@ class AppSettings(db.Model):
 
     def to_dict(self):
         return {
-            "max_llm_entry_chars": self.max_llm_entry_chars if self.max_llm_entry_chars is not None else 500,
+            "max_llm_entry_chars": self.max_llm_entry_chars if self.max_llm_entry_chars is not None else 0,
+            "llm_max_output_tokens": self.llm_max_output_tokens if self.llm_max_output_tokens is not None else 262144,
             "entries_per_tick": self.entries_per_tick if self.entries_per_tick is not None else 1,
             "max_user_entry_chars": self.max_user_entry_chars if self.max_user_entry_chars is not None else 1000,
             "rag_token_budget": self.rag_token_budget if self.rag_token_budget is not None else 0,
@@ -265,9 +273,16 @@ class WorldAttributeSchema(db.Model):
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     def to_dict(self):
-        try: labels = json.loads(self.tier_labels_json or "{}")
-        except Exception: labels = {}
-        return {"id":self.id,"world_id":self.world_id,"axis_name":self.axis_name,"axis_order":self.axis_order,"min_tier":self.min_tier,"max_tier":self.max_tier,"description":self.description or "","tier_labels":labels,"is_active":bool(self.is_active)}
+        try: stored = json.loads(self.tier_labels_json or "{}")
+        except Exception: stored = {}
+        if not isinstance(stored, dict): stored = {}
+        descriptions = {
+            str(tier): str(stored.get(str(tier), stored.get(tier, "")) or "")
+            for tier in range(self.min_tier, self.max_tier + 1)
+        }
+        # tier_labels는 기존 클라이언트 호환용 별칭이다. 실제 값은 각 단계의
+        # 짧은 라벨뿐 아니라 구체적인 행동/수준 서술을 저장한다.
+        return {"id":self.id,"world_id":self.world_id,"axis_name":self.axis_name,"axis_order":self.axis_order,"min_tier":self.min_tier,"max_tier":self.max_tier,"description":self.description or "","tier_descriptions":descriptions,"tier_labels":descriptions,"is_active":bool(self.is_active)}
 
 
 class EntryAttributeValue(db.Model):

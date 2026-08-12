@@ -495,8 +495,8 @@ def generate_novel_text(world_id: int, instruction: str, chapter: dict = None, e
     part_context=json.dumps((chapter or {}).get("part") or {},ensure_ascii=False)
     shared=f"문체 설정: {style_text}\n\n현재 이야기/부의 상위 설정:\n{part_context}\n\n등장 엔트리:\n{serialize_world_state(entries,get_entry_char_limit())}\n\n능력치/스킬 시트:\n"+"\n".join(stat_lines)+"\n\n관련 과거 챕터:\n"+"\n".join(f"[{c.title}] {c.content}" for c in past)
     if ghostwrite:
-        prompt=f"{shared}\n\n작성할 맥락:\n{context_text}\n\n작성할 상황:\n{situation_text}"
-        system="세계관 설정과 공개 범위를 존중하며 사용자를 대신해 장면을 처음부터 완성하는 대필 작가입니다. 사용자가 준 '맥락'과 '상황'만을 근거로 삼아 완결된 장면을 새로 작성하세요. 지정되지 않은 사건이나 설정을 임의로 추가하지 말고, 문체 설정과 금지 표현, 인물 말투를 지키세요. 기존 DB에 없는 새 고유명사를 발견/창작하면 별도 후보로 분리하세요. JSON만 출력: {\"content\":\"Markdown 본문\",\"new_entity_proposals\":[{\"title\":\"\",\"category\":\"인물/장소/세력 등\",\"content\":\"등록 초안\"}]}"
+        prompt=f"{shared}\n\n현재까지 작성된 본문(설정·인물·말투 일관성 참고용):\n{(chapter or {}).get('content','') or '(없음)'}\n\n작성할 맥락:\n{context_text}\n\n작성할 상황:\n{situation_text}"
+        system="세계관 설정과 공개 범위를 존중하며 사용자를 대신해 장면을 완성하는 대필 작가입니다. 사용자가 준 '맥락'과 '상황'을 새로 쓸 장면의 근거로 삼되, '현재까지 작성된 본문'을 참고해 기존 설정·인물·말투·시점과 모순되지 않게 쓰세요. 지정되지 않은 사건이나 설정을 임의로 추가하지 말고, 문체 설정과 금지 표현, 인물 말투를 지키세요. 기존 DB에 없는 새 고유명사를 발견/창작하면 별도 후보로 분리하세요. JSON만 출력: {\"content\":\"Markdown 본문\",\"new_entity_proposals\":[{\"title\":\"\",\"category\":\"인물/장소/세력 등\",\"content\":\"등록 초안\"}]}"
     else:
         prompt=f"{shared}\n\n현재 본문:\n{(chapter or {}).get('content','')}\n\n요청:\n{instruction}"
         system="세계관 설정과 공개 범위를 존중하는 소설 작가입니다. 금지 표현과 인물 말투를 지키세요. 기존 DB에 없는 새 고유명사를 발견/창작하면 별도 후보로 분리하세요. JSON만 출력: {\"content\":\"Markdown 본문\",\"new_entity_proposals\":[{\"title\":\"\",\"category\":\"인물/장소/세력 등\",\"content\":\"등록 초안\"}]}"

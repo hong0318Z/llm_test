@@ -1898,7 +1898,8 @@ def novel_generate():
             part=NovelPart.query.get(chapter.part_id)
             chapter_data["part"]={"id":part.id,"title":part.title,"description":part.description or ""} if part else None
             selected_ids=part.entry_ids if part else []
-        result=llm_client.generate_novel_text(get_world_id(),d.get("instruction",""),chapter_data,selected_ids)
+        mode=d.get("mode") or "continue"
+        result=llm_client.generate_novel_text(get_world_id(),d.get("instruction",""),chapter_data,selected_ids,mode=mode,context_text=d.get("context",""),situation_text=d.get("situation",""))
         result["new_entity_proposals"]=[x for x in result.get("new_entity_proposals",[]) if x.get("title") and x.get("content") and x.get("category") in CATEGORIES]
         return jsonify(result)
     except Exception as e:return jsonify({"error":str(e)}),502

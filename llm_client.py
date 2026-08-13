@@ -478,7 +478,7 @@ def summarize_chapter(title: str, content: str) -> str:
     return raw.strip()
 
 
-def generate_novel_text(world_id: int, instruction: str, chapter: dict = None, entry_ids: list = None, mode: str = "continue", context_text: str = "", situation_text: str = "", context_mode: str = "summary") -> dict:
+def generate_novel_text(world_id: int, instruction: str, chapter: dict = None, entry_ids: list = None, mode: str = "continue", context_text: str = "", situation_text: str = "", context_mode: str = "summary", ref_chapter_ids: list = None) -> dict:
     from models import AppSettings, WorldEntry, NovelChapter, EntryAttributeValue, WorldAttributeSchema, EntrySkillLink, WorldSkillRegistry
     client, model=get_llm_client()
     settings=AppSettings.get();style={"pov":settings.novel_pov or "3인칭 관찰자","tone_guide":settings.novel_tone_guide or "","forbidden_expressions":settings.novel_forbidden_expressions or "","sample_text":settings.novel_sample_text or ""}
@@ -498,7 +498,17 @@ def generate_novel_text(world_id: int, instruction: str, chapter: dict = None, e
     ghostwrite=mode=="ghostwrite"
     if context_mode=="none":
         past_text="(다른 챕터 참조 없음)"
+    elif ref_chapter_ids is not None:
+        # 사용자가 직접 고른 챕터만 참조 (안 고르면 다른 챕터는 참조하지 않음)
+        id_list=[int(x) for x in ref_chapter_ids if str(x).strip()]
+        rows={c.id:c for c in NovelChapter.query.filter(NovelChapter.world_id==world_id,NovelChapter.id.in_(id_list or [-1])).all()} if id_list else {}
+        past=[rows[i] for i in id_list if i in rows]
+        if context_mode=="summary":
+            past_text="\n".join(f"[{c.title}] {(c.summary or c.content[:400]).strip()}" for c in past) or "(선택된 참조 챕터 없음)"
+        else:
+            past_text="\n".join(f"[{c.title}] {c.content}" for c in past) or "(선택된 참조 챕터 없음)"
     else:
+        # 레거시 호출 대비: 명시적 선택이 없으면 키워드 관련도 기준 자동 선택
         search_text=(context_text+" "+situation_text) if ghostwrite else (instruction+" "+(chapter or {}).get("content","")[-1500:])
         all_past=NovelChapter.query.filter_by(world_id=world_id,part_id=((chapter or {}).get("part") or {}).get("id")).filter(NovelChapter.id!=(chapter or {}).get("id")).all();query_words=_extract_context_words(search_text)
         top_n=5 if context_mode=="summary" else 3

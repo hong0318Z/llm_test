@@ -1916,7 +1916,8 @@ def novel_generate():
             selected_ids=part.entry_ids if part else []
         mode=d.get("mode") or "continue"
         context_mode=d.get("context_mode") if d.get("context_mode") in ("none","summary","full") else "summary"
-        result=llm_client.generate_novel_text(get_world_id(),d.get("instruction",""),chapter_data,selected_ids,mode=mode,context_text=d.get("context",""),situation_text=d.get("situation",""),context_mode=context_mode)
+        ref_chapter_ids=d.get("ref_chapter_ids") if isinstance(d.get("ref_chapter_ids"),list) else None
+        result=llm_client.generate_novel_text(get_world_id(),d.get("instruction",""),chapter_data,selected_ids,mode=mode,context_text=d.get("context",""),situation_text=d.get("situation",""),context_mode=context_mode,ref_chapter_ids=ref_chapter_ids)
         result["new_entity_proposals"]=[x for x in result.get("new_entity_proposals",[]) if x.get("title") and x.get("content") and x.get("category") in CATEGORIES]
         return jsonify(result)
     except Exception as e:return jsonify({"error":str(e)}),502

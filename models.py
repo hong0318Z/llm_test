@@ -382,13 +382,14 @@ class NovelChapter(db.Model):
     title = db.Column(db.String(250), default="새 챕터")
     order_no = db.Column(db.Integer, default=0)
     content = db.Column(db.Text, default="")
+    summary = db.Column(db.Text, default="")
     status = db.Column(db.String(20), default="초안")
     is_public = db.Column(db.Boolean, default=False)
     public_token = db.Column(db.String(100), unique=True, nullable=True, index=True)
     reveal_chapter_ref = db.Column(db.Integer, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     def to_dict(self, include_content=True):
-        d={"id":self.id,"world_id":self.world_id,"part_id":self.part_id,"title":self.title,"order_no":self.order_no,"status":self.status,"is_public":bool(self.is_public),"public_token":self.public_token or None,"reveal_chapter_ref":self.reveal_chapter_ref,"created_at":self.created_at.isoformat()+"Z" if self.created_at else None}
+        d={"id":self.id,"world_id":self.world_id,"part_id":self.part_id,"title":self.title,"order_no":self.order_no,"status":self.status,"is_public":bool(self.is_public),"public_token":self.public_token or None,"reveal_chapter_ref":self.reveal_chapter_ref,"summary":self.summary or "","created_at":self.created_at.isoformat()+"Z" if self.created_at else None}
         if include_content: d["content"]=self.content or ""
         return d
 

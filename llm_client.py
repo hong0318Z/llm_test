@@ -470,7 +470,15 @@ def generate_world_detail_batch(context: str, items: list, existing_entries: lis
     return result
 
 
-def generate_novel_text(world_id: int, instruction: str, chapter: dict = None, entry_ids: list = None, mode: str = "continue", context_text: str = "", situation_text: str = "") -> dict:
+def summarize_chapter(title: str, content: str) -> str:
+    """챕터 본문을 다른 챕터 집필 시 참고할 짧은 요약으로 압축한다."""
+    client, model=get_llm_client()
+    prompt=f"제목: {title}\n\n본문:\n{content}\n\n위 챕터의 줄거리를 이후 다른 챕터를 쓸 때 참고할 수 있도록 핵심 사건·등장인물·결과 위주로 5~8문장 이내로 요약하세요. 대사나 묘사는 생략하고 사실만 서술하세요. 요약문만 출력하세요(따옴표나 JSON 없이 순수 텍스트)."
+    raw=client.chat.completions.create(model=model,messages=[{"role":"user","content":prompt}],temperature=.3,max_tokens=800).choices[0].message.content or ""
+    return raw.strip()
+
+
+def generate_novel_text(world_id: int, instruction: str, chapter: dict = None, entry_ids: list = None, mode: str = "continue", context_text: str = "", situation_text: str = "", context_mode: str = "summary") -> dict:
     from models import AppSettings, WorldEntry, NovelChapter, EntryAttributeValue, WorldAttributeSchema, EntrySkillLink, WorldSkillRegistry
     client, model=get_llm_client()
     settings=AppSettings.get();style={"pov":settings.novel_pov or "3인칭 관찰자","tone_guide":settings.novel_tone_guide or "","forbidden_expressions":settings.novel_forbidden_expressions or "","sample_text":settings.novel_sample_text or ""}
@@ -488,12 +496,20 @@ def generate_novel_text(world_id: int, instruction: str, chapter: dict = None, e
             if skill:skills.append(skill.name+(f"({link.rank})" if link.rank else ""))
         if attrs or skills:stat_lines.append(f"{e.title} | 능력치 {', '.join(attrs)} | 스킬/특성 {', '.join(skills)}")
     ghostwrite=mode=="ghostwrite"
-    search_text=(context_text+" "+situation_text) if ghostwrite else (instruction+" "+(chapter or {}).get("content","")[-1500:])
-    all_past=NovelChapter.query.filter_by(world_id=world_id,part_id=((chapter or {}).get("part") or {}).get("id")).filter(NovelChapter.id!=(chapter or {}).get("id")).all();query_words=_extract_context_words(search_text)
-    past=sorted(all_past,key=lambda c:len(_extract_context_words(c.title+" "+c.content)&query_words),reverse=True)[:3]
+    if context_mode=="none":
+        past_text="(다른 챕터 참조 없음)"
+    else:
+        search_text=(context_text+" "+situation_text) if ghostwrite else (instruction+" "+(chapter or {}).get("content","")[-1500:])
+        all_past=NovelChapter.query.filter_by(world_id=world_id,part_id=((chapter or {}).get("part") or {}).get("id")).filter(NovelChapter.id!=(chapter or {}).get("id")).all();query_words=_extract_context_words(search_text)
+        top_n=5 if context_mode=="summary" else 3
+        past=sorted(all_past,key=lambda c:len(_extract_context_words(c.title+" "+c.content)&query_words),reverse=True)[:top_n]
+        if context_mode=="summary":
+            past_text="\n".join(f"[{c.title}] {(c.summary or c.content[:400]).strip()}" for c in past)
+        else:
+            past_text="\n".join(f"[{c.title}] {c.content}" for c in past)
     style_text=json.dumps(style,ensure_ascii=False)
     part_context=json.dumps((chapter or {}).get("part") or {},ensure_ascii=False)
-    shared=f"문체 설정: {style_text}\n\n현재 이야기/부의 상위 설정:\n{part_context}\n\n등장 엔트리:\n{serialize_world_state(entries,get_entry_char_limit())}\n\n능력치/스킬 시트:\n"+"\n".join(stat_lines)+"\n\n관련 과거 챕터:\n"+"\n".join(f"[{c.title}] {c.content}" for c in past)
+    shared=f"문체 설정: {style_text}\n\n현재 이야기/부의 상위 설정:\n{part_context}\n\n등장 엔트리:\n{serialize_world_state(entries,get_entry_char_limit())}\n\n능력치/스킬 시트:\n"+"\n".join(stat_lines)+"\n\n관련 과거 챕터:\n"+past_text
     if ghostwrite:
         prompt=f"{shared}\n\n현재까지 작성된 본문(설정·인물·말투 일관성 참고용):\n{(chapter or {}).get('content','') or '(없음)'}\n\n작성할 맥락:\n{context_text}\n\n작성할 상황:\n{situation_text}"
         system="세계관 설정과 공개 범위를 존중하며 사용자를 대신해 장면을 완성하는 대필 작가입니다. 사용자가 준 '맥락'과 '상황'을 새로 쓸 장면의 근거로 삼되, '현재까지 작성된 본문'을 참고해 기존 설정·인물·말투·시점과 모순되지 않게 쓰세요. 지정되지 않은 사건이나 설정을 임의로 추가하지 말고, 문체 설정과 금지 표현, 인물 말투를 지키세요. 기존 DB에 없는 새 고유명사를 발견/창작하면 별도 후보로 분리하세요. JSON만 출력: {\"content\":\"Markdown 본문\",\"new_entity_proposals\":[{\"title\":\"\",\"category\":\"인물/장소/세력 등\",\"content\":\"등록 초안\"}]}"
@@ -502,7 +518,12 @@ def generate_novel_text(world_id: int, instruction: str, chapter: dict = None, e
         system="세계관 설정과 공개 범위를 존중하는 소설 작가입니다. 금지 표현과 인물 말투를 지키세요. 기존 DB에 없는 새 고유명사를 발견/창작하면 별도 후보로 분리하세요. JSON만 출력: {\"content\":\"Markdown 본문\",\"new_entity_proposals\":[{\"title\":\"\",\"category\":\"인물/장소/세력 등\",\"content\":\"등록 초안\"}]}"
     response=client.chat.completions.create(model=model,messages=[{"role":"system","content":system},{"role":"user","content":prompt}],temperature=.75,max_tokens=get_max_output_tokens())
     raw=response.choices[0].message.content or "";parsed=_parse_json_safe(raw,"novel_generate")
-    return {"proposal":parsed.get("content",raw) if isinstance(parsed,dict) else raw,"new_entity_proposals":parsed.get("new_entity_proposals",[]) if isinstance(parsed,dict) else [],"model":model}
+    if not isinstance(parsed,dict) or "content" not in parsed:
+        extracted=_extract_json_object(raw)
+        if isinstance(extracted,dict) and "content" in extracted:parsed=extracted
+    content=parsed.get("content") if isinstance(parsed,dict) else None
+    if not isinstance(content,str) or not content.strip():content="[생성 실패: 응답 형식을 해석하지 못했습니다. 다시 시도해주세요.]"
+    return {"proposal":content,"new_entity_proposals":parsed.get("new_entity_proposals",[]) if isinstance(parsed,dict) else [],"model":model}
 
 
 def propose_novel_mentions(content: str, entries: list) -> dict:

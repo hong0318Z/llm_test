@@ -74,6 +74,7 @@ with app.app_context():
         ("novel_chapter",          "part_id",              "INTEGER"),
         ("novel_chapter",          "is_public",            "BOOLEAN DEFAULT 0"),
         ("novel_chapter",          "public_token",         "TEXT"),
+        ("novel_chapter",          "summary",              "TEXT DEFAULT ''"),
         ("novel_part",             "entry_ids_json",       "TEXT DEFAULT '[]'"),
         ("app_settings",           "novel_pov",            "TEXT DEFAULT '3인칭 관찰자'"),
         ("app_settings",           "novel_tone_guide",     "TEXT DEFAULT ''"),
@@ -1831,6 +1832,18 @@ def novel_chapter(chapter_id):
     out["mentions"]=enriched;return jsonify(out)
 
 
+@app.route("/api/novel/chapters/<int:chapter_id>/summarize", methods=["POST"])
+def summarize_chapter(chapter_id):
+    c=NovelChapter.query.get_or_404(chapter_id)
+    if c.world_id!=get_world_id():abort(403)
+    if not (c.content or "").strip():return jsonify({"error":"본문이 비어 있습니다."}),400
+    try:
+        import llm_client
+        c.summary=llm_client.summarize_chapter(c.title,c.content);db.session.commit()
+        return jsonify(c.to_dict())
+    except Exception as e:return jsonify({"error":str(e)}),502
+
+
 @app.route("/api/novel/chapters/<int:chapter_id>/publish", methods=["POST"])
 def publish_novel_chapter(chapter_id):
     chapter=NovelChapter.query.get_or_404(chapter_id)
@@ -1856,7 +1869,10 @@ def add_manual_mention(chapter_id):
     if c.world_id!=get_world_id() or e.world_id!=c.world_id:abort(403)
     part=NovelPart.query.get(c.part_id)
     if not part or e.id not in part.entry_ids:return jsonify({"error":"이 이야기/부의 참조 DB 목록에 없는 엔트리입니다."}),400
-    source=d.get("source") if d.get("source") in ("manual","llm") else "manual";row=NovelEntityMention(chapter_id=c.id,entry_id=e.id,span_start=int(d.get("span_start",0)),span_end=int(d.get("span_end",0)),matched_text=d.get("matched_text",""),source=source);db.session.add(row);db.session.commit();return jsonify(row.to_dict()),201
+    source=d.get("source") if d.get("source") in ("manual","llm") else "manual";span_start=int(d.get("span_start",0));span_end=int(d.get("span_end",0))
+    existing=NovelEntityMention.query.filter_by(chapter_id=c.id,entry_id=e.id,span_start=span_start,span_end=span_end).first()
+    if existing:return jsonify(existing.to_dict()),200
+    row=NovelEntityMention(chapter_id=c.id,entry_id=e.id,span_start=span_start,span_end=span_end,matched_text=d.get("matched_text",""),source=source);db.session.add(row);db.session.commit();return jsonify(row.to_dict()),201
 
 @app.route("/api/novel/chapters/<int:chapter_id>/mention-proposals", methods=["POST"])
 def mention_proposals(chapter_id):
@@ -1899,7 +1915,8 @@ def novel_generate():
             chapter_data["part"]={"id":part.id,"title":part.title,"description":part.description or ""} if part else None
             selected_ids=part.entry_ids if part else []
         mode=d.get("mode") or "continue"
-        result=llm_client.generate_novel_text(get_world_id(),d.get("instruction",""),chapter_data,selected_ids,mode=mode,context_text=d.get("context",""),situation_text=d.get("situation",""))
+        context_mode=d.get("context_mode") if d.get("context_mode") in ("none","summary","full") else "summary"
+        result=llm_client.generate_novel_text(get_world_id(),d.get("instruction",""),chapter_data,selected_ids,mode=mode,context_text=d.get("context",""),situation_text=d.get("situation",""),context_mode=context_mode)
         result["new_entity_proposals"]=[x for x in result.get("new_entity_proposals",[]) if x.get("title") and x.get("content") and x.get("category") in CATEGORIES]
         return jsonify(result)
     except Exception as e:return jsonify({"error":str(e)}),502
@@ -1930,7 +1947,9 @@ def _public_chapter_payload(chapter):
         for value in EntryAttributeValue.query.filter_by(entry_id=entry.id).all():
             axis=WorldAttributeSchema.query.get(value.axis_id)
             if axis and axis.is_active and _public_field_visible(entry.id,"stat_block."+axis.axis_name,chapter):
-                attrs.append({"name":axis.axis_name,"value":value.value,"description":value.description or "","tier_description":axis.tier_description(value.value)})
+                try:labels=_json.loads(axis.tier_labels_json or "{}")
+                except Exception:labels={}
+                attrs.append({"name":axis.axis_name,"value":value.value,"description":value.description or "","tier_description":labels.get(str(value.value),"")})
         skills=[]
         if _public_field_visible(entry.id,"stat_block.skills",chapter):
             for link in EntrySkillLink.query.filter_by(entry_id=entry.id).all():
